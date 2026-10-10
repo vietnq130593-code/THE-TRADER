@@ -1,8 +1,8 @@
 # ML OPS BLUEPRINT — NHÓM HỌC MÁY: ĐÁNH THỨC VÒNG PHẢN HỒI, ĐẶC TRƯNG CHUỖI & CỔNG BẰNG CHỨNG GRU
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/ML_OPS_BLUEPRINT.md` · **Version:** 1.0 · **Created:** 2026-10-10 (phiên #78 — gộp **Giai đoạn A + B thành MỘT blueprint** theo chỉ đạo của trader: "Gộp cả A và B vào trong 1 blueprint đi")
-> **Status:** **BẢN NHÁP — CHỜ TRADER DUYỆT** (triển khai theo giao thức §7: soạn → chốt → triển khai → fixbug)
+> **Document:** `docs/ML_OPS_BLUEPRINT.md` · **Version:** 1.1 · **Created:** 2026-10-10 (phiên #78 — gộp **Giai đoạn A + B thành MỘT blueprint** theo chỉ đạo của trader: "Gộp cả A và B vào trong 1 blueprint đi") · **v1.1:** 2026-10-10 (phiên #79 — trader tiết lộ 4 kế hoạch tương lai K1-K4 + uỷ quyền chọn §8 → 5/5 DUYỆT, triển khai Giai đoạn A)
+> **Status:** **§8 ĐÃ TRẢ LỜI (phiên #79 — trader uỷ quyền) — TRIỂN KHAI GIAI ĐOẠN A (P0) THEO GIAO THỨC §7**
 > **Nguồn kế thừa:** review `77-ML-TEMPORAL-REVIEW` (khung temporal 5 lớp + câu hỏi LSTM) · kiểm kê `76-ML-ARCH-1a` (7 agents + 8 runners + bằng chứng file:dòng) · ánh xạ `76-ML-DOC-MAP` (4 tài liệu 79 trang theo thấu kính ML) · hấp thụ **L1–L5 đã duyệt** từ [ML_LEARNING_BLUEPRINT.md](./ML_LEARNING_BLUEPRINT.md) v1.0.1 (phiên #51)
 > **Nguồn tri thức (4 tài liệu user tải lên, `upload/` gitignored):** `Machine Learning.pdf` 20 trang **[ML]** · `MATH.pdf` 14 trang **[MATH]** · `Data Analytics.pdf` 29 trang **[DA]** · `DEEP LEARNING.pdf` 16 trang **[DL]** — mọi hạng mục gắn nhãn nguồn kèm cụm nội dung.
 > **Cross-refs:** [EXECUTION_OPS_BLUEPRINT.md](./EXECUTION_OPS_BLUEPRINT.md) (pattern triển khai P0→P1 + giao thức fixbug 3 vòng đối kháng) · [DATA_PLATFORM_BLUEPRINT.md](./DATA_PLATFORM_BLUEPRINT.md) (FeatureContract P0-3 · PIT P1-2 · rổ topByAdtv P0-2) · [MARKET_EXPANSION_BLUEPRINT.md](./MARKET_EXPANSION_BLUEPRINT.md) (B7 ensemble · B8 scorecard/Brier · B9 cổng đồng thuận) · [CONTROL_RISK_QUANT_BLUEPRINT.md](./CONTROL_RISK_QUANT_BLUEPRINT.md) (CRB-1 σ regime) · [DB_SCHEMA.md](./DB_SCHEMA.md) · [Fixbug.md](../Fixbug.md)
@@ -206,13 +206,13 @@ Xem bảng đo §0.4. Ba hệ quả kiến trúc:
 2. **Quote latest-only** → tick 10s nuôi WS/serving/paper-matching nhưng KHÔNG nuôi ML — đúng thiết kế hiện tại (không phí); khi cần intraday cho lớp chuỗi → MARKET_EXPANSION mở bảng mới (ngoài phạm vi blueprint này, tham chiếu cổng §6).
 3. **Intl Yahoo failStreak 3** — không chặn A/B (rổ ML khoá HOSE-STOCK), nhưng cần theo dõi B12; nếu kéo dài > 7 ngày → cảnh báo `DataSourceStatus` route riêng (đã có cơ chế markSource).
 
-**Schema thay đổi (additive, tối thiểu):** KHÔNG model mới. Chỉ: `MlModel.meta` thêm trường JSON (`featureHist` A3 · `featureSet`/`gateVerdict` B) + `AppSetting` keys mới (`ml-gate`, `ml-gru`, `ml-settle-schedule`) + `AuditLog` kind `ML_SETTLE` (enum thêm giá trị — additive). BanditArm/BanditEvent **KHÔNG đổi** (confidence đã có từ B8).
+**Schema thay đổi (additive, tối thiểu):** KHÔNG model mới. Chỉ: `MlModel.meta` thêm trường JSON (`featureHist` A3 · `featureSet`/`gateVerdict` B) + `AppSetting` keys mới (`ml-gate`, `ml-gru`, `ml-settle-schedule`) + `AuditLog` action `ML_SETTLE` (cột String sẵn có — không cần migrate). BanditArm/BanditEvent **KHÔNG đổi** (confidence đã có từ B8).
 
 ## §6. Cổng kích hoạt tổng hợp (dữ liệu thật quyết định — gộp cổng L1-L5 đã duyệt #51 + cổng mới)
 
 | Bước | Cổng mở khi | Dữ liệu đo |
 |---|---|---|
-| Giai đoạn A (A1-A4) | **Trader duyệt blueprint này** | — |
+| Giai đoạn A (A1-A4) | **ĐÃ DUYỆT (phiên #79 — uỷ quyền chọn theo K1-K4, xem §8)** | — |
 | B1 (đặc trưng v2) | A hoàn tất (A1 chạy thật ≥ 1 settle) | AuditLog ML_SETTLE |
 | B2 (cổng bằng chứng) | B1 train xong v9 | windowHash khớp v8 |
 | **B3 (GRU)** | **B2 PASS** (ΔBrier CI < 0 hoặc ≥3/6 đặc trưng mới |IC| ≥ 0,02) | gate verdict AppSetting |
@@ -231,16 +231,27 @@ Xem bảng đo §0.4. Ba hệ quả kiến trúc:
 3. E2E qua gateway :81 desktop + mobile (0 console error) trước khi commit; commit + push theo PAT store.
 4. Bất biến toàn văn §1 + bất biến EXECUTION_OPS §6 (chu kỳ không tự đặt lệnh · plan chỉ sau APPROVE · claim atomic · fail-soft).
 
-## §8. Câu hỏi mở cho trader (trả lời trước khi chốt triển khai A)
+## §8. Câu hỏi mở — ĐÃ TRẢ LỜI (phiên #79: trader uỷ quyền chọn theo 4 kế hoạch tương lai)
 
-1. **A1 lịch settle 16:15 ICT hằng ngày** — duyệt nhịp này? (muộn hơn nếu eod-sync chưa xong thì engine tự chờ — đã thiết kế)
-2. **A4 retrain Chủ nhật 04:00 ICT tự động** — duyệt? (thuần thuật toán $0, có skip-guard; trader vẫn có nút train thủ công như cũ)
-3. **Chu kỳ agent 23 agents**: giữ TẮT scheduler (thủ công/E2E như hiện tại — kiểm soát chi phí LLM) hay bật `AGENT_CYCLE_MINUTES` (ví dụ 240 phút trong phiên = ~1 chu kỳ/ngày)? *Đề xuất: giữ TẮT — settle A1 đã tách khỏi chu kỳ nên vòng học không phụ thuộc nữa.*
-4. **B1 nâng 10→16 đặc trưng** tạo MLP v9 (arch mới, v8 giữ serving cho tới B2 xử quyết) — duyệt cách versioning này?
-5. **GRU chỉ mở khi cổng PASS** (B2) + shadow 60 phiên + kill-switch — duyệt级别的 thận trọng này? (Đây là trả lời kiến trúc cho câu hỏi LSTM #77: đúng vị trí, đúng cổng, đúng thứ tự.)
+> **Trader tiết lộ 4 kế hoạch tương lai (2026-10-10) và uỷ quyền kỹ sư tự chọn phương án tối ưu cho chúng:**
+> - **(K1) Cơ chế thử nghiệm** — module Cài đặt: nhập số tiền ảo → bấm kích hoạt → tiền mặc định cấp cho hệ agents thực hiện các giao dịch thử nghiệm; sự tăng/giảm của số tiền theo thời gian chính là quá trình học phân tích thị trường & đầu tư của agents.
+> - **(K2) Nút "Chạy agent" = chế độ liên tục** — một khi bấm, các agent/nhóm tự động bắt đầu công việc; chỉ ngừng khi trader tự tay bấm tắt.
+> - **(K3) Nhiệm vụ (module Đội agents)** — phần nhiệm vụ từng agent sẽ là nơi thiết lập công việc hàng ngày/hàng tuần cho agents.
+> - **(K4) Ban Điều hành & Thực thi** — sau này được xây khả năng thiết lập Nhiệm vụ cho agents thuộc các nhóm khác.
+
+| # | Câu hỏi | QUYẾT ĐỊNH | Lý do gắn 4 kế hoạch |
+|---|---|---|---|
+| 1 | A1 — lịch settle 16:15 ICT hằng ngày | ✅ **DUYỆT** | K1: settle là vòng "chấm bài" phiếu bầu — tiền ảo tăng/giảm chỉ thành bài học khi phiếu được đối chiếu realised đều đặn hằng ngày; A1 đã tách khỏi chu kỳ agent nên độc lập với K2 |
+| 2 | A4 — retrain Chủ nhật 04:00 ICT tự động | ✅ **DUYỆT** | K1: agents học liên tục qua giao dịch thử nghiệm → mô hình không được đóng băng giữa 2 lần bấm nút; skip-guard windowHash giữ an toàn; $0 thuần thuật toán |
+| 3 | Chu kỳ agent 23 agents | ✅ **BẬT `AGENT_CYCLE_MINUTES=240`** (cầu nối cho K2) | K2 muốn agents tự chạy liên tục — bật nhịp 4h ngay làm nền vận hành: sinh phiếu bầu dày cho bandit (A2 có số sớm hơn) + hệ thống làm quen chu kỳ tự động trước khi K1/K2 xây UI toggle; $0 (Zen free tier). Khi K1/K2 hoàn tất, quyền kiểm soát chuyển về AppSetting + nút UI (env thành mặc định hậu phương) |
+| 4 | B1 — versioning v9 train / v8 serving tới cổng | ✅ **DUYỆT** | K1: mô hình tương lai sẽ hoán đổi thường xuyên theo P&L sandbox — pattern train→shadow→gate→swap→kill trở thành chuẩn dùng lại cho mọi lần swap |
+| 5 | B3 — GRU gated + shadow 60 phiên + kill-switch | ✅ **DUYỆT** | K1 chính là "thử nghiệm có kiểm soát" — GRU gated cùng triết lý. **Điểm tích hợp tương lai:** khi K1 hoạt động, hiệu suất giọng GRU trong sandbox (P&L/đóng góp) trở thành tín hiệu bổ sung cho kill-switch/thăng giọng bên cạnh Brier |
+
+> **Ghi chú kiến trúc cho 4 kế hoạch (ghi lại đây để các phiên tương lai đối chiếu):** K2/K3/K4 đều cần một "chủ lịch" chung — engine scheduler (mini-service :3003) là ứng viên tự nhiên (đã có pattern kiểm 60s + state P0-5 + fail-soft, sẽ được mở rộng qua A1/A4); model `AgentTask` có sẵn trong schema là nền cho K3/K4; cơ chế tiền ảo K1 nên dùng `BrokerAccount` loại sandbox + AuditLog faucet để tách bạch khỏi paper account hiện tại.
 
 ## §9. Changelog
 
 | Version | Ngày | Nội dung |
 |---|---|---|
+| 1.1 | 2026-10-10 (phiên #79) | Trader tiết lộ 4 kế hoạch tương lai (K1 cơ chế thử nghiệm tiền ảo · K2 nút Chạy agent = chế độ liên tục · K3 Nhiệm vụ = công việc ngày/tuần · K4 Ban Điều hành giao nhiệm vụ) + uỷ quyền chọn §8 → 5/5 DUYỆT (Q3: bật `AGENT_CYCLE_MINUTES=240` làm cầu nối K2) — bắt đầu triển khai Giai đoạn A. Sửa chi tiết §5: AuditLog.action là String (0 migrate). |
 | 1.0 | 2026-10-10 (phiên #78) | Soạn bản đầu — gộp Giai đoạn A (đánh thức vòng phản hồi: A1 settle lịch · A2 Wilson/Brier/calibration · A3 PSI drift · A4 retrain Chủ nhật) + Giai đoạn B (B1 lag16 · B2 cổng bằng chứng bootstrap · B3 GRU-24 gated shadow kill-switch · B4 đường khi cổng đóng) + đo nhịp dữ liệu Supabase §0.4 + hấp thụ L1-L5 cổng từ ML_LEARNING_BLUEPRINT v1.0.1. Chờ trader duyệt §8. |

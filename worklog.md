@@ -2492,3 +2492,20 @@ Stage Summary:
 - Trả lời câu hỏi dữ liệu bằng chứng sống: HÀNG NGÀY có (15:45 ICT tự động, hôm nay đã chạy, PIT kèm theo); HÀNG GIỜ chỉ là "trạng thái cuối" mỗi 10s (Quote upsert latest-only — không có chuỗi lịch sử intraday); EOD là độ phân giải chuỗi giá duy nhất → lớp chuỗi GRU bị chặn bởi dữ liệu, mở khi MARKET_EXPANSION intraday.
 - Phát kiến quan trọng: bandit không hỏng mà "chưa kịp + không có lịch" — chốt đầu tiên 10-13 nếu A1 chạy.
 - 0 sửa code nguồn ngoài docs/; commit+push theo PAT store.
+
+---
+Task ID: 79-DECISION
+Agent: main-orchestrator (Z.ai Code)
+Task: Trader tiết lộ 4 kế hoạch tương lai + uỷ quyền chọn 5 câu hỏi mở §8 ML_OPS_BLUEPRINT → quyết định + v1.1 + khởi động triển khai Giai đoạn A
+
+Work Log:
+- Trader tiết lộ 4 kế hoạch: (K1) Cơ chế thử nghiệm tiền ảo tại module Cài đặt — tăng/giảm tiền = quá trình học của agents · (K2) Nút Chạy agent = chế độ liên tục, chỉ tắt khi bấm · (K3) Nhiệm vụ trong Đội agents = thiết lập công việc ngày/tuần · (K4) Ban Điều hành thiết lập nhiệm vụ cho các nhóm. Uỷ quyền chọn 5 đáp án §8 tối ưu cho 4 kế hoạch.
+- 5 quyết định (ML_OPS_BLUEPRINT v1.1 §8): Q1 DUYỆT settle 16:15 ICT (K1 cần vòng chấm bài đóng đều) · Q2 DUYỆT retrain CN 04:00 (K1 cần mô hình tươi) · Q3 BẬT AGENT_CYCLE_MINUTES=240 làm cầu nối K2 ($0 Zen) · Q4 DUYỆT versioning v9/v8 (pattern swap dùng lại cho K1) · Q5 DUYỆT GRU gated + ghi điểm tích hợp tương lai (P&L sandbox thành tín hiệu kill-switch bổ sung).
+- Ghi chú kiến trúc cho K1-K4 ghi vào §8: engine scheduler :3003 là "chủ lịch" ứng viên · AgentTask model là nền K3/K4 · BrokerAccount sandbox + AuditLog faucet cho K1.
+- Kiểm chứng trước triển khai: AuditLog.action là String (0 migrate cho ML_SETTLE) · engine PID 940 bun --hot index.ts CWD mini-services/market-engine (bun tự nạp .env tại đó) · log /tmp/mini-service-market-engine.log (root 644 — cần chmod trước restart) · engine-state route có whitelist fields cần mở rộng 4 trường mới.
+- ML_OPS_BLUEPRINT → v1.1 (§8 thay bằng bảng quyết định + K1-K4 · §6 hàng Giai đoạn A "ĐÃ DUYỆT" · §5 sửa AuditLog String · §9 changelog) + commit.
+- Phái 3 subagent song song (file không giao nhau): 79-A1A4 (settle route + engine 2 scheduler + train route force/skip-guard/featureHist/serving-swap + bật chu kỳ 240ph + restart engine) · 79-A2 (analytics lib Wilson/Brier/calibration/trajectory/regime + API + scorecard B8 UI) · 79-A3 (PSI lib + ml/status drift + ml-panel badge + export featureAt). Hợp đồng featureHist {edges:number[][], train:number[][]} fix cứng cho cả A1A4 (ghi) và A3 (đọc).
+
+Stage Summary:
+- 5/5 câu hỏi mở đã quyết theo hướng tối ưu 4 kế hoạch tương lai — Q3 bật chu kỳ agent 240ph là quyết định táo bạo nhất (cầu nối cho K2, $0, sinh phiếu bầu dày cho bandit).
+- Blueprint v1.1 commit; Giai đoạn A triển khai bắt đầu bằng 3 subagent song song.
