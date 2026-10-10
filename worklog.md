@@ -2455,3 +2455,23 @@ Stage Summary:
 - Kiến trúc nhóm ML đã đo trọn với bằng chứng file:dòng + DB live; phát kiến quan trọng nhất: vòng học bandit chưa từng đóng (0 event/35 assessment) — mọi nâng cấp học-from-kết-quả đều phụ thuộc đánh thức cơ chế này trước.
 - 4 tài liệu (79 trang) ánh xạ xong theo thấu kính ML — sẵn sàng làm nền cho ML_OPS_BLUEPRINT v1.0 khi user duyệt.
 - 0 sửa code nguồn; chỉ worklog.
+
+---
+Task ID: 77-ML-TEMPORAL-REVIEW
+Agent: main-orchestrator (Z.ai Code)
+Task: Review kiến trúc nhóm ML đã đề xuất (#76) dưới thách thức LSTM của user — vai trò kỹ sư AI/kiến trúc sư hệ thống; phân tích 0 sửa code
+
+Work Log:
+- Xác minh lại PAT ghp_4m5••• (GET /user → 200 vietnq130593-code ✓); git fetch OK; commit eab6b30 (#76) đã trên origin/main; hệ sống (app :3000 200 · gateway :81 200 · tick engine 200 liên tục).
+- 4 PDF gốc đã bị sandbox reset xoá (Glob toàn /home/z không thấy) — tri thức 44+ cụm đã trích trong worklog 76-ML-DOC-MAP, dùng làm nguồn đối chiếu.
+- Đọc lại code ML với thấu kính THỜI GIAN: features.ts featureAt (10 đặc trưng = cửa sổ cố định 1/5/10/14/20/26/50/60 · RSI Wilder + MACD EMA = bộ nhớ suy giảm hàm mũ · nhãn 5 phiên tới · warmup 60) · nn.ts (MLP 10→16→8→3 = 339 tham số · cut 80/20 THEO THỜI GIAN · Adam viết tay · deterministic seed 42) · ensemble.ts (0,7 MLP + 0,3 tanh(z) linreg window-60 · deadband 0,05) · rl.ts (Q-learning 48 state = trend2×RSI4×mom2×exposure3 · γ0,95 · reward t+1 — tuần tự theo thiết kế).
+- Đo DB live lần 2 (read-only): BanditEvent=0 · MarketAssessment=35 · 6 arm toàn Beta(1,1) pulls=0 (vòng học kết quả VẪN ngủ — khớp #76) · serving dl-mlp v8 valAcc 39,42% 60k mẫu · rl-q v5 stance "giảm" exposure 0.
+- Phân tích LSTM/GRU theo 4 trục: dữ liệu (EOD ngày · 60k mẫu autocorrelation cao → effective sample nhỏ 10-20× · SNR tần suất ngày cực thấp R²~0,1-1%) · tham số (MLP 339 = 177 mẫu/tham số rất khỏe vs GRU-24 ~2.595 = 23 mẫu/tham số danh nghĩa, ~1-2 effective → vùng overfit) · hạ tầng (TS/Bun thuần, BPTT viết tay ~400-600 dòng, train 15-20 phút/lần — chỉ hợp job định kỳ) · kỳ vọng (+0-3pp valAcc tối đa ở EOD).
+- Định hình KHUNG KIẾN TRÚC TEMPORAL 5 LÁP (sửa khuyết điểm #76): L1 nhớ-trong-đặc-trưng (thêm lag/đạo hàm + cổng bằng chứng autocorr/rank-IC/bootstrap ΔBrier) · L2 nhớ-trong-mô-hình (GRU-24 giọng thứ 3, GATED bởi L1, kill-switch 60 phiên qua A19) · L3 nhớ-trong-chính-sách (Q-learning regime-conditioned L4 blueprint) · L4 nhớ-trong-phản-hồi (P0: đánh thức bandit settle + Wilson CI + PSI + retrain định kỳ) · L5 nhớ-trong-tri-thức (RAG L1 BM25 + AgentLesson). Thứ tự: L4 → L1 → L3 → L2 → L5.
+- Trả lời user: LSTM không phải việc tiếp theo nhưng không phải "không bao giờ" — đúng vị trí là giọng chuỗi thứ 3 có cổng bằng chứng, GRU trước LSTM (2 cổng < 3 cổng tham số, tốt trên dữ liệu nhỏ); unlock thật của lớp chuỗi là dữ liệu intraday 5-phút (market-engine :3003 / MARKET_EXPANSION).
+
+Stage Summary:
+- VERDICT review: kiến trúc hiện tại + 12 hướng #76 có nền temporal discipline TỐT (PIT · time-split · RL tuần tự · bandit trễ · OLS thời-gian-hoá) nhưng (1) MLP chỉ thấy 1 timestep — mất thứ tự sự kiện, (2) không học online giữa 2 lần train, (3) không regime-conditioning ở serving, (4) ensemble thiếu giọng chuỗi, và (5) vòng học kết quả ngủ (BanditEvent 0/35) — LSTM không vá được (5).
+- Khuyết điểm #76 được tự phê: chưa tách khung temporal 5 lớp · LSTM bị loại ngầm không cổng điều kiện · chưa định nghĩa cổng bằng chứng đo được · chưa nhận diện intraday là unlock lớp chuỗi.
+- Đề xuất chờ duyệt: ưu tiên L4 đánh thức vòng học (P0) → L1 đặc trưng lag + đo cổng (P1) → GRU gated (P2) — không code gì trước khi user duyệt.
+- 0 sửa code nguồn; chỉ worklog + commit.
