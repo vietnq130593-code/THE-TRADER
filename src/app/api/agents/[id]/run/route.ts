@@ -310,12 +310,19 @@ export async function POST(
     }
 
     // ── LLM agent: prompt theo vai + ghi chú tuỳ chọn của trader ──
+    // F-841-03/#84: giữ tham chiếu prompt THẬT đã gửi ra outer-scope — đường
+    // catch dưới ước lượng token từ CHÍNH prompt này, KHÔNG gọi lại
+    // buildSingleRunPrompt (sau #83 hàm đó có side-effect ghi RetrievalLog —
+    // rebuild trên nhánh fail sẽ đếm kép + ghi usedInPrompt sai sự thật cho
+    // block chưa bao giờ tới LLM nào).
+    let sentPromptText: string | null = null;
     try {
       // Prompt theo vai (block chọn lọc như run route) + ghi chú tuỳ chọn của trader
       const { system, user } = await buildSingleRunPrompt(agent.code);
       const userPrompt = note
         ? `${user}\n\nGHI CHÚ CỦA TRADER:\n${note}`
         : user;
+      sentPromptText = `${system}\n\n${userPrompt}`;
 
       const { raw, tokensIn, tokensOut } = await callLlmWithRetry(system, userPrompt);
 
@@ -323,8 +330,8 @@ export async function POST(
       const { content, reasoning, sentiment } = parsed;
 
       // F-73A-03: đếm parse-fail drift metric chung với chu kỳ (E-P2-1 sau).
-      // Chỉ bump ở đây (parse chính sau LLM) — đường catch dưới chỉ ước lượng
-      // token qua buildSingleRunPrompt, không chạy LLM/parse lại → no double-bump.
+      // Chỉ bump ở đây (parse chính sau LLM) — đường catch dưới ước lượng token
+      // từ sentPromptText, không chạy LLM/parse/rebuild lại → no double-bump.
       if (parsed.allocationParseFailed) {
         await bumpAllocationParseFail().catch(() => undefined);
       }
@@ -390,13 +397,10 @@ export async function POST(
       console.error("[api/agents/[id]/run] LLM failed:", err);
       const errorMessage =
         err instanceof Error ? err.message : "Agent không phản hồi được.";
-      let tokensInEstimate = 0;
-      try {
-        const { system, user } = await buildSingleRunPrompt(agent.code);
-        tokensInEstimate = estimateTokens(system + user);
-      } catch {
-        tokensInEstimate = 0;
-      }
+      // F-841-03/#84: ước lượng từ prompt THẬT đã gửi (sentPromptText) — không
+      // rebuild prompt (tránh RetrievalLog đếm kép + usedInPrompt sai). Prompt
+      // chưa kịp build (lỗi trước callLlm) → ước lượng 0, trung thực.
+      const tokensInEstimate = sentPromptText ? estimateTokens(sentPromptText) : 0;
       const run = await persistRun(
         agent.id,
         false,

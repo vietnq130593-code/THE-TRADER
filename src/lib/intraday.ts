@@ -178,8 +178,13 @@ export function pendingIntradayFlushes(): number {
  */
 export async function flushIntradayBuckets(): Promise<number> {
   let written = 0;
-  // Mượn toàn bộ queue — bucket lỗi đẩy lại cuối hàng
-  const queue = flushQueue.splice(0, flushQueue.length);
+  // Mượn toàn bộ queue — bucket lỗi đẩy lại cuối hàng.
+  // F-841-04/#84: dedupe theo object-identity — cùng 1 bucket có thể lọt queue
+  // 2 LẦN (safety-flush 120s đẩy vào → flush THẤT BẠI giữ lại → chuyển biên
+  // 5-phút đẩy tiếp) → upsert trùng cùng dữ liệu + phóng đại metric written;
+  // lọc bớt bản sao trước khi ghi (indexOf so bằng reference).
+  const raw = flushQueue.splice(0, flushQueue.length);
+  const queue = raw.filter((b, i) => raw.indexOf(b) === i);
   for (let i = 0; i < queue.length; i += WRITE_CHUNK) {
     const chunk = queue.slice(i, i + WRITE_CHUNK);
     const results = await Promise.all(

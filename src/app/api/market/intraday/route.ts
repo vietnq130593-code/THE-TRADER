@@ -10,8 +10,11 @@ export const dynamic = "force-dynamic";
  *
  * Query:
  *   symbol (bắt buộc) — mã Instrument (VCB, FPT...)
- *   days   (mặc định 5) — số ngày phiên gần nhất lấy về
- *   day    (tuỳ chọn, "YYYY-MM-DD") — lấy đúng 1 ngày phiên (ưu tiên days)
+ *   days   (mặc định 5) — số ngày phiên gần nhất lấy về (bỏ qua khi có day)
+ *   day    (tuỳ chọn, "YYYY-MM-DD") — lấy ĐÚNG 1 ngày phiên, biên chính xác
+ *          [ngày 15:00Z, ngày+1 15:00Z) theo neo date của IntradayBar
+ *          (F-841-02/#84: trước fix dùng gte đơn — trả cả mọi ngày SAU ngày
+ *          yêu cầu, mâu thuẫn meta days:1 và doc "đúng 1 ngày")
  *
  * Trả về: bars (startTime ISO asc · OHLCV · source · tickCount) + meta
  * {symbol, days, count, tradingDays, lastBarAt, coverage} — coverage = số
@@ -53,8 +56,10 @@ export async function GET(req: Request) {
     });
 
     let dateFilter: Date | null = null;
+    let dateEnd: Date | null = null; // F-841-02/#84 — biên trên độc quyền khi có day
     if (dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam)) {
       dateFilter = new Date(`${dayParam}T15:00:00.000Z`);
+      dateEnd = new Date(dateFilter.getTime() + 86_400_000);
     } else if (latestDay) {
       // lùi (days−1) phiên có dữ liệu — nhóm theo date lấy N ngày gần nhất
       const distinctDays = await db.intradayBar.groupBy({
@@ -69,7 +74,12 @@ export async function GET(req: Request) {
 
     const bars = dateFilter
       ? await db.intradayBar.findMany({
-          where: { instrumentId: instrument.id, date: { gte: dateFilter } },
+          where: {
+            instrumentId: instrument.id,
+            // F-841-02/#84: có day → range [ngày, ngày+1) — đúng 1 phiên; không
+            // có day → gte theo ngày cũ nhất trong cửa sổ days phiên gần nhất.
+            date: dateEnd ? { gte: dateFilter, lt: dateEnd } : { gte: dateFilter },
+          },
           orderBy: { startTime: "asc" },
           select: {
             startTime: true,
