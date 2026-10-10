@@ -75,14 +75,20 @@ export async function POST(
         return NextResponse.json({ error: result.error }, { status: result.status });
       }
 
-      const updated = await db.signal.update({
+      // F-73A-05 (fixbug #73): claim ACTED đã diễn ra atomic trong
+      // createPaperOrderFromSignal — KHÔNG ghi đè vô điều kiện ở đây (REJECT đua
+      // có thể bị/APPROVE đè nhầm). Chỉ re-read để dựng response.
+      const updated = await db.signal.findUnique({
         where: { id },
-        data: { status: "ACTED" },
         include: {
           instrument: { select: { symbol: true, name: true } },
           agent: { select: { code: true, name: true } },
         },
       });
+      // Guard nhẹ — signal chắc chắn tồn tại (đã check 404 ở trên), chỉ cho TS.
+      if (!updated) {
+        return NextResponse.json({ error: "Không tìm thấy tín hiệu." }, { status: 404 });
+      }
 
       await db.auditLog.create({
         data: {
@@ -94,6 +100,18 @@ export async function POST(
             symbol: updated.instrument.symbol,
             direction: updated.direction,
             orderId: result.order.id,
+            // E-P1-2: đầy đủ Order con khi TWAP tách lát (mỗi con 1 plan con).
+            orderIds: result.orders.map((o) => o.id),
+            ...(result.twap
+              ? {
+                  twap: {
+                    style: "TWAP",
+                    sliceCount: result.twap.sliceCount,
+                    notionalPctAdtv: result.twap.notionalPctAdtv,
+                    adtvVnd: result.twap.adtvVnd,
+                  },
+                }
+              : {}),
           }),
         },
       });
@@ -109,23 +127,44 @@ export async function POST(
             price: result.order.price,
             status: result.order.status,
           },
+          // E-P1-2 (v1.2): mọi Order con (TWAP) + mô tả quyết định tách —
+          // UI/audit nhìn đủ kế hoạch thực thi, không chỉ lát đầu.
+          orders: result.orders,
+          twap: result.twap,
         })
       );
     }
 
     // ── Từ chối → REJECTED (không tạo AgentMessage — tránh bịa lời agent) ──
-    const rejected = await db.signal.update({
-      where: { id },
+    // F-73A-05 (fixbug #73): REJECT cũng phải claim có điều kiện — APPROVE đua
+    // đã chuyển ACTED + tạo N lệnh thì REJECT KHÔNG được phép đè thành REJECTED
+    // (lệnh vẫn sống). updateMany where status=ACTIVE là claim atomic thật.
+    const claimedReject = await db.signal.updateMany({
+      where: { id, status: "ACTIVE" },
       data: {
         status: "REJECTED",
         rejectedAt: new Date(),
         rejectNote: note && note.length > 0 ? note : null,
       },
+    });
+    if (claimedReject.count === 0) {
+      const cur = await db.signal.findUnique({ where: { id }, select: { status: true } });
+      return NextResponse.json(
+        { error: signalStatusConflictMessage(cur?.status ?? "UNKNOWN") },
+        { status: 409 }
+      );
+    }
+    const rejected = await db.signal.findUnique({
+      where: { id },
       include: {
         instrument: { select: { symbol: true, name: true } },
         agent: { select: { code: true, name: true } },
       },
     });
+    // Guard nhẹ như APPROVE — signal chắc chắn tồn tại, chỉ cho TS non-null.
+    if (!rejected) {
+      return NextResponse.json({ error: "Không tìm thấy tín hiệu." }, { status: 404 });
+    }
 
     await db.auditLog.create({
       data: {

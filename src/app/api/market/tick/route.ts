@@ -13,6 +13,19 @@ import {
 import { invalidateFeatureCache, TOPBYADTV_CACHE_PREFIX } from "@/lib/feature-cache";
 import { getRealtimeRuntime, markRealtimeAttempt } from "@/lib/settings";
 import { fetchFinfoLastPrices, type FinfoQuote } from "@/lib/vndirect";
+// E-P0-1 (EXECUTION_OPS_BLUEPRINT v1.1): biểu phí/thuế chuyển về MỘT nguồn duy nhất
+// src/lib/exec/constants.ts (đọc roster config A11 percent → fraction + guard biên
+// đơn vị REV-2) — trước P0 FEE_RATE=0.0015/TAX_RATE=0.001 hardcode tại đây
+// (2/3 nguồn phí rải rác; nguồn thứ 3 là literal 0.0015 ở signal-execution.ts:391).
+import { FEE_RATE, TAX_RATE } from "@/lib/exec/constants";
+// E-P0-2 (REV-7): guard hạn chờ ExecutionPlan — đếm tick TRONG phiên liên tục.
+// E-P1-2: guard lượt lát TWAP — chỉ khớp Order con khi tới afterTick của lát.
+import {
+  parseExecutionPlan,
+  planDeadlineExceeded,
+  planSliceEligible,
+  describeExecutionPlan,
+} from "@/lib/exec/plan";
 
 export const dynamic = "force-dynamic";
 
@@ -57,8 +70,6 @@ export const dynamic = "force-dynamic";
  */
 
 const TICK_DRIFT = 0.004; // ±0.4% mỗi tick
-const FEE_RATE = 0.0015; // phí môi giới 0,15% × notional
-const TAX_RATE = 0.001; // thuế TNCN 0,1% — chỉ lệnh BÁN
 
 /**
  * real-eod (mặc định): Bar EOD thuộc về nguồn THẬT dchart VNDIRECT — tick chỉ
@@ -177,6 +188,9 @@ interface FillSnapshot {
   avgFillPrice: number | null;
   submittedAt: Date | null;
   status: "PENDING" | "PARTIALLY_FILLED";
+  // E-P0-2: note chứa ExecutionPlan JSON; createdAt làm mốc đếm tick phiên.
+  note: string | null;
+  createdAt: Date;
 }
 
 /**
@@ -691,6 +705,10 @@ async function runTick(): Promise<NextResponse> {
 
     // ── F-206: paper matching engine — khớp lệnh chờ khi giá vượt điều kiện ──
     let fills = 0;
+    // E-P0-2: số lệnh PENDING bị huỷ vì quá hạn chờ của ExecutionPlan.
+    let expiredByPlan = 0;
+    // E-P1-2: số lệnh TWAP còn bị GIỮ vì chưa tới lượt lát (afterTick).
+    let twapWaiting = 0;
     // Where-clause lọc status IN (PENDING, PARTIALLY_FILLED) — thu hẹp kiểu cho FillSnapshot
     const pending = (await db.order.findMany({
       where: {
@@ -712,10 +730,56 @@ async function runTick(): Promise<NextResponse> {
         avgFillPrice: true,
         submittedAt: true,
         status: true,
+        note: true,
+        createdAt: true,
       },
     })) as FillSnapshot[];
 
     for (const order of pending) {
+      // ── E-P0-2 (EXECUTION_OPS_BLUEPRINT v1.1 §4): guard hạn chờ plan ──
+      // Lệnh có ExecutionPlan (sinh khi APPROVE/convert từ P0) sống quá
+      // deadlineTicks (CHỈ đếm tick trong phiên liên tục — REV-7) → EXPIRED +
+      // audit ORDER_EXPIRED_BY_PLAN. Lệnh KHÔNG có plan (tạo trước P0/thủ công)
+      // không bị ép hạn mới — giữ hành vi cũ. Claim updateMany chống race cancel.
+      const plan = parseExecutionPlan(order.note);
+      if (plan && planDeadlineExceeded(plan, order.createdAt, now)) {
+        const claimedExp = await db.order.updateMany({
+          where: { id: order.id, status: { in: ["PENDING", "PARTIALLY_FILLED"] } },
+          data: { status: "EXPIRED" },
+        });
+        if (claimedExp.count > 0) {
+          expiredByPlan++;
+          await db.auditLog.create({
+            data: {
+              userId: order.userId,
+              action: "ORDER_EXPIRED_BY_PLAN",
+              entity: "Order",
+              entityId: order.id,
+              before: JSON.stringify({
+                status: order.status,
+                filledQuantity: order.filledQuantity,
+              }),
+              after: JSON.stringify({
+                status: "EXPIRED",
+                reason: "PLAN_DEADLINE_EXCEEDED",
+                plan: describeExecutionPlan(plan),
+                mode: "paper",
+              }),
+            },
+          });
+        }
+        continue;
+      }
+
+      // ── E-P1-2 (v1.2): guard lượt lát TWAP — chỉ khớp khi tới afterTick ──
+      // Order con TWAP chưa tới lượt lát (tick phiên < afterTick) → GIỮ nguyên
+      // (không expired, không fill) — lệnh rải đều theo lịch kế hoạch. Lát 1
+      // afterTick=0 → luôn eligible; SINGLE giữ đúng hành vi cũ (plan cũ/ko plan).
+      if (plan && !planSliceEligible(plan, order.createdAt, now)) {
+        twapWaiting++;
+        continue;
+      }
+
       const last = lastByInstrument.get(order.instrumentId);
       if (last == null || order.price == null) continue;
       const crossed = order.side === "BUY" ? last <= order.price : last >= order.price;
@@ -730,11 +794,16 @@ async function runTick(): Promise<NextResponse> {
       }
     }
 
-    if (fills > 0) {
+    if (fills > 0 || expiredByPlan > 0 || twapWaiting > 0) {
       await markSource("trading", {
         mode: "paper",
         success: true,
-        meta: { fills, lastFillAt: now.toISOString() },
+        meta: {
+          fills,
+          ...(expiredByPlan > 0 ? { expiredByPlan } : {}),
+          ...(twapWaiting > 0 ? { twapWaiting } : {}),
+          lastFillAt: now.toISOString(),
+        },
       });
     }
 

@@ -36,6 +36,10 @@ export async function POST(
           status: result.order.status,
           createdAt: result.order.createdAt,
         },
+        // E-P1-2 (v1.2): đầy đủ Order con TWAP + quyết định tách (giữ shape cũ
+        // `order` = lát đầu để không phá client hiện có).
+        orders: result.orders,
+        twap: result.twap,
       })
     );
   } catch (err) {

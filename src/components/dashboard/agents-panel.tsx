@@ -299,7 +299,9 @@ export function MessageItem({
             })}
           </span>
         </div>
-        <p className="mt-1 text-sm leading-relaxed">{message.content}</p>
+        {/* F-73A-09: khối allocation Chủ tịch (narrative + bảng) nhiều dòng —
+            whitespace-pre-line giữ cấu trúc, không dồn thành 1 đoạn. */}
+        <p className="mt-1 whitespace-pre-line text-sm leading-relaxed">{message.content}</p>
         {message.reasoning && (
           <blockquote className="mt-2 border-l-2 border-border pl-3 text-xs italic leading-relaxed text-muted-foreground">
             {message.reasoning}

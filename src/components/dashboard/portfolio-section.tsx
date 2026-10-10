@@ -362,6 +362,37 @@ export function PortfolioSection() {
   );
 }
 
+/** E-P0-2 (EX-A2): parse nhẹ ExecutionPlan từ Order.note ngay tại client —
+ *  không import module server (roster/constants) để giữ bundle nhẹ. */
+function parsePlanNote(note: string | null): {
+  humanNote: string;
+  summary: string;
+} | null {
+  if (!note || !note.trim().startsWith("{")) return null;
+  try {
+    const raw = JSON.parse(note) as {
+      kind?: string;
+      humanNote?: string;
+      style?: string;
+      slippageBudgetPct?: number;
+      deadlineTicks?: number;
+      sizing?: string;
+      slices?: { quantity?: number; price?: number }[];
+    };
+    if (raw.kind !== "ExecutionPlan") return null;
+    const slice = raw.slices?.[0];
+    return {
+      humanNote: typeof raw.humanNote === "string" ? raw.humanNote : "",
+      summary:
+        `Kế hoạch ${raw.style ?? "?"}: ${(raw.slices?.length ?? 1)} lát` +
+        (slice?.quantity != null ? ` × ${slice.quantity} cp` : "") +
+        ` · trượt ≤${raw.slippageBudgetPct ?? "?"}% · hạn ${raw.deadlineTicks ?? "?"} tick phiên`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function OrderRowView({ order }: { order: OrderRow }) {
   const status = ORDER_STATUS[order.status] ?? {
     label: order.status,
@@ -392,11 +423,31 @@ function OrderRowView({ order }: { order: OrderRow }) {
       </TableCell>
       <TableCell>
         <p className="font-semibold">{order.symbol}</p>
-        {order.note ? (
-          <p className="max-w-[220px] truncate text-[11px] text-muted-foreground" title={order.note}>
-            {order.note}
-          </p>
-        ) : null}
+        {(() => {
+          const plan = parsePlanNote(order.note);
+          if (plan) {
+            return (
+              <div className="flex max-w-[240px] flex-col gap-0.5">
+                {plan.humanNote ? (
+                  <span className="truncate text-[11px] text-muted-foreground" title={plan.humanNote}>
+                    {plan.humanNote}
+                  </span>
+                ) : null}
+                <span
+                  className="truncate text-[10px] text-primary/90"
+                  title={plan.summary}
+                >
+                  {plan.summary}
+                </span>
+              </div>
+            );
+          }
+          return order.note ? (
+            <p className="max-w-[220px] truncate text-[11px] text-muted-foreground" title={order.note}>
+              {order.note}
+            </p>
+          ) : null;
+        })()}
       </TableCell>
       <TableCell>
         <SideBadge side={order.side} />

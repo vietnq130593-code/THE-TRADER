@@ -38,6 +38,11 @@ import { useSingleAgentRun, RateLimitError } from "@/hooks/use-agent-actions";
 import { AgentRosterCard } from "@/components/dashboard/agent-roster-card";
 import { AgentDetailPanel } from "@/components/dashboard/agent-detail-panel";
 import { CoverageMatrix } from "@/components/dashboard/coverage-matrix";
+// E-P0-5 (EXECUTION_OPS_BLUEPRINT v1.1): khối KPI vận hành nhóm executive.
+import { ExecutiveKpi } from "@/components/dashboard/executive-kpi";
+// E-P1-4 (v1.2): bảng điểm chất lượng tín hiệu Chủ tịch — đặt dưới section
+// nhóm executive (cùng pattern B8 dưới section research).
+import { ChairmanScorecardCard } from "@/components/dashboard/chairman-scorecard";
 import { cn } from "@/lib/utils";
 import type { AgentCard, AgentsResponse } from "@/lib/types";
 import type { ScorecardRow } from "@/lib/research/scorecard";
@@ -297,6 +302,10 @@ export function AgentsWorkspace() {
         </CardContent>
       </Card>
 
+      {/* E-P0-5 — KPI vận hành nhóm Điều hành & Thực thi (funnel + churn + AOV +
+          slippage) — đặt trên roster để trader nhìn hiệu suất nhóm trước chi tiết */}
+      <ExecutiveKpi />
+
       {/* Body: roster (trái, cuộn dọc khi dài ở desktop) + panel chi tiết/chat (phải) */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
         <div
@@ -374,6 +383,9 @@ export function AgentsWorkspace() {
                     <CoverageMatrix />
                   </>
                 )}
+                {/* E-P1-4 — Bảng điểm Chủ tịch (A1): NGAY DƯỚI section nhóm
+                    executive — cùng pattern B8 (mô tả, không phán xét §6.5) */}
+                {section.key === "executive" && <ChairmanScorecardCard />}
               </Fragment>
             ))
           )}

@@ -152,9 +152,14 @@ export function useSignalDecision() {
 
       const dirLabel = DIRECTION_LABEL[res.signal.direction] ?? res.signal.direction;
       if (vars.action === "APPROVE") {
+        // F-73A-10 (fixbug #73): toast thấy đủ kế hoạch TWAP — N lát + tổng
+        // khối lượng (trước đây chỉ thấy lát đầu, dễ tưởng duyệt thiếu lệnh).
+        const twapSuffix = res.twap
+          ? ` — TWAP ${res.twap.sliceCount} lát · tổng ${res.twap.totalQuantity.toLocaleString("vi-VN")} cp`
+          : "";
         toast.success("Đã phê duyệt tín hiệu", {
           description: res.order
-            ? `Lệnh LIMIT ${res.order.side === "BUY" ? "MUA" : "BÁN"} ${res.order.quantity.toLocaleString("vi-VN")} cp ${res.order.symbol} @ ${formatPrice(res.order.price)} ₫`
+            ? `Lệnh LIMIT ${res.order.side === "BUY" ? "MUA" : "BÁN"} ${res.order.quantity.toLocaleString("vi-VN")} cp ${res.order.symbol} @ ${formatPrice(res.order.price)} ₫${twapSuffix}`
             : `${res.signal.symbol} · ${dirLabel} · điểm ${res.signal.score.toFixed(0)}/100`,
         });
       } else {

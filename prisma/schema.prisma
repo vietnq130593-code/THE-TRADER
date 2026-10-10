@@ -454,6 +454,10 @@ model Trade {
 
   @@index([orderId])
   @@index([instrumentId, executedAt(sort: Desc)])
+  // E-P0-3 (REV-9 review #69): window query đối chiếu ReconciliationReport lọc
+  // THEO executedAt trên TOÀN bảng — composite [instrumentId, executedAt] không
+  // phục vụ được (instrumentId đứng trước chặn index scan theo executedAt).
+  @@index([executedAt])
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -570,6 +574,21 @@ model AppSetting {
   value     String   // JSON payload
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// E-P1-3 (EXECUTION_OPS_BLUEPRINT v1.1 §4/§8): chuỗi snapshot tiền mặt theo
+// thời gian — ĐIỀU KIỆN TIÊN QUYẾT của dự báo dòng tiền A12 (§8 đánh giá
+// "chưa có chuỗi cash theo thời gian — cần snapshot mỗi chu kỳ"). A12 ghi
+// 1 dòng mỗi chu kỳ (cash + equity); prune giữ 90 ngày để không phình vô hạn.
+model CashSnapshot {
+  id              String   @id @default(cuid())
+  brokerAccountId String
+  cash            BigInt // số dư tiền mặt lúc snapshot (VND)
+  equity          BigInt // NAV lúc snapshot (VND)
+  source          String   @default("cycle") // cycle | seed | manual
+  createdAt       DateTime @default(now())
+
+  @@index([brokerAccountId, createdAt(sort: Desc)])
 }
 
 // Bộ tổng hợp Bayes — posterior thị trường theo 3 bậc nhân quả

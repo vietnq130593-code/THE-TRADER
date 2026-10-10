@@ -13,8 +13,16 @@ import {
   buildOpenSignalsBlock,
   buildValuationBlock,
   buildLiquidityBlock,
+  buildPortfolioWeightsBlock,
 } from "@/lib/agent-context";
 import { AGENT_ROSTER } from "@/lib/agent-roster";
+// E-P1-1 (EXECUTION_OPS_BLUEPRINT v1.2): parse khối đề xuất phân bổ của Chủ tịch.
+import {
+  parseAllocationProposal,
+  bumpAllocationParseFail,
+  formatAllocationForMessage,
+  type AllocationProposal,
+} from "@/lib/exec/allocation";
 import {
   runServiceAgent,
   type ServiceRunContext,
@@ -173,6 +181,8 @@ interface StrategistResult {
   recommendation: string;
   confidence: "LOW" | "MEDIUM" | "HIGH";
   signal: StrategistSignal | null;
+  /** E-P1-1: khối đề xuất phân bổ danh mục (narrative + bảng) — chỉ tham mưu. */
+  allocation: AllocationProposal | null;
 }
 
 /** Persist an agent run + restore agent status + update health. */
@@ -835,6 +845,10 @@ export async function POST() {
         ].filter(Boolean)
       : [];
 
+    // E-P1-1: block tỷ trọng danh mục hiện tại — dữ liệu chuẩn cho khối
+    // đề xuất phân bổ của Chủ tịch (currentPct không bịa — đo từ DB).
+    const portfolioWeightsBlock = await buildPortfolioWeightsBlock().catch(() => null);
+
     const strategistUserPrompt = [
       [marketBlock, newsBlock, flowsBlock, valuationBlock, liquidityBlock].join("\n\n"),
       `TÍN HIỆU ĐANG MỞ:\n${openSignalsBlock}`,
@@ -845,12 +859,14 @@ export async function POST() {
       ...(bayesView ? ["", buildBayesPromptBlock(bayesView)] : []),
       // Phiên #51 — CRB v1.1 §6: khối QUANT + gợi ý Kelly ¼ (chỉ tham mưu)
       ...(riskQuant?.ok ? ["", buildQuantChairmanBlock(riskQuant)] : []),
+      // E-P1-1 — tỷ trọng hiện tại cho khối đề xuất phân bổ
+      ...(portfolioWeightsBlock ? ["", portfolioWeightsBlock] : []),
       "",
       `BÁO CÁO TỪ ${digestLines.length} AGENTS CỦA HỘI ĐỒNG (để tổng hợp):`,
       ...digestLines,
       ...(vetoNotice.length > 0 ? ["", ...vetoNotice] : []),
       "",
-      "Hãy tổng hợp toàn bộ và đưa ra MỘT tín hiệu theo đúng định dạng JSON đã yêu cầu.",
+      "Hãy tổng hợp toàn bộ, đưa ra MỘT tín hiệu theo đúng định dạng JSON đã yêu cầu, kèm khối allocation (đề xuất phân bổ danh mục — chỉ tham mưu).",
     ].join("\n");
 
     const strategistStart = Date.now();
@@ -868,6 +884,7 @@ export async function POST() {
         recommendation: unknown;
         confidence: unknown;
         signal: unknown;
+        allocation: unknown;
       }>(raw);
       const summary =
         typeof parsed?.summary === "string" && parsed.summary.trim()
@@ -917,7 +934,20 @@ export async function POST() {
         };
       }
 
-      strategist = { summary, recommendation, confidence, signal };
+      // ── E-P1-1: parse khối allocation (đề xuất phân bổ) — AN TOÀN ──
+      // Sai format/null → allocation=null + đếm parse-fail (drift metric,
+      // fail-soft — không sập chu kỳ Chủ tịch). Chỉ giữ ≤ 8 dòng chuẩn hoá.
+      let allocation: AllocationProposal | null = null;
+      try {
+        allocation = parseAllocationProposal(parsed?.allocation);
+        if (parsed?.allocation != null && allocation == null) {
+          await bumpAllocationParseFail();
+        }
+      } catch (allocErr) {
+        console.error("[agents/run:allocation]", allocErr);
+      }
+
+      strategist = { summary, recommendation, confidence, signal, allocation };
 
       // ══ Phiên #51 — CRB-9 · ¼-KELLY (TUYỆT ĐỐI THAM MƯU) ══════════════
       // Tính gợi ý tỷ trọng cho tín hiệu MUA/BÁN từ bandit posterior cử tri
@@ -981,7 +1011,8 @@ export async function POST() {
         strategistStart,
         tokensIn,
         tokensOut,
-        JSON.stringify({ summary, recommendation, confidence, signal }),
+        // E-P1-1: output JSON chứa cả khối allocation (đầy đủ trong AgentRun).
+        JSON.stringify({ summary, recommendation, confidence, signal, allocation }),
         null
       );
       strategistRunId = run.id;
@@ -989,16 +1020,23 @@ export async function POST() {
       if (bayesView) {
         await attachCycleRunId(bayesView.id, run.id).catch(() => undefined);
       }
+      // E-P1-1: message Chủ tịch = summary + khối ĐỀ XUẤT PHÂN BỔ (narrative +
+      // bảng tỷ trọng) — §7.4 mặc định "chỉ narrative + bảng" trong output,
+      // trader đọc trực tiếp ở luồng tin nhắn; KHÔNG push prompt chu kỳ sau.
+      const messageContent =
+        strategist.allocation
+          ? `${summary}\n\n${formatAllocationForMessage(strategist.allocation)}`
+          : summary;
       const message = await persistMessage(
         strategistAgent.id,
-        summary,
+        messageContent,
         recommendation || null,
         confidence === "HIGH" ? "bullish" : confidence === "LOW" ? "neutral" : "neutral"
       );
       createdMessages.push({
         id: message.id,
         fromAgentId: strategistAgent.id,
-        content: summary,
+        content: messageContent,
         reasoning: recommendation || null,
         sentiment: confidence === "HIGH" ? "bullish" : "neutral",
       });

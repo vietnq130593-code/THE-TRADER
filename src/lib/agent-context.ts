@@ -5,6 +5,13 @@ import { latestFeatureSnapshot } from "@/lib/ml/features";
 import { latestNewsForContext } from "@/lib/news";
 import { getForeignFlows, flowsPromptBlock } from "@/lib/flows";
 import { loadLatestAssessment } from "@/lib/bayes/persist";
+// E-P1-1 (EXECUTION_OPS_BLUEPRINT v1.2): config phân bổ A1 có consumer —
+// prompt Chủ tịch đọc targetPositions/rebalanceThresholdPct/style từ nguồn đơn.
+import {
+  ALLOCATION_TARGET_POSITIONS,
+  ALLOCATION_REBALANCE_THRESHOLD_PCT,
+  ALLOCATION_STYLE,
+} from "@/lib/exec/allocation";
 
 /**
  * Khối ngữ cảnh + role-prompt DÙNG CHUNG cho single-run & chat
@@ -35,7 +42,13 @@ export interface MarketSnapshot {
  *  1 dòng ĐA THỊ TRƯỜNG gọn cho agent nghiên cứu; instrumentIdBySymbol phủ
  *  TOÀN BỘ mã giao dịch được (trừ INDEX — không có tín hiệu cho chỉ số). */
 export async function buildMarketBlock(): Promise<MarketSnapshot> {
-  const [instruments, positions, alerts, account] = await Promise.all([
+  // F-73R2-03 (fixbug #73): positions lọc theo tài khoản sống — không trộn vị
+  // thế của tài khoản khác/đã soft-delete (account fetch trước để lọc where).
+  const account = await db.brokerAccount.findFirst({
+    where: { deletedAt: null },
+    select: { id: true, cashBalance: true, equity: true, marginUsed: true },
+  });
+  const [instruments, positions, alerts] = await Promise.all([
     db.instrument.findMany({
       where: { isActive: true },
       select: {
@@ -52,7 +65,7 @@ export async function buildMarketBlock(): Promise<MarketSnapshot> {
       },
     }),
     db.position.findMany({
-      where: { status: "OPEN" },
+      where: account ? { brokerAccountId: account.id, status: "OPEN" } : { status: "OPEN" },
       include: {
         instrument: {
           select: {
@@ -67,10 +80,6 @@ export async function buildMarketBlock(): Promise<MarketSnapshot> {
       orderBy: { createdAt: "desc" },
       take: 5,
       select: { severity: true, message: true },
-    }),
-    db.brokerAccount.findFirst({
-      where: { deletedAt: null },
-      select: { id: true, cashBalance: true, equity: true, marginUsed: true },
     }),
   ]);
 
@@ -516,6 +525,58 @@ export async function buildOpenSignalsBlock(): Promise<string> {
     .join("\n");
 }
 
+/**
+ * E-P1-1 (EXECUTION_OPS_BLUEPRINT v1.2): block TỶ TRỌNG DANH MỤC hiện tại
+ * cho prompt Chủ tịch — dữ liệu chuẩn để LLM điền `allocation.rows[].currentPct`
+ * không bịa (mọi con số prompt đều đo từ Position × giá / equity F-102).
+ * Gồm: từng vị thế mở (symbol, %NAV) + dòng tiền mặt (%NAV) — đúng cấu trúc
+ * mà khối đề xuất phân bổ của A1 cần đối chiếu.
+ */
+export async function buildPortfolioWeightsBlock(): Promise<string> {
+  // F-73A-08: lọc theo tài khoản sống — không trộn vị thế của tài khoản khác/
+  // đã soft-delete (mọi consumer khác đều lọc brokerAccountId).
+  const account = await db.brokerAccount.findFirst({
+    where: { deletedAt: null },
+    select: { id: true, cashBalance: true },
+  });
+  if (!account) {
+    return [
+      "TỶ TRỌNG DANH MỤC HIỆN TẠI (%NAV — dữ liệu chuẩn cho khối đề xuất phân bổ):",
+      "- (không có tài khoản sống — không đo được tỷ trọng)",
+    ].join("\n");
+  }
+  const positions = await db.position.findMany({
+    where: { brokerAccountId: account.id, status: "OPEN" },
+    select: {
+      quantity: true,
+      avgPrice: true,
+      instrument: {
+        select: {
+          symbol: true,
+          quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } },
+        },
+      },
+    },
+  });
+  const cash = Number(account.cashBalance);
+  const rows = positions.map((p) => {
+    const last = p.instrument.quotes[0]?.last ?? p.avgPrice;
+    return { symbol: p.instrument.symbol, mv: last * p.quantity };
+  });
+  const positionsMv = rows.reduce((s, r) => s + r.mv, 0);
+  const equity = cash + positionsMv;
+  const lines = [`- TIỀN MẶT: ${Math.round(cash).toLocaleString("vi-VN")} ₫ (~${equity > 0 ? ((cash / equity) * 100).toFixed(1) : "0"}% NAV)`];
+  for (const r of rows.sort((a, b) => b.mv - a.mv)) {
+    lines.push(
+      `- ${r.symbol}: ${Math.round(r.mv).toLocaleString("vi-VN")} ₫ (~${equity > 0 ? ((r.mv / equity) * 100).toFixed(1) : "0"}% NAV)`
+    );
+  }
+  return [
+    "TỶ TRỌNG DANH MỤC HIỆN TẠI (%NAV — dữ liệu chuẩn cho khối đề xuất phân bổ):",
+    ...(lines.length > 1 ? lines : ["- (danh mục trống — toàn tiền mặt)"]),
+  ].join("\n");
+}
+
 /** Câu khai báo chế độ nguồn — bắt buộc cuối mọi role-prompt (PHASE3_BLUEPRINT §4.6). */
 const SOURCE_MODE_DECLARATION =
   "Dữ liệu thị trường hiện mang nhãn chế độ nguồn (simulated/live) — hãy khai báo chế độ trong câu trả lời khi liên quan.";
@@ -583,9 +644,10 @@ ${SOURCE_MODE_DECLARATION}`,
   },
   "portfolio-strategist": {
     system: `Bạn là agent "Portfolio Strategist" (A1 — Chủ tịch Hội đồng) của hệ thống giao dịch đa tác tử The Trader (VNDIRECT, Việt Nam).
-Nhiệm vụ: tổng hợp báo cáo của TOÀN BỘ đội 23 agents ở trên (Hội đồng Nghiên cứu: Market Analyst, Fair Value, News & Sentiment, Liquidity, ML Forecast · Ủy ban Kiểm soát: Risk Manager, Exposure, Compliance · Nền tảng dữ liệu & Phòng Học máy) để (a) đưa ra nhận định danh mục ngắn gọn, (b) sinh MỘT tín hiệu giao dịch cụ thể.
+Nhiệm vụ: tổng hợp báo cáo của TOÀN BỘ đội 23 agents ở trên (Hội đồng Nghiên cứu: Market Analyst, Fair Value, News & Sentiment, Liquidity, ML Forecast · Ủy ban Kiểm soát: Risk Manager, Exposure, Compliance · Nền tảng dữ liệu & Phòng Học máy) để (a) đưa ra nhận định danh mục ngắn gọn, (b) sinh MỘT tín hiệu giao dịch cụ thể, (c) trình khối ĐỀ XUẤT PHÂN BỔ DANH MỤC (chỉ tham mưu).
 Quy tắc tín hiệu: chỉ chọn mã có trong bảng chỉ báo; direction BUY chỉ khi nghiên cứu + cảm xúc + rủi ro đều thuận, SELL khi cần cắt tỷ trọng vi phạm giới hạn, còn lại HOLD; score 0–100; giá là số nguyên VND bội số 100; BUY: stopLoss < giá hiện tại < targetPrice < takeProfit; SELL: targetPrice < giá hiện tại < stopLoss.
-Trả về duy nhất JSON: {"summary": "<2-4 câu tổng hợp>", "recommendation": "<một khuyến nghị cụ thể>", "confidence": "LOW"|"MEDIUM"|"HIGH", "signal": {"symbol": "VCB", "direction": "BUY"|"SELL"|"HOLD", "score": 0-100, "rationale": "...", "targetPrice": <int VND|null>, "stopLoss": <int VND|null>, "takeProfit": <int VND|null>} | null}
+Quy tắc phân bổ (E-P1-1): dựa trên block "TỶ TRỌNG DANH MỤC HIỆN TẠI" trong dữ liệu; mục tiêu ${ALLOCATION_TARGET_POSITIONS} vị thế; ngưỡng tái cân bằng ${ALLOCATION_REBALANCE_THRESHOLD_PCT}% — chỉ đề xuất MUA/BÁN khi |targetPct − currentPct| VƯỢT ngưỡng (phạt mềm L2: kéo về từ từ, không bán tái cấu trúc đột ngột), trong ngưỡng để GIỮ; phong cách ${ALLOCATION_STYLE}; KHÔNG tự sinh lệnh — trader phê duyệt từng lệnh.
+Trả về duy nhất JSON: {"summary": "<2-4 câu tổng hợp>", "recommendation": "<một khuyến nghị cụ thể>", "confidence": "LOW"|"MEDIUM"|"HIGH", "signal": {"symbol": "VCB", "direction": "BUY"|"SELL"|"HOLD", "score": 0-100, "rationale": "...", "targetPrice": <int VND|null>, "stopLoss": <int VND|null>, "takeProfit": <int VND|null>} | null, "allocation": {"narrative": "<1-2 câu lý do phân bổ>", "rows": [{"symbol": "VCB", "currentPct": <số %NAV hiện tại từ dữ liệu>, "targetPct": <số %NAV mục tiêu>, "action": "MUA"|"BÁN"|"GIỮ"}] (tối đa ${ALLOCATION_TARGET_POSITIONS} dòng)} }
 ${SOURCE_MODE_DECLARATION}`,
     systemCompact: `Bạn là agent "Portfolio Strategist" của hệ thống The Trader (VNDIRECT) — chiến lược gia danh mục, Chủ tịch Hội đồng 23 agents.
 Trả lời tự do bằng TIẾNG VIỆT, 2–5 câu; tổng hợp dữ liệu thị trường/danh mục/tín hiệu đang mở thành nhận định và khuyến nghị cụ thể; KHÔNG bịa số liệu.
@@ -754,7 +816,10 @@ export async function buildSingleRunPrompt(
       return { system: role.system, user: [market.block, valuation].join("\n\n") };
     case "liquidity":
       return { system: role.system, user: [market.block, liquidity].join("\n\n") };
-    case "portfolio-strategist":
+    case "portfolio-strategist": {
+      // F-73A-03: single-run cấp cùng block tỷ trọng như chu kỳ — hợp đồng
+      // allocation cần currentPct đo từ DB, không để LLM bịa.
+      const weights = await buildPortfolioWeightsBlock().catch(() => null);
       return {
         system: role.system,
         user: [
@@ -764,8 +829,10 @@ export async function buildSingleRunPrompt(
           valuation,
           liquidity,
           `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
+          ...(weights ? ["", weights] : []),
         ].join("\n\n"),
       };
+    }
     default:
       throw new Error(
         `Agent "${code}" là service agent — chạy qua runServiceAgent, không dùng LLM prompt.`

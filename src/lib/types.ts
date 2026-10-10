@@ -310,6 +310,27 @@ export interface SignalDecisionResponse {
     price: number | null;
     status: string;
   } | null;
+  /** E-P1-2 (fixbug #73): đầy đủ Order con khi TWAP tách lát (mỗi con 1 plan). */
+  orders?: Array<{
+    id: string;
+    symbol: string;
+    side: "BUY" | "SELL";
+    type: string;
+    quantity: number;
+    price: number | null;
+    status: string;
+    createdAt: string;
+    plan?: string;
+  }>;
+  /** E-P1-2: mô tả quyết định tách — null/undefined khi SINGLE. */
+  twap?: {
+    style: "TWAP";
+    sliceCount: number;
+    totalQuantity: number;
+    adtvVnd: number;
+    notionalPctAdtv: number;
+    triggerPct: number;
+  } | null;
 }
 
 export interface AgentRunResult {

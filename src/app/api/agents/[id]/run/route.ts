@@ -3,6 +3,11 @@ import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
 import { updateAgentHealth } from "@/lib/health";
 import { buildSingleRunPrompt } from "@/lib/agent-context";
+import {
+  parseAllocationProposal,
+  formatAllocationForMessage,
+  bumpAllocationParseFail,
+} from "@/lib/exec/allocation";
 import { checkAgentRateLimit } from "@/lib/agent-ratelimit";
 import { ROSTER_BY_CODE } from "@/lib/agent-roster";
 import { runServiceAgent } from "@/lib/agent-service-runs";
@@ -81,6 +86,10 @@ interface ParsedAgentOutput {
   content: string;
   reasoning: string;
   sentiment: "bullish" | "bearish" | "neutral" | null;
+  /** F-73A-03: khối phân bổ đã định dạng (narrative + bảng) khi hợp lệ. */
+  allocationText?: string;
+  /** F-73A-03: LLM CÓ trả allocation nhưng parse fail — caller bump drift metric. */
+  allocationParseFailed?: boolean;
 }
 
 /** Parse JSON theo vai (giống run route): analyst {content,reasoning,sentiment}; strategist {summary,recommendation,confidence}. */
@@ -90,9 +99,10 @@ function parseAgentOutput(code: string, raw: string): ParsedAgentOutput {
       summary: unknown;
       recommendation: unknown;
       confidence: unknown;
+      allocation: unknown; // F-73A-03: khối phân bổ như run route chu kỳ
     }>(raw);
     // Parse fail → fallback dùng raw text làm content (như run route)
-    const content =
+    const summaryContent =
       typeof parsed?.summary === "string" && parsed.summary.trim()
         ? parsed.summary.trim()
         : raw.trim();
@@ -102,7 +112,27 @@ function parseAgentOutput(code: string, raw: string): ParsedAgentOutput {
       typeof parsed?.confidence === "string" ? parsed.confidence.toUpperCase() : "MEDIUM";
     const sentiment =
       confidenceRaw === "HIGH" ? "bullish" : confidenceRaw === "LOW" ? "neutral" : "neutral";
-    return { content, reasoning, sentiment };
+    // F-73A-03: parse khối allocation như chu kỳ (run route) — không nuốt im lặng.
+    let allocationText: string | undefined;
+    let allocationParseFailed: boolean | undefined;
+    try {
+      const alloc = parseAllocationProposal(parsed?.allocation);
+      if (alloc != null) {
+        allocationText = formatAllocationForMessage(alloc);
+      } else if (parsed?.allocation != null) {
+        allocationParseFailed = true;
+      }
+    } catch {
+      // fail-soft — không sập single-run
+    }
+    const content = allocationText ? `${summaryContent}\n\n${allocationText}` : summaryContent;
+    return {
+      content,
+      reasoning,
+      sentiment,
+      ...(allocationText ? { allocationText } : {}),
+      ...(allocationParseFailed ? { allocationParseFailed } : {}),
+    };
   }
   const parsed = parseJsonBlock<{
     content: unknown;
@@ -291,6 +321,13 @@ export async function POST(
 
       const parsed = parseAgentOutput(agent.code, raw);
       const { content, reasoning, sentiment } = parsed;
+
+      // F-73A-03: đếm parse-fail drift metric chung với chu kỳ (E-P2-1 sau).
+      // Chỉ bump ở đây (parse chính sau LLM) — đường catch dưới chỉ ước lượng
+      // token qua buildSingleRunPrompt, không chạy LLM/parse lại → no double-bump.
+      if (parsed.allocationParseFailed) {
+        await bumpAllocationParseFail().catch(() => undefined);
+      }
 
       const run = await persistRun(
         agent.id,

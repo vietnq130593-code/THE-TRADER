@@ -8,6 +8,10 @@
  *     zero-retention). CHẠY ĐƯỢC CẢ NGOÀI SANDBOX — chỉ cần
  *     `OPENCODE_ZEN_API_KEY` (lấy tại opencode.ai/zen → sign in → API key).
  *     Đây là provider dành cho môi trường local của trader.
+ *     ⚠️ AUTH: gateway xác thực key `oc_sk_…` qua header `x-api-key` —
+ *     `Authorization: Bearer` bị gateway coi là credential upstream
+ *     passthrough → 401 "Invalid credential" (thực đo 2026-10-09:
+ *     Bearer 401 · x-api-key 200 · GET /models chấp nhận cả hai).
  *
  *  2. `zai` — z-ai-web-dev-sdk (gateway nội bộ sandbox Z.ai), model GLM-4.6.
  *     CHỈ chạy bên trong sandbox (đọc config /etc/.z-ai-config). Dùng để
@@ -174,8 +178,10 @@ async function zenChatCompletions(
   try {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
+      // x-api-key (không phải Authorization Bearer): Bearer bị Zen gateway
+      // từ chối 401 "Invalid credential" với key oc_sk_… (thực đo 2026-10-09)
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        "x-api-key": apiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

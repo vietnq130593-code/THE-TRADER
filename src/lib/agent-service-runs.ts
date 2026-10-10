@@ -18,6 +18,27 @@ import { llmStatus } from "@/lib/llm";
 import { getTradingMode, TRADING_MODE_LABEL } from "@/lib/trading-mode";
 import { sessionPhase, SESSION_PHASE_LABEL } from "@/lib/market-session";
 import { ROSTER_BY_CODE } from "@/lib/agent-roster";
+// E-P0-3/E-P0-4 (EXECUTION_OPS_BLUEPRINT v1.1): A11 ReconciliationReport + A12 CommittedCashView.
+import {
+  runReconciliation,
+  reconcileReportSummary,
+  RECONCILE_CHECKPOINT_KEY,
+} from "@/lib/exec/reconciliation";
+import { computeCommittedCashView, committedViewSummary } from "@/lib/exec/committed";
+// E-P1-3 (v1.2): snapshot cash mỗi chu kỳ + CashflowForecast kịch bản A12.
+import {
+  recordCashSnapshot,
+  computeCashflowForecast,
+  forecastSummary,
+  type CashflowForecast,
+} from "@/lib/exec/forecast";
+// E-P1-5 (v1.2): quét bất thường giao dịch IQR + z-score (A11 — sau reconciliation).
+import {
+  detectTradeAnomalies,
+  raiseAnomalyAlert,
+  anomalyScanSummary,
+  type AnomalyScanResult,
+} from "@/lib/exec/anomaly";
 import { latestFeatures, loadTopSeries, latestFeatureSnapshot } from "@/lib/ml/features";
 import { topByAdtv } from "@/lib/dated-series";
 import {
@@ -128,7 +149,11 @@ async function portfolioSnapshot(): Promise<{
   }[];
   sectorWeights: { sector: string; mv: number; pct: number }[];
 }> {
-  const [positions, account] = await Promise.all([
+  const [account, positionsAll] = await Promise.all([
+    db.brokerAccount.findFirst({
+      where: { deletedAt: null },
+      select: { id: true, cashBalance: true, equity: true, marginUsed: true },
+    }),
     db.position.findMany({
       where: { status: "OPEN" },
       include: {
@@ -141,11 +166,13 @@ async function portfolioSnapshot(): Promise<{
         },
       },
     }),
-    db.brokerAccount.findFirst({
-      where: { deletedAt: null },
-      select: { cashBalance: true, equity: true, marginUsed: true },
-    }),
   ]);
+  // F-73R2-03: lọc positions theo tài khoản sống — không trộn vị thế tài khoản
+  // khác/soft-delete vào NAV của A12 (filter JS theo id — giữ Promise.all,
+  // không thêm truy vấn tuần tự; account trong where gây chicken-egg).
+  const positions = account
+    ? positionsAll.filter((p) => p.brokerAccountId === account.id)
+    : positionsAll;
   const rows = positions.map((p) => {
     const last = p.instrument.quotes[0]?.last ?? p.avgPrice;
     const mv = last * p.quantity;
@@ -708,27 +735,86 @@ async function runCompliance(): Promise<ServiceRunResult> {
 
 /* ───────────────────── Nhóm 3 · executive (service) ───────────────────── */
 
-/** A11 Settlement — đối chiếu khớp lệnh, phí, thuế 24h. */
+/** A11 Settlement — ReconciliationReport 6 phép idempotent (E-P0-3, v1.1).
+ *  Trước P0: reduce Trade cửa sổ 24h trượt theo run — cùng 1 Trade bị đếm ở
+ *  nhiều chu kỳ, 0 phép đối chiếu (báo cáo suông). Giờ: checkpoint AppSetting
+ *  exec.reconcile + 6 phép (kèm order-fee-ledger REV-8 + whitelist REV-12).
+ *  E-P1-5 (v1.2): + quét bất thường giao dịch IQR + z-score ±2σ trên CHÍNH
+ *  window reconciliation vừa đóng (lấy checkpoint TRƯỚC khi runReconciliation
+ *  ghi checkpoint mới) → RiskAlert INFO nhẹ (không ack-bắt-buộc).
+ *  Fail-soft §6.6: lỗi query → DEGRADED, không sập chu kỳ. */
 async function runSettlement(): Promise<ServiceRunResult> {
-  const since24h = new Date(Date.now() - 24 * 3_600_000);
-  const trades = await db.trade.findMany({
-    where: { executedAt: { gte: since24h } },
-    select: { side: true, quantity: true, price: true, fee: true, tax: true },
-  });
-  const count = trades.length;
-  const totalFee = trades.reduce((s, t) => s + Number(t.fee), 0);
-  const totalTax = trades.reduce((s, t) => s + Number(t.tax), 0);
-  const totalValue = trades.reduce((s, t) => s + t.quantity * t.price, 0);
+  try {
+    // Window của lần đối chiếu SẮP chạy = [checkpoint hiện tại, now) — đọc
+    // trước để anomaly scan soi đúng cùng window (không đếm trùng chu kỳ sau).
+    const prevCp = await db.appSetting.findUnique({
+      where: { key: RECONCILE_CHECKPOINT_KEY },
+      select: { value: true },
+    });
+    let windowFrom: Date | null = null;
+    try {
+      const parsed = prevCp ? (JSON.parse(prevCp.value) as { lastReconciledAt?: unknown }) : null;
+      windowFrom =
+        parsed && typeof parsed.lastReconciledAt === "string"
+          ? new Date(parsed.lastReconciledAt)
+          : null;
+    } catch {
+      windowFrom = null;
+    }
 
-  return {
-    content: `Thanh toán bù trừ 24h: ${count} lệnh khớp · giá trị ${vnd(totalValue)} ₫ · phí môi giới ${vnd(totalFee)} ₫ · thuế TNCN bán ${vnd(totalTax)} ₫.${count === 0 ? " Không có giao dịch mới — sổ sách đã đối chiếu." : ""}`,
-    reasoning: "Tổng hợp Trade 24h qua (fee/tax BigInt → Number).",
-    sentiment: null,
-    output: { count24h: count, totalValue, totalFee, totalTax },
-  };
+    const report = await runReconciliation();
+
+    // E-P1-5: quét bất thường trên window vừa đối chiếu — fail-soft riêng
+    // (lỗi scan KHÔNG làm hỏng reconciliation report).
+    let anomaly: AnomalyScanResult | null = null;
+    try {
+      if (windowFrom != null && !report.baseline) {
+        // F-73B-11: dùng đúng mép window reconciliation vừa chạy (report.window.toNow)
+        // thay vì new Date() sau đó — không quét trùng trade trong khe giữa 2 mốc.
+        const windowTo = report.window.toNow ? new Date(report.window.toNow) : new Date();
+        anomaly = await detectTradeAnomalies(windowFrom, windowTo);
+        await raiseAnomalyAlert(anomaly);
+      }
+    } catch (anErr) {
+      console.error("[agent-service-runs:settlement:anomaly]", anErr);
+    }
+
+    return {
+      content:
+        reconcileReportSummary(report) +
+        (anomaly ? ` ${anomalyScanSummary(anomaly)}` : ""),
+      reasoning:
+        "ReconciliationReport 6 phép idempotent — checkpoint AppSetting exec.reconcile (E-P0-3 EXECUTION_OPS_BLUEPRINT v1.1)" +
+        (anomaly
+          ? " + quét bất thường IQR/z-score ±2σ cùng window (E-P1-5 v1.2)"
+          : ""),
+      sentiment:
+        report.verdict === "MISMATCH" || (anomaly != null && anomaly.anomalies.length > 0)
+          ? "bearish"
+          : null,
+      output: {
+        ...(report as unknown as Record<string, unknown>),
+        ...(anomaly ? { anomaly: anomaly as unknown as Record<string, unknown> } : {}),
+      },
+    };
+  } catch (err) {
+    console.error("[agent-service-runs:settlement]", err);
+    return {
+      content:
+        "Bù trừ sổ sách: DEGRADED — lỗi truy vấn dữ liệu đối chiếu (không sập chu kỳ, §6.6 graceful). Chạy lại chu kỳ sau.",
+      reasoning: "runReconciliation throw — fail-soft trả verdict DEGRADED.",
+      sentiment: null,
+      output: { verdict: "DEGRADED", error: err instanceof Error ? err.message : String(err) },
+    };
+  }
 }
 
-/** A12 Cash Management — dòng tiền & sức mua ước tính. */
+/** A12 Cash Management — CommittedCashView (E-P0-4, v1.1 — REV-1):
+ *  sức mua KỂ CẢ cam kết tiềm năng (tín hiệu ACTIVE nav5pct + notional còn lại
+ *  của lệnh PENDING/PARTIALLY_FILLED — cam kết thật phủ cả 2 đường sizing).
+ *  E-P1-3 (v1.2): + snapshot cash mỗi chu kỳ (điều kiện tiên quyết §8) +
+ *  CashflowForecast kịch bản {none, half, allApprove} + CI 95% quantile
+ *  (TypeScript thuần — §7.5 mặc định trader duyệt; KHÔNG chặn lệnh §6.4). */
 async function runCashManagement(): Promise<ServiceRunResult> {
   const snap = await portfolioSnapshot();
   const cashCfg = ROSTER_BY_CODE.get("cash-management")?.config as
@@ -736,18 +822,73 @@ async function runCashManagement(): Promise<ServiceRunResult> {
     | undefined;
   const factor = cashCfg?.buyingPowerFactor ?? 0.5;
   const marginMin = cashCfg?.marginRoomMinVnd ?? 500_000_000;
-  // AUD-CODE #15b: trước đây cash + equity×0.5 đếm KÉP tiền mặt (equity = cash + GTTH).
-  // Đúng: sức mua = cash + GTTH vị thế mở × factor − margin đang dùng
-  const positionsMv = Math.max(0, snap.equity - snap.cash);
-  const buyingPower = snap.cash + positionsMv * factor - snap.marginUsed;
-  const tight = buyingPower < marginMin; // marginRoomMinVnd từ roster config
 
-  return {
-    content: `Dòng tiền: tiền mặt ${vnd(snap.cash)} ₫ · NAV ${vnd(snap.equity)} ₫ · margin đang dùng ${vnd(snap.marginUsed)} ₫ · sức mua ước tính ${vnd(buyingPower)} ₫ (tiền mặt + GTTH vị thế × ${factor} − margin; không phải hạn mức thật VNDIRECT).${tight ? ` Sức mua dưới hạn mức nội bộ ${vnd(marginMin)} ₫ — hạn chế tín hiệu MUA quy mô lớn.` : ""}`,
-    reasoning: "cash + positionsMv×factor − marginUsed (AUD-CODE #15b — không đếm kép cash).",
-    sentiment: tight ? "neutral" : null,
-    output: { cash: snap.cash, equity: snap.equity, marginUsed: snap.marginUsed, buyingPower },
-  };
+  // Tài khoản sống (để gắn snapshot chuỗi cash đúng brokerAccountId).
+  const account = await db.brokerAccount.findFirst({
+    where: { deletedAt: null },
+    select: { id: true },
+  });
+
+  try {
+    const view = await computeCommittedCashView({
+      cash: snap.cash,
+      equity: snap.equity,
+      marginUsed: snap.marginUsed,
+      buyingPowerFactor: factor,
+      marginRoomMinVnd: marginMin,
+    });
+
+    // E-P1-3: ghi snapshot cash chu kỳ này (điều kiện tiên quyết dự báo) +
+    // tính CashflowForecast từ chuỗi + cam kết hiện tại — fail-soft riêng
+    // (lỗi forecast KHÔNG làm hỏng committed view).
+    let forecast: CashflowForecast | null = null;
+    try {
+      if (account) {
+        await recordCashSnapshot({
+          brokerAccountId: account.id,
+          cash: view.cash,
+          equity: view.equity,
+        });
+      }
+      forecast = await computeCashflowForecast(
+        {
+          cash: view.cash,
+          committedBuyNotional: view.committedBuyNotional,
+          committedSellInflow: view.committedSellInflow,
+        },
+        account?.id
+      );
+    } catch (fcErr) {
+      console.error("[agent-service-runs:cash-management:forecast]", fcErr);
+    }
+
+    return {
+      content:
+        committedViewSummary(view) +
+        (forecast ? ` ${forecastSummary(forecast)}` : ""),
+      reasoning:
+        "buyingPower = cash + GTTH×factor − margin (AUD-CODE #15b) + committed view tín hiệu ACTIVE & lệnh PENDING (E-P0-4 v1.1 — REV-1)" +
+        (forecast
+          ? " + CashflowForecast baseline tuyến tính + quantile CI95 (E-P1-3 v1.2 — TS thuần §7.5)"
+          : ""),
+      sentiment: view.committedTight || view.tight ? "neutral" : null,
+      output: {
+        ...(view as unknown as Record<string, unknown>),
+        ...(forecast ? { forecast: forecast as unknown as Record<string, unknown> } : {}),
+      },
+    };
+  } catch (err) {
+    console.error("[agent-service-runs:cash-management]", err);
+    // Fallback công thức chuẩn AUD-CODE #15b — không đếm kép cash
+    const positionsMv = Math.max(0, snap.equity - snap.cash);
+    const buyingPower = snap.cash + positionsMv * factor - snap.marginUsed;
+    return {
+      content: `Dòng tiền: tiền mặt ${vnd(snap.cash)} ₫ · NAV ${vnd(snap.equity)} ₫ · sức mua ước tính ${vnd(buyingPower)} ₫ (committed view DEGRADED — lỗi truy vấn, §6.6).`,
+      reasoning: "computeCommittedCashView throw — fallback công thức AUD-CODE #15b.",
+      sentiment: null,
+      output: { cash: snap.cash, equity: snap.equity, marginUsed: snap.marginUsed, buyingPower, verdict: "DEGRADED" },
+    };
+  }
 }
 
 /* ───────────── Nhóm 5 · ml + rl (phiên #35 — mô hình học THẬT) ───────────── */

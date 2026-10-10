@@ -2,6 +2,32 @@ import { db } from "@/lib/db";
 import { getTradingMode, liveTradingGate } from "@/lib/trading-mode";
 import { markSource } from "@/lib/sources";
 import { getConsensusSetting } from "@/lib/consensus";
+// E-P0-1 (REV-2 review #69): literal 0.0015 tại đây là nguồn phí thứ 3/3 —
+// chuyển về nguồn đơn src/lib/exec/constants.ts (guard đơn vị percent↔fraction).
+// Fixbug #71 F-701-01: POSITION_SIZE_PCT cũng về nguồn đơn (trước đây còn bản
+// địa 0.05 tại đây — sizing thật dùng bản địa còn committed view (E-P0-4) dùng
+// bản exec/constants → đổi 1 chỗ sẽ lệch ước tính cam kết im lặng).
+// Fixbug #73 F-73A-01: TWAP_ADTV_TRIGGER_PCT về nguồn đơn — không còn literal `1`
+// ở block return twap (§3.3 tinh thần E-P0-1: 1 sự thật N nguồn là bug).
+import { FEE_RATE, POSITION_SIZE_PCT, TWAP_ADTV_TRIGGER_PCT } from "@/lib/exec/constants";
+// E-P0-2 (EXECUTION_OPS_BLUEPRINT v1.1): sinh ExecutionPlan khi APPROVE/convert.
+// E-P1-2 (v1.2): plan TWAP con cho lệnh lớn > 1% ADTV-20 phiên.
+import {
+  buildExecutionPlan,
+  buildTwapChildPlan,
+  planToNote,
+  describeExecutionPlan,
+  type PlanTwapMeta,
+  type ExecutionPlan,
+  type SinglePlanReason, // F-73A-13: lý do đi SINGLE cho rationale plan
+} from "@/lib/exec/plan";
+import {
+  adtv20For,
+  decideTwap,
+  notionalPctAdtv,
+  shouldTwap,
+  type TwapSliceDraft,
+} from "@/lib/exec/twap";
 
 /**
  * MỘT NGUỒN DUY NHẤT cho toán tạo lệnh giấy từ tín hiệu
@@ -107,14 +133,30 @@ export interface CreatedPaperOrder {
   price: number | null;
   status: string;
   createdAt: string;
+  /** E-P1-2: mô tả sub-plan của Order con (TWAP) hoặc plan SINGLE. */
+  plan?: string;
 }
 
 export type PaperOrderResult =
-  | { ok: true; order: CreatedPaperOrder }
+  | {
+      ok: true;
+      order: CreatedPaperOrder;
+      /** E-P1-2: đầy đủ mọi Order con (TWAP tách lát) — [order] khi SINGLE. */
+      orders: CreatedPaperOrder[];
+      /** E-P1-2: null khi SINGLE; mô tả quyết định tách khi TWAP. */
+      twap: {
+        style: "TWAP";
+        sliceCount: number;
+        totalQuantity: number;
+        adtvVnd: number;
+        notionalPctAdtv: number;
+        triggerPct: number;
+      } | null;
+    }
   | { ok: false; status: number; error: string };
 
-/** Sizing 5% NAV (đúng run route) — lot 100 tối thiểu 100 cp. */
-const POSITION_SIZE_PCT = 0.05;
+// POSITION_SIZE_PCT (5% NAV) — nguồn đơn src/lib/exec/constants.ts (E-P0-4
+// cùng nguồn cho sizing thật lẫn ước tính committed view — fixbug #71 F-701-01).
 
 /**
  * Tạo lệnh giấy LIMIT PENDING từ tín hiệu BUY/SELL.
@@ -383,15 +425,56 @@ export async function createPaperOrderFromSignal(
     }`;
   }
 
+  // ── E-P1-2 (v1.2): quyết định tách TWAP cho lệnh lớn ────────────────────
+  // Notional lệnh > 1% ADTV-20 phiên → tách sliceCount Order con (mỗi con 1
+  // plan con TWAP rải afterTick). Dưới ngưỡng / không đủ lot/lát → SINGLE cũ.
+  // ADTV đọc Bar EOD (không cache — gọi 1 lần mỗi APPROVE, tần suất thấp).
+  let twapSlices: TwapSliceDraft[] | null = null;
+  let twapAdtv = 0;
+  let singleReason: SinglePlanReason = "under-threshold"; // F-73A-13
+  try {
+    const { adtvVnd } = await adtv20For(signal.instrument.id);
+    twapAdtv = adtvVnd;
+    twapSlices = decideTwap({ quantity, price, adtvVnd });
+  } catch (twapErr) {
+    // Fail-soft §6.6: lỗi đo ADTV → đi đường SINGLE an toàn (không chặn duyệt).
+    singleReason = "adtv-unavailable";
+    console.error("[signal-execution:twap-adtv]", twapErr);
+  }
+  // F-73A-13 (fixbug #73): phân biệt lý do THẬT đi SINGLE (ADTV thiếu / dưới
+  // ngưỡng / không đủ lot-lát) — rationale plan không còn nói sai nguyên nhân.
+  if (twapSlices == null) {
+    if (twapAdtv <= 0) singleReason = "adtv-unavailable";
+    else if (!shouldTwap(quantity * price, twapAdtv)) singleReason = "under-threshold";
+    else singleReason = "insufficient-lots";
+  }
+  const twapNotionalPct = notionalPctAdtv(quantity * price, twapAdtv);
+  const twapMeta: PlanTwapMeta | null = twapSlices
+    ? {
+        totalSlices: twapSlices.length,
+        signalId: signal.id,
+        notionalPctAdtv: twapNotionalPct,
+        adtvVnd: twapAdtv,
+      }
+    : null;
+
   // ── AUD-CODE #2 (TOCTOU): claim + tạo lệnh trong MỘT transaction ──
   // Trước đây check existingOrder → create Order → update Signal nằm ngoài tx:
   // 2 request APPROVE đồng thời đều vượt check → 2 lệnh, trừ tiền mặt 2 lần.
   // Claim atomic: updateMany có điều kiện status=ACTIVE && actedAt=null — chỉ
   // MỘT request thắng; request thua nhận 409 đúng nghĩa "đã chuyển lệnh".
-  const feeBigInt = BigInt(Math.round(0.0015 * price * quantity)); // F-201: phí 0,15% notional
-  let order;
+  // E-P1-2: TWAP sinh NHIỀU Order con trong CÙNG transaction này — mọi con
+  // thuộc 1 phê duyệt (atomic toàn phần: hoặc đủ N con hoặc 0).
+  const children = twapSlices ?? [
+    { seq: 1, quantity, afterTick: 0 } satisfies TwapSliceDraft,
+  ];
+  const feeBigInts = children.map(
+    (c) => BigInt(Math.round(FEE_RATE * price * c.quantity)) // F-201: phí 0,15% notional — E-P0-1 đơn nguồn
+  );
+  let createdOrders: Awaited<ReturnType<typeof db.order.create>>[] = [];
+  let plans: (ExecutionPlan | null)[] = [];
   try {
-    order = await db.$transaction(async (tx) => {
+    const txOut = await db.$transaction(async (tx) => {
       // Claim duy quyền chuyển tín hiệu sang ACTED
       const claimed = await tx.signal.updateMany({
         where: { id: signal.id, status: "ACTIVE", actedAt: null },
@@ -408,22 +491,72 @@ export async function createPaperOrderFromSignal(
       if (existing) {
         throw new Error("SIGNAL_HAS_ORDER");
       }
-      return tx.order.create({
-        data: {
-          userId: user.id,
-          brokerAccountId: account.id,
-          signalId: signal.id,
-          instrumentId: signal.instrument.id,
-          side,
-          type: "LIMIT",
-          quantity,
-          price,
-          fee: feeBigInt,
-          status: "PENDING",
-          note,
-        },
-      });
+      const rows: Awaited<ReturnType<typeof db.order.create>>[] = [];
+      const txPlans: (ExecutionPlan | null)[] = [];
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        const child = await tx.order.create({
+          data: {
+            userId: user.id,
+            brokerAccountId: account.id,
+            signalId: signal.id,
+            instrumentId: signal.instrument.id,
+            side,
+            type: "LIMIT",
+            quantity: c.quantity,
+            price,
+            fee: feeBigInts[i],
+            status: "PENDING",
+            // TWAP: note fallback đánh dấu lát khi ghi plan fail — plan JSON đè
+            // lên NGAY trong cùng tx (F-73A-02). Lát ghi seq để truy nguồn từ
+            // note fallback bất kỳ lúc nào.
+            note:
+              children.length > 1
+                ? `${note} — TWAP lát ${c.seq}/${children.length}`
+                : note,
+          },
+        });
+        // F-73A-02 (fixbug #73): plan + note ghi NGAY trong cùng transaction —
+        // không còn cửa sổ lệnh PENDING sống mà chưa có guard afterTick/deadline
+        // (tick engine có thể fill lát sau chỉ vài ms sau commit cũ).
+        // Fail-soft §6.6 GIỮ: lỗi build/ghi plan 1 con → con đó giữ note fallback,
+        // lệnh vẫn sống (chỉ mất guard khi write thật sự fail — hiếm).
+        let plan: ExecutionPlan | null = null;
+        try {
+          plan =
+            twapMeta != null
+              ? buildTwapChildPlan({
+                  orderId: child.id,
+                  seq: c.seq,
+                  quantity: c.quantity,
+                  price,
+                  afterTick: c.afterTick,
+                  sizing: opts.sizing,
+                  humanNote: note,
+                  twap: twapMeta,
+                  createdAt: child.createdAt ?? new Date(),
+                })
+              : buildExecutionPlan({
+                  orderId: child.id,
+                  quantity: c.quantity,
+                  price,
+                  sizing: opts.sizing,
+                  humanNote: note,
+                  singleReason, // F-73A-13: rationale nói đúng lý do SINGLE
+                  createdAt: child.createdAt ?? new Date(),
+                });
+          await tx.order.update({ where: { id: child.id }, data: { note: planToNote(plan) } });
+        } catch (planErr) {
+          console.error("[signal-execution:plan]", planErr);
+          plan = null;
+        }
+        rows.push(child);
+        txPlans.push(plan);
+      }
+      return { rows, txPlans };
     });
+    createdOrders = txOut.rows;
+    plans = txOut.txPlans;
   } catch (txErr) {
     const msg = txErr instanceof Error ? txErr.message : String(txErr);
     if (msg === "SIGNAL_CLAIM_LOST" || msg === "SIGNAL_HAS_ORDER") {
@@ -435,6 +568,14 @@ export async function createPaperOrderFromSignal(
     }
     throw txErr; // lỗi DB thật — để tầng trên xử lý 500
   }
+  const order = createdOrders[0];
+
+  // ── E-P0-2/E-P1-2: ExecutionPlan của MỖI lệnh (con) đã ghi NGAY trong tx ──
+  // F-73A-02 (fixbug #73): plan cần orderId nên viết ngay SAU create nhưng
+  // TRONG cùng transaction (xoá vòng update post-tx cũ) — claim atomic bảo
+  // toàn: hoặc đủ N con có guard afterTick/deadline, hoặc 0 con. Fail-soft
+  // §6.6 giữ: lỗi build/ghi plan 1 con chỉ làm con đó mất guard (note fallback)
+  // — lệnh vẫn sống. `plans` song song cùng độ dài createdOrders (null = fail).
 
   await db.auditLog.create({
     data: {
@@ -450,6 +591,24 @@ export async function createPaperOrderFromSignal(
         signalId: signal.id,
         mode: getTradingMode().mode,
         sizing: opts.sizing,
+        // E-P1-2: tóm tắt kế hoạch + danh sách Order con (TWAP) hoặc plan đơn.
+        style: twapMeta != null ? "TWAP" : "SINGLE",
+        children: createdOrders.map((o, i) => ({
+          orderId: o.id,
+          seq: children[i].seq,
+          quantity: children[i].quantity,
+          afterTick: children[i].afterTick,
+          plan: plans[i] != null ? describeExecutionPlan(plans[i]!) : null,
+        })),
+        ...(twapMeta
+          ? {
+              twap: {
+                totalSlices: twapMeta.totalSlices,
+                adtvVnd: Math.round(twapMeta.adtvVnd),
+                notionalPctAdtv: twapMeta.notionalPctAdtv,
+              },
+            }
+          : {}),
       }),
     },
   });
@@ -460,17 +619,32 @@ export async function createPaperOrderFromSignal(
     meta: { lastOrder: order.id, symbol },
   });
 
+  const toCreated = (o: typeof order, i: number): CreatedPaperOrder => ({
+    id: o.id,
+    symbol,
+    side: o.side as "BUY" | "SELL",
+    type: o.type,
+    quantity: o.quantity,
+    price: o.price,
+    status: o.status,
+    createdAt: o.createdAt.toISOString(),
+    ...(plans[i] != null ? { plan: describeExecutionPlan(plans[i]!) } : {}),
+  });
+
   return {
     ok: true,
-    order: {
-      id: order.id,
-      symbol,
-      side: order.side as "BUY" | "SELL",
-      type: order.type,
-      quantity: order.quantity,
-      price: order.price,
-      status: order.status,
-      createdAt: order.createdAt.toISOString(),
-    },
+    order: toCreated(order, 0),
+    orders: createdOrders.map((o, i) => toCreated(o, i)),
+    twap:
+      twapMeta != null
+        ? {
+            style: "TWAP",
+            sliceCount: twapMeta.totalSlices,
+            totalQuantity: children.reduce((s, c) => s + c.quantity, 0),
+            adtvVnd: Math.round(twapMeta.adtvVnd),
+            notionalPctAdtv: twapMeta.notionalPctAdtv,
+            triggerPct: TWAP_ADTV_TRIGGER_PCT, // F-73A-01: đơn nguồn §3.3 — import hằng, không literal.
+          }
+        : null,
   };
 }
