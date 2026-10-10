@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import {
+  Activity,
   AlertTriangle,
   Brain,
   Clock,
@@ -43,6 +44,7 @@ import type {
   BanditArm,
   DlMlpMetrics,
   MlModelStatus,
+  MlStatusResponse,
   RlQMetrics,
 } from "@/hooks/use-ml";
 import { formatDateTime } from "@/lib/format";
@@ -60,7 +62,33 @@ import { cn } from "@/lib/utils";
  * empty-state "Đang chờ backend học máy" (query vẫn polling 30s để tự lành),
  * dlMlp/rlQ có thể null → mỗi khối có empty-state riêng. Màu chỉ dùng
  * emerald / rose / amber / neutral theo token ngữ nghĩa of app.
+ *
+ * A3 (phiên #79 — ML_OPS_BLUEPRINT §3): khối MLP thêm badge "Drift" + chi
+ * tiết PSI top-3 chiều (đọc field additive `drift` của /api/ml/status — hook
+ * use-ml chung KHÔNG sửa theo ràng buộc task, đọc qua cast cục bộ tolerant).
  */
+
+/* ─────────────────── A3 · types field `drift` (local — không sửa hook) ─────────────────── */
+
+/** Một chiều PSI trong payload drift (mirror hợp đồng API ml/status). */
+interface DriftDim {
+  name: string;
+  psi: number;
+  level: string;
+}
+
+/** Field `drift` — unavailable kèm reason trung thực (bản train trước A3). */
+type DriftStatus =
+  | { available: false; reason?: string }
+  | {
+      available: true;
+      asOf: string;
+      samples: number;
+      dims: DriftDim[];
+      maxPsi: number;
+      maxDim: string;
+      retrainRecommended: boolean;
+    };
 
 /* ─────────────────── Format helpers (vi-VN, "%"/số có dấu − U+2212) ─────────────────── */
 
@@ -119,6 +147,42 @@ const MODEL_STATUS: Record<string, { label: string; className: string }> = {
   },
 };
 
+/* ─────────────────── A3 · Drift PSI visuals (emerald/amber/rose) ─────────────────── */
+
+/** Mức PSI 3 bậc (API trả label tiếng Việt) → nhãn hiển thị + màu badge.
+ * Giá trị lạ/missing → đỏ (fail-safe — không bao giờ xanh khi không rõ). */
+function driftLevelVisual(level: string | null | undefined): {
+  label: string;
+  className: string;
+} {
+  switch (level) {
+    case "ổn":
+      return {
+        label: "ổn",
+        className:
+          "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-600/15",
+      };
+    case "cảnh-báo":
+      return {
+        label: "cảnh báo",
+        className:
+          "bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-500/15",
+      };
+    default:
+      return {
+        label: "dịch chuyển",
+        className:
+          "bg-rose-600/15 text-rose-700 dark:text-rose-400 hover:bg-rose-600/15",
+      };
+  }
+}
+
+/** Mức tóm lược của cả payload — theo chiều PSI cao nhất. */
+function driftWorstLevel(drift: Extract<DriftStatus, { available: true }>): string {
+  const worst = [...drift.dims].sort((a, b) => b.psi - a.psi)[0];
+  return worst?.level ?? "dịch-chuyển";
+}
+
 /** Chuẩn hoá stance (API trả tiếng Việt) → tăng / giữ / giảm. */
 function normalizeStance(stance: string | null | undefined): "up" | "hold" | "down" {
   const s = (stance ?? "").trim().toLowerCase();
@@ -153,6 +217,13 @@ export function MlPanel() {
   // Khi chưa có backend thì không cho train (POST cũng 404 → chỉ toast lỗi).
   const trainDisabled = train.isPending || waitingBackend;
 
+  // A3 — field `drift` là additive trên payload /api/ml/status; hook chung
+  // (use-ml.ts) không được sửa theo ràng buộc task 79-A3 → đọc qua cast cục
+  // bộ, optional-tolerant (API cũ chưa có field → null → ẩn UI drift).
+  const drift =
+    (data as (MlStatusResponse & { drift?: DriftStatus }) | undefined)?.drift ??
+    null;
+
   return (
     <Card className="gap-4">
       <CardHeader>
@@ -184,7 +255,7 @@ export function MlPanel() {
         ) : (
           <>
             {/* Khối 1 — MLP dự báo 5 phiên (học sâu) */}
-            <MlpBlock model={data?.dlMlp ?? null} />
+            <MlpBlock model={data?.dlMlp ?? null} drift={drift} />
 
             <Separator />
 
@@ -306,7 +377,13 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 
 /* ─────────────────── Khối 1 — MLP dự báo 5 phiên ─────────────────── */
 
-function MlpBlock({ model }: { model: MlModelStatus<DlMlpMetrics> | null }) {
+function MlpBlock({
+  model,
+  drift,
+}: {
+  model: MlModelStatus<DlMlpMetrics> | null;
+  drift: DriftStatus | null;
+}) {
   const m = model?.metrics;
   const topSymbols = (m?.topSymbols ?? []).filter(Boolean).slice(0, 8);
 
@@ -322,6 +399,7 @@ function MlpBlock({ model }: { model: MlModelStatus<DlMlpMetrics> | null }) {
         </h3>
         {model && <VersionBadge version={model.version} />}
         {model && <StatusBadge status={model.status} />}
+        {model && <DriftBadge drift={drift} />}
         {model && <TrainedAtCaption trainedAt={model.trainedAt} />}
       </div>
 
@@ -348,6 +426,9 @@ function MlpBlock({ model }: { model: MlModelStatus<DlMlpMetrics> | null }) {
             />
           </div>
 
+          {/* A3 — giám sát drift đặc trưng (PSI 30 phiên gần nhất) */}
+          <DriftDetail drift={drift} />
+
           {topSymbols.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] text-muted-foreground">
@@ -367,6 +448,75 @@ function MlpBlock({ model }: { model: MlModelStatus<DlMlpMetrics> | null }) {
         </>
       )}
     </section>
+  );
+}
+
+/* ─────────────────── A3 · Drift PSI (badge + khối chi tiết) ─────────────────── */
+
+/** Badge "Drift" cạnh version/status khối MLP — mức theo chiều PSI cao nhất
+ * (xanh ổn · vàng cảnh báo · đỏ dịch chuyển); chưa có histogram → trung tính
+ * muted, trung thực (bản serving train trước A3). */
+function DriftBadge({ drift }: { drift: DriftStatus | null }) {
+  if (!drift || !drift.available) {
+    return (
+      <Badge variant="outline" className="text-[10px] text-muted-foreground">
+        Drift: chưa có histogram
+      </Badge>
+    );
+  }
+  const visual = driftLevelVisual(driftWorstLevel(drift));
+  return <Badge className={cn("text-[10px]", visual.className)}>Drift: {visual.label}</Badge>;
+}
+
+/** Khối phụ: top-3 chiều PSI cao nhất (tên + giá trị + mức) + n/asOf + dòng
+ * "đề xuất train lại" khi retrainRecommended; unavailable → ghi chú trung
+ * tính với reason từ API. Ép mobile an toàn: hàng flex truncate, badge shrink-0. */
+function DriftDetail({ drift }: { drift: DriftStatus | null }) {
+  if (!drift) return null; // API chưa có field drift (bản cũ) — ẩn im lặng
+  if (!drift.available) {
+    return (
+      <p className="rounded-lg border border-dashed bg-muted/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        Drift đặc trưng:{" "}
+        {drift.reason ?? "chưa có histogram — sẽ có sau lần train kế tiếp"}
+      </p>
+    );
+  }
+  const top = [...drift.dims].sort((a, b) => b.psi - a.psi).slice(0, 3);
+  return (
+    <div className="rounded-lg border bg-muted/20 px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium">
+          <Activity className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          Drift đặc trưng (PSI · 30 phiên cuối)
+        </span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">
+          n={nf0.format(drift.samples)} · tới {drift.asOf}
+        </span>
+      </div>
+      <div className="mt-1.5 flex flex-col gap-1">
+        {top.map((dim) => {
+          const visual = driftLevelVisual(dim.level);
+          return (
+            <div key={dim.name} className="flex items-center gap-2 text-xs">
+              <span className="min-w-0 flex-1 truncate" title={dim.name}>
+                {dim.name}
+              </span>
+              <span className="shrink-0 tabular-nums font-semibold">
+                {nf2.format(dim.psi)}
+              </span>
+              <Badge className={cn("shrink-0 px-2 text-[10px]", visual.className)}>
+                {visual.label}
+              </Badge>
+            </div>
+          );
+        })}
+      </div>
+      {drift.retrainRecommended && (
+        <p className="mt-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+          Đề xuất train lại mô hình — PSI ≥ 0,25 ({drift.maxDim})
+        </p>
+      )}
+    </div>
   );
 }
 

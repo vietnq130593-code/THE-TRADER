@@ -30,6 +30,12 @@ interface EngineState {
   lastEodSyncAt?: string | null;
   lastIntlSyncAt?: string | null;
   lastReprobeAt?: string | null;
+  // A1/A4 (#79 — ML_OPS_BLUEPRINT §3): ngày đã settle/retrain + mốc chạy
+  // gần nhất — engine hydrate lúc boot (restart không double-settle/retrain).
+  lastSettleDate?: string | null;
+  lastSettleAt?: string | null;
+  lastMlTrainSunday?: string | null;
+  lastMlTrainAt?: string | null;
   updatedAt?: string;
 }
 
@@ -70,6 +76,11 @@ export async function POST(request: Request) {
       "lastEodSyncAt",
       "lastIntlSyncAt",
       "lastReprobeAt",
+      // A1/A4 (#79) — lịch settle 16:15 ICT + retrain CN 04:00 ICT (P0-5)
+      "lastSettleDate",
+      "lastSettleAt",
+      "lastMlTrainSunday",
+      "lastMlTrainAt",
     ];
     const clean: EngineState = { updatedAt: new Date().toISOString() };
     for (const k of allowed) {

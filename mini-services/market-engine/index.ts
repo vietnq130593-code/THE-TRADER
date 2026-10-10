@@ -30,6 +30,15 @@
  *      - REPROBE_AT (mặc định Chủ nhật 04:00 ICT hằng tuần — B14/T1):
  *        POST /api/market/reprobe — probe dchart ứng viên các ô ⚪/🟡; mã
  *        đầu tiên CÓ dữ liệu → tự tạo Instrument + backfill → ô tự sáng.
+ *      - SETTLE_AT (mặc định 16:15 ICT hằng ngày — A1 #79, ML_OPS_BLUEPRINT
+ *        §3): POST /api/ml/settle — kết toán bandit Thompson Sampling (thuần
+ *        thuật toán, 0 LLM). Chỉ chạy khi EOD hôm đó ĐÃ sync (eodSyncDate ==
+ *        hôm nay — sau 15:45) và chưa settle ngày này; lỗi → log + thử lại
+ *        phút sau (không dồn cục — pattern eodSyncDate).
+ *      - ML_TRAIN_AT (mặc định "SUN:04:00" Chủ nhật 04:00 ICT hằng tuần —
+ *        A4 #79, cùng cửa sổ reprobe B14 — không thêm cửa sổ vận hành mới):
+ *        POST /api/ml/train {"force": false} — route tự skip khi windowHash
+ *        không đổi (không có bar mới) nên tuần không dữ liệu là $0.
  *      - AGENT_CYCLE_MINUTES (0=off): chu kỳ phân tích đa agent tự động
  *   3. P0-5 (phiên #57 — DATA_PLATFORM_BLUEPRINT §4.2): schedule STATE vào
  *      DB qua /api/market/engine-state (DataSourceStatus.meta key
@@ -56,7 +65,16 @@ function envMs(name: string, fallback: number, minMs: number): number {
 }
 const TICK_MS = envMs("TICK_MS", 10_000, 1_000);
 const NEWS_MS = envMs("NEWS_MS", 15 * 60_000, 30_000);
-const AGENT_CYCLE_MINUTES = envMs("AGENT_CYCLE_MINUTES", 0, 1) / 60_000;
+/** Q3 (#79 — §8 duyệt AGENT_CYCLE_MINUTES=240 = 4 GIỜ). Sửa bug đơn vị ẩn
+ *  (phát hiện live khi bật env): dòng cũ `envMs(...) / 60_000` trả MILI-GIÂY
+ *  rồi chia như thể env nhập ms → env "240" thành interval 240ms (bắn
+ *  /api/agents/run mỗi 240ms — route cooldown chặn phần lớn nhưng vẫn lọt
+ *  ~3 chu kỳ chồng nhau 14:41-14:42 UTC 10-10, $0 Zen). Giờ đọc env theo
+ *  PHÚT đúng tên biến: số ≥ 1 → phút (interval = phút × 60_000); NaN/0 → TẮT. */
+const AGENT_CYCLE_MINUTES = (() => {
+  const raw = Number(process.env.AGENT_CYCLE_MINUTES ?? 0);
+  return Number.isFinite(raw) && raw >= 1 ? raw : 0;
+})();
 /** Giờ ICT bắt đầu đồng bộ EOD hằng ngày (15:45 — sau giờ chốt 15:00). */
 const EOD_SYNC_AT = process.env.EOD_SYNC_AT ?? "15:45";
 const EOD_SYNC_DISABLED = process.env.EOD_SYNC_DISABLED === "1";
@@ -66,6 +84,13 @@ const INTL_SYNC_DISABLED = process.env.INTL_SYNC_DISABLED === "1";
 /** B14 — watcher re-probe ô ⚪/🟡 hằng tuần: "SUN:04:00" (Chủ nhật 04:00 ICT). */
 const REPROBE_AT = process.env.REPROBE_AT ?? "SUN:04:00";
 const REPROBE_DISABLED = process.env.REPROBE_DISABLED === "1";
+/** A1 (#79) — giờ ICT kết toán bandit hằng ngày (16:15 — sau eod-sync 15:45
+ *  + biên độ chạy 48s của scheduler 60s; settle cần bar EOD hôm đó đã vào). */
+const SETTLE_AT = process.env.SETTLE_AT ?? "16:15";
+const SETTLE_DISABLED = process.env.SETTLE_DISABLED === "1";
+/** A4 (#79) — lịch retrain ML hằng tuần "SUN:04:00" (cùng cửa sổ reprobe B14). */
+const ML_TRAIN_AT = process.env.ML_TRAIN_AT ?? "SUN:04:00";
+const ML_TRAIN_DISABLED = process.env.ML_TRAIN_DISABLED === "1";
 
 /** "HH:MM" ICT → phút kể từ nửa đêm ICT (UTC+7). */
 function parseHhMm(s: string): number | null {
@@ -78,6 +103,7 @@ function parseHhMm(s: string): number | null {
 }
 const EOD_SYNC_MINUTES = parseHhMm(EOD_SYNC_AT) ?? parseHhMm("15:45")!;
 const INTL_SYNC_MINUTES = parseHhMm(INTL_SYNC_AT) ?? parseHhMm("06:15")!;
+const SETTLE_MINUTES = parseHhMm(SETTLE_AT) ?? parseHhMm("16:15")!;
 
 /** "SUN:HH:MM" (tên ngày 3 chữ) hoặc "0:HH:MM" (0=CN..6=T7) → { dow, minutes } — lịch hằng tuần. */
 const DOW_NAMES: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
@@ -103,6 +129,10 @@ function parseWeekly(s: string): { dow: number; minutes: number } | null {
 // phút trong reprobeDue → uncaught exception giết event loop của engine).
 const REPROBE_SCHEDULE: { dow: number; minutes: number } =
   parseWeekly(REPROBE_AT) ?? parseWeekly("SUN:04:00") ?? { dow: 0, minutes: 4 * 60 };
+// A4 (#79) — cùng fail-safe 3 lớp cho lịch retrain (đặt SAU DOW_NAMES/parseWeekly
+// như REPROBE_SCHEDULE — parseWeekly truy cập DOW_NAMES const, đặt trước sẽ TDZ).
+const ML_TRAIN_SCHEDULE: { dow: number; minutes: number } =
+  parseWeekly(ML_TRAIN_AT) ?? parseWeekly("SUN:04:00") ?? { dow: 0, minutes: 4 * 60 };
 
 function ictNow(): { date: string; minutes: number; dow: number } {
   const now = new Date(Date.now() + 7 * 3_600_000); // ICT = UTC+7
@@ -133,6 +163,15 @@ const stats = {
   lastReprobeSunday: null as string | null,
   lastReprobeError: null as string | null,
   reprobeRuns: 0,
+  // A1/A4 (#79) — lịch settle + retrain (P0-5: ngày đã chạy sống sót restart)
+  lastSettleAt: null as string | null,
+  lastSettleDate: null as string | null,
+  lastSettleError: null as string | null,
+  settleRuns: 0,
+  lastMlTrainAt: null as string | null,
+  lastMlTrainSunday: null as string | null,
+  lastMlTrainError: null as string | null,
+  mlTrainRuns: 0,
   lastCycleAt: null as string | null,
   cycles: 0,
   clients: 0,
@@ -149,6 +188,8 @@ const http = createServer((req, res) => {
         eodSyncAt: EOD_SYNC_AT,
         intlSyncAt: INTL_SYNC_AT,
         reprobeAt: REPROBE_AT,
+        settleAt: SETTLE_AT,
+        mlTrainAt: ML_TRAIN_AT,
         ...stats,
       })
     );
@@ -187,6 +228,11 @@ interface EngineState {
   lastEodSyncAt?: string | null;
   lastIntlSyncAt?: string | null;
   lastReprobeAt?: string | null;
+  // A1/A4 (#79) — ngày đã settle/retrain + mốc chạy gần nhất (P0-5)
+  lastSettleDate?: string | null;
+  lastSettleAt?: string | null;
+  lastMlTrainSunday?: string | null;
+  lastMlTrainAt?: string | null;
 }
 
 /** Boot: đọc state từ DB → đổ vào stats + biến backoff (restart không quên). */
@@ -211,11 +257,18 @@ async function hydrateEngineState(): Promise<void> {
     if (typeof s.lastEodSyncAt === "string") stats.lastEodSyncAt = s.lastEodSyncAt;
     if (typeof s.lastIntlSyncAt === "string") stats.lastIntlSyncAt = s.lastIntlSyncAt;
     if (typeof s.lastReprobeAt === "string") stats.lastReprobeAt = s.lastReprobeAt;
+    // A1/A4 (#79) — phục hồi lịch settle/retrain (restart giữa chừng không
+    // double-settle: settlePendingRewards idempotent, nhưng tránh cả lần gọi
+    // thừa; retrain Chủ nhật không chạy lại sau restart cùng ngày).
+    if (typeof s.lastSettleDate === "string") stats.lastSettleDate = s.lastSettleDate;
+    if (typeof s.lastSettleAt === "string") stats.lastSettleAt = s.lastSettleAt;
+    if (typeof s.lastMlTrainSunday === "string") stats.lastMlTrainSunday = s.lastMlTrainSunday;
+    if (typeof s.lastMlTrainAt === "string") stats.lastMlTrainAt = s.lastMlTrainAt;
     if (typeof s.intlFailStreak === "number") intlFailStreak = s.intlFailStreak;
     if (typeof s.lastIntlFailAt === "number") lastIntlFailAt = s.lastIntlFailAt;
     log(
       "state",
-      `phục hồi state từ DB (P0-5): eod=${stats.lastEodSyncDate ?? "—"} · intl=${stats.lastIntlSyncDate ?? "—"} · reprobe=${stats.lastReprobeSunday ?? "—"} · intlFailStreak=${intlFailStreak}`
+      `phục hồi state từ DB (P0-5): eod=${stats.lastEodSyncDate ?? "—"} · intl=${stats.lastIntlSyncDate ?? "—"} · reprobe=${stats.lastReprobeSunday ?? "—"} · settle=${stats.lastSettleDate ?? "—"} · ml-train=${stats.lastMlTrainSunday ?? "—"} · intlFailStreak=${intlFailStreak}`
     );
   } catch (err) {
     // App chưa sẵn sàng lúc boot engine — giữ state rỗng, sự kiện sync đầu
@@ -240,6 +293,10 @@ async function persistEngineState(): Promise<void> {
         lastEodSyncAt: stats.lastEodSyncAt,
         lastIntlSyncAt: stats.lastIntlSyncAt,
         lastReprobeAt: stats.lastReprobeAt,
+        lastSettleDate: stats.lastSettleDate,
+        lastSettleAt: stats.lastSettleAt,
+        lastMlTrainSunday: stats.lastMlTrainSunday,
+        lastMlTrainAt: stats.lastMlTrainAt,
       } satisfies EngineState),
       signal: AbortSignal.timeout(15_000),
     });
@@ -465,6 +522,74 @@ async function runAgentCycleAndBroadcast(): Promise<void> {
   }
 }
 
+/** A1 (#79) — kết toán bandit theo lịch (16:15 ICT hằng ngày, sau eod-sync):
+ *  POST /api/ml/settle → broadcast "settle". Thuần thuật toán ~1-2s, 0 LLM.
+ *  F-481-01 pattern: guard in-flight chống due-check 60s bắn POST chồng
+ *  (route settle có mutex chuỗi Promise nhưng chỉ 1 lần chạy tới cùng).
+ *  Thất bại → KHÔNG đánh dấu ngày — phút sau thử lại (không dồn cục). */
+let settleInFlight = false;
+const SETTLE_POST_TIMEOUT_MS = 60_000;
+async function settleAndBroadcast(): Promise<void> {
+  settleInFlight = true;
+  try {
+    const data = await postJson("/api/ml/settle", undefined, {
+      timeoutMs: SETTLE_POST_TIMEOUT_MS,
+    });
+    stats.lastSettleAt = new Date().toISOString();
+    stats.settleRuns++;
+    stats.lastSettleError = null;
+    const ict = ictNow();
+    stats.lastSettleDate = ict.date;
+    io.emit("settle", data);
+    log(
+      "settle",
+      `kết toán bandit A1 xong: ${data.settled ?? "?"} assessment · ${data.votes ?? "?"} phiếu`
+    );
+  } catch (err) {
+    stats.lastSettleError = err instanceof Error ? err.message : String(err);
+    log("settle", `LỖI (thử lại phút sau): ${stats.lastSettleError}`);
+  } finally {
+    settleInFlight = false;
+    // P0-5 — ngày đã settle sống sót restart
+    void persistEngineState();
+  }
+}
+
+/** A4 (#79) — retrain ML Chủ nhật 04:00 ICT: POST /api/ml/train {"force":
+ *  false}. Timeout 280s < maxDuration route (train thật 30-60s; route tự
+ *  skip khi windowHash không đổi — tuần không dữ liệu là $0). F-481-01
+ *  pattern: guard in-flight — train dài 60s+ không bị due-check bắn chồng
+ *  (route có mutex + cooldown 429, đúng lịch vẫn 1 lần chạy tới cùng).
+ *  Thất bại → KHÔNG đánh dấu Chủ nhật — phút sau thử lại. */
+let mlTrainInFlight = false;
+const ML_TRAIN_POST_TIMEOUT_MS = 280_000;
+async function mlTrainAndBroadcast(): Promise<void> {
+  mlTrainInFlight = true;
+  try {
+    const data = await postJson("/api/ml/train", { force: false }, {
+      timeoutMs: ML_TRAIN_POST_TIMEOUT_MS,
+    });
+    stats.lastMlTrainAt = new Date().toISOString();
+    stats.mlTrainRuns++;
+    stats.lastMlTrainError = null;
+    const ict = ictNow();
+    stats.lastMlTrainSunday = ict.date;
+    io.emit("ml-train", data);
+    const trained = Array.isArray(data.trained) ? (data.trained as string[]).join("+") : "?";
+    log(
+      "ml-train",
+      `retrain A4 xong (${data.skipped === true ? "skip — windowHash không đổi" : `train ${trained}`}) · ${(data.durationMs ?? "?")}ms`
+    );
+  } catch (err) {
+    stats.lastMlTrainError = err instanceof Error ? err.message : String(err);
+    log("ml-train", `LỖI (thử lại phút sau): ${stats.lastMlTrainError}`);
+  } finally {
+    mlTrainInFlight = false;
+    // P0-5 — Chủ nhật đã retrain sống sót restart
+    void persistEngineState();
+  }
+}
+
 /** Kiểm tra hằng phút: đã qua 15:45 ICT hôm nay và chưa sync ngày này → sync.
  * F-481-01: sync cũ chưa xong (~40s) → không bắn thêm. */
 function eodSyncDue(): boolean {
@@ -472,6 +597,34 @@ function eodSyncDue(): boolean {
   if (eodSyncInFlight) return false;
   const ict = ictNow();
   return ict.minutes >= EOD_SYNC_MINUTES && stats.lastEodSyncDate !== ict.date;
+}
+
+/** A1 (#79) — đã qua 16:15 ICT · EOD hôm nay ĐÃ sync (bar đã vào DB trước khi
+ *  kết toán) · chưa settle ngày này → kết toán bandit. Gate `lastEodSyncDate
+ *  === ict.date` là điều kiện "chỉ settle sau EOD hôm đó" (blueprint A1.2);
+ *  settle idempotent qua settledKeys nên chạy nhắc lại vô hại $0. */
+function settleDue(): boolean {
+  if (SETTLE_DISABLED) return false;
+  if (settleInFlight) return false;
+  const ict = ictNow();
+  return (
+    ict.minutes >= SETTLE_MINUTES &&
+    stats.lastEodSyncDate === ict.date &&
+    stats.lastSettleDate !== ict.date
+  );
+}
+
+/** A4 (#79) — Chủ nhật, đã qua 04:00 ICT, chưa train Chủ nhật này → retrain
+ *  (y hệt pattern reprobeDue: parseWeekly "SUN:04:00" · guard in-flight). */
+function mlTrainDue(): boolean {
+  if (ML_TRAIN_DISABLED || !ML_TRAIN_SCHEDULE) return false;
+  if (mlTrainInFlight) return false;
+  const ict = ictNow();
+  return (
+    ict.dow === ML_TRAIN_SCHEDULE.dow &&
+    ict.minutes >= ML_TRAIN_SCHEDULE.minutes &&
+    stats.lastMlTrainSunday !== ict.date
+  );
 }
 
 /** B12 — đã qua 06:15 ICT hôm nay và chưa sync ngày này → sync.
@@ -514,7 +667,7 @@ http.listen(PORT, () => {
   log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL}`);
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     }`
   );
@@ -546,6 +699,10 @@ http.listen(PORT, () => {
       if (eodSyncDue()) void syncEodAndBroadcast();
       if (intlSyncDue()) void syncIntlAndBroadcast();
       if (reprobeDue()) void reprobeAndBroadcast();
+      // A1/A4 (#79) — lịch settle 16:15 ICT hằng ngày + retrain CN 04:00 ICT
+      // (due-check mới nhất trong try/catch chung — lỗi 1 lịch không giết cả khối)
+      if (settleDue()) void settleAndBroadcast();
+      if (mlTrainDue()) void mlTrainAndBroadcast();
     } catch (err) {
       log("sched", `LỖI scheduler 60s: ${err instanceof Error ? err.message : String(err)}`);
     }

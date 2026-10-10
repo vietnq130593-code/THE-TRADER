@@ -334,7 +334,9 @@ function buildRolling(closes: number[], volumes: number[]): RollingSeries {
  * [rsi14/100, macdHist/close, logret5, logret10, sma20/sma50−1,
  *  close/sma20−1, volz20, std20(logret1), close/max60−1, logret1]
  */
-function featureAt(r: RollingSeries, t: number): number[] | null {
+// A3 (phiên #79): export cho ml/psi.ts đo drift — tái dùng CÙNG featureAt của
+// train (FeatureContract P0-3 — không đường tính đặc trưng thứ 2).
+export function featureAt(r: RollingSeries, t: number): number[] | null {
   if (t < ML_WARMUP_BARS - 1 || t >= r.closes.length) return null;
   const close = r.closes[t];
   const sma20 = r.sma20[t];
