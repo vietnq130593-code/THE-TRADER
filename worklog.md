@@ -2397,3 +2397,20 @@ Stage Summary:
 - Khôi phục 100% phiên #72 (EXEC-P1) + #73 (fixbug 37/37 findings) từ staging /tmp/my-project — công việc bị mất do reset cắt trước lúc commit. Dữ liệu Supabase cloud nguyên vẹn (migrate diff: no difference).
 - Hệ thống sống lại đầy đủ: app :3000 + engine :3003 + gateway :81 + WS realtime + EOD sync thật (75 mã/525 bar) + UI P1 (KPI funnel + Chairman Scorecard) — 0 lỗi console E2E desktop/mobile.
 - Bài học mới ghi nhận: staging /tmp/my-project + .pending_clone.json là nguồn khôi phục cuối cùng khi reset cắt trước commit; next session nên commit sớm ngay sau khi giao thức fixbug kết thúc.
+
+---
+Task ID: 75-CREDENTIALS
+Agent: main-orchestrator (Z.ai Code)
+Task: Xác minh PAT GitHub mới + cấu hình PAT Opencode Zen (space-bunny-free) vào hệ thống
+
+Work Log:
+- Xác minh PAT GitHub (user cấp thay cho PAT 401 của phiên #74): GET /user → 200 login="vietnq130593-code" (ĐÚNG tài khoản) · GET /repos/vietnq130593-code/THE-TRADER → 200, permissions push=true. Cấu hình credential.helper store (~/.git-credentials 600) → git push origin main thành công e677545..0b11629 — commit fixbug #73 + EXEC-P1 đã lên remote, working tree sạch, origin/main == local main.
+- Cấu hình PAT Zen: thêm OPENCODE_ZEN_API_KEY=oc_sk_••• vào .env (15 dòng, chmod 600) — không cần biến khác: llm.ts có sẵn default OPENCODE_ZEN_MODEL=space-bunny-free · BASE_URL=opencode.ai/zen/v1 · REASONING_EFFORT=low (auto theo họ space-bunny) · LLM_PROVIDER=auto ưu tiên zen khi có key.
+- Test key trực tiếp: POST opencode.ai/zen/v1/chat/completions model space-bunny-free → HTTP 200 (1,46s) · reply hợp lệ · usage 175/72 tokens.
+- App nhận config (Next.js dev tự reload .env): GET /api/settings → llm.provider="opencode-zen" · model="space-bunny-free" · modelLabel "· Opencode Zen (free)" · free=true · runsOutsideSandbox=true.
+- E2E agent thật: POST /api/agents/[market-analyst]/run → HTTP 200 trong 10,4s · AgentRun cmv2cx3ay01t tokens 3154/594 · costUsd 0 (free tier) · agentMessage assistant = phân tích thị trường thật tiếng Việt trên snapshot live (VN-Index −0,22% · VPB 23.800₫ > SMA20/SMA50 · RSI 69...) — chuỗi .env → llm.ts → opencode-zen → DB hoạt động đầy đủ.
+
+Stage Summary:
+- PAT GitHub ĐÚNG tài khoản vietnq130593-code, push thành công 0b11629 lên origin/main — toàn bộ công việc #72-#74 đã an toàn trên remote.
+- PAT Zen hoạt động: provider opencode-zen + space-bunny-free free-tier đã chạy agent thật đầu tiên sau khôi phục (cost $0) — hệ thống LLM 23 agents dùng lại đúng backbone như trước reset, chạy được cả ngoài sandbox.
+- .env đủ 15 biến (DATABASE_URL Supabase schema trader · 6 SUPABASE_* · GITHUB_PAT · OPENCODE_ZEN_API_KEY · LIVE_TRADING=false · MARKET_DATA_MODE/STRICT_SESSION · DCHART_BASE_URL · LLM_PROVIDER=auto).
