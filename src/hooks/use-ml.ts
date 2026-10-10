@@ -99,13 +99,22 @@ export interface MlStatusResponse {
 
 /* ─────────────────── Types (hợp đồng POST /api/ml/train) ─────────────────── */
 
-/** Response train — dlMlp/rlQ là BẢN METRICS (không bọc version/status). */
+/** Response train — dlMlp/rlQ là BẢN METRICS (không bọc version/status).
+ *  A4 (phiên #79) — serving-swap guard trả thêm trường tuỳ chọn promoted
+ *  (false = valAcc bản mới thua bản serving → lưu archived, KHÔNG thay mô
+ *  hình đang phục vụ). F-801-03 (Fixbug #80): UI đọc để toast trung thực. */
 export interface MlTrainResponse {
   ok: boolean;
   trained: string[];
   durationMs: number;
   dlMlp: DlMlpMetrics | null;
   rlQ: RlQMetrics | null;
+  /** false = bản mới không lên serving (valAcc thấp hơn bản đang phục vụ). */
+  promoted?: boolean;
+  /** valAcc bản serving TRƯỚC khi train (null = chưa có bản nào). */
+  servingValAcc?: number | null;
+  /** valAcc bản vừa train. */
+  newValAcc?: number;
 }
 
 /* ─────────────────── Fetch helpers ─────────────────── */
@@ -207,6 +216,20 @@ export function useTrainMl() {
           : null;
       const episodes = res.rlQ?.episodes ?? null;
 
+      // F-801-03 (Fixbug #80): serving-swap guard A4 — promoted=false nghĩa là
+      // bản vừa train KHÔNG thay mô hình đang phục vụ (valAcc thấp hơn). Toast
+      // phải nói rõ, tránh hiểu lầm "train xong là đang dùng bản mới".
+      const pct = (v: number | null | undefined): string | null =>
+        typeof v === "number" && Number.isFinite(v)
+          ? `${(v * 100).toFixed(1).replace(".", ",")}%`
+          : null;
+      const notServing =
+        res.promoted === false
+          ? pct(res.servingValAcc ?? null) != null && pct(res.newValAcc ?? null) != null
+            ? `Bản mới KHÔNG lên serving — valAcc ${pct(res.newValAcc)} < bản đang phục vụ ${pct(res.servingValAcc)} (giữ bản cũ, nguyên tắc §1.5).`
+            : "Bản mới KHÔNG lên serving (valAcc thấp hơn bản đang phục vụ) — giữ bản cũ."
+          : null;
+
       const title =
         valAccPct != null && episodes != null
           ? `Đã huấn luyện MLP (valAcc ${valAccPct}) + Q-learning (${episodes} episodes)${secs ? ` trong ${secs}` : ""}`
@@ -218,7 +241,9 @@ export function useTrainMl() {
 
       toast.success(title, {
         description:
-          trained.length > 0 ? `Mục tiêu: ${trained.join(", ")}` : undefined,
+          [trained.length > 0 ? `Mục tiêu: ${trained.join(", ")}` : null, notServing]
+            .filter((part): part is string => part != null)
+            .join(" · ") || undefined,
       });
     },
     onError: (err: Error) => {

@@ -602,11 +602,19 @@ function eodSyncDue(): boolean {
 /** A1 (#79) — đã qua 16:15 ICT · EOD hôm nay ĐÃ sync (bar đã vào DB trước khi
  *  kết toán) · chưa settle ngày này → kết toán bandit. Gate `lastEodSyncDate
  *  === ict.date` là điều kiện "chỉ settle sau EOD hôm đó" (blueprint A1.2);
- *  settle idempotent qua settledKeys nên chạy nhắc lại vô hại $0. */
+ *  settle idempotent qua settledKeys nên chạy nhắc lại vô hại $0.
+ *  F-801-01 (Fixbug #80 — Vòng 1): bổ sung guard T7/CN theo nghiệm thu A1(4)
+ *  "ngày lễ/T7/CN không chạy" — trước đây settle vẫn chạy cuối tuần vì
+ *  eod-sync đánh dấu ngày đã-sync cả T7/CN (đo thật 10-10: settle 14:45 UTC
+ *  0/0 phiếu). An toàn để bỏ: settlePendingRewards là FULL-SCAN mọi phiếu
+ *  chờ (30 assessment gần nhất) nên phiếu lỡ hẹn Thứ 6 (engine chết cả ngày)
+ *  vẫn được Thứ 2 16:15 quét bù. Ngày LỄ: engine không có lịch lễ —
+ *  eodSyncDate-gate vẫn cho chạy nhưng settle 0 phiếu mới (idempotent, $0). */
 function settleDue(): boolean {
   if (SETTLE_DISABLED) return false;
   if (settleInFlight) return false;
   const ict = ictNow();
+  if (ict.dow === 0 || ict.dow === 6) return false; // CN=0 · T7=6
   return (
     ict.minutes >= SETTLE_MINUTES &&
     stats.lastEodSyncDate === ict.date &&

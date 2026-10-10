@@ -165,8 +165,25 @@ async function warmVoteMemo(ids: string[]): Promise<void> {
  * BanditEvent settled mà đã đủ 5 ngày giao dịch tính từ createdAt → tính
  * realized direction rổ top-10 → reward từng phiếu → upsert BanditEvent +
  * cập nhật alpha/beta/pulls/wins BanditArm. Trả {settled, votes, details}.
+ *
+ * F-801-04 (Fixbug #80 — Vòng 1): 3 caller cùng gọi hàm này — chu kỳ agent
+ * Đợt B (agent-service-runs) · nút train (settle-trước-train) · route A1
+ * /api/ml/settle (engine 16:15 ICT). Route có mutex riêng nhưng KHÔNG dùng
+ * chung với 2 caller kia → 2 lần chạy chồng lấn trong cùng ~2s quét có thể
+ * cùng thấy phiếu chưa settle → upsert trùng + BanditArm.increment ×2
+ * (double-count reward). Giờ bản thân hàm xếp hàng tuần tự in-process:
+ * caller sau chờ caller trước xong rồi quét lại settledKeys — phiếu đã
+ * kết toán tự bị bỏ qua (idempotent). Lỗi của một lần chạy vẫn ném về đúng
+ * caller đó, chuỗi không đứt.
  */
-export async function settlePendingRewards(): Promise<SettleResult> {
+let settleChain: Promise<unknown> = Promise.resolve();
+export function settlePendingRewards(): Promise<SettleResult> {
+  const run = settleChain.then(() => settlePendingRewardsRaw());
+  settleChain = run.catch(() => undefined); // chuỗi sống qua lỗi của 1 lần chạy
+  return run;
+}
+
+async function settlePendingRewardsRaw(): Promise<SettleResult> {
   await ensureArms();
 
   // Perf #64 — hai bước: lấy id trước, fetch detail CHỈ row chưa có trong
