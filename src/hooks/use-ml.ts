@@ -103,6 +103,33 @@ export interface MlStatusResponse {
   gate?: MlGateStatus;
   /** B3/B4 (#81) — trạng thái GRU giọng thứ ba (null khi chưa từng train). */
   gru?: MlGruStatus | null;
+  /** L1 (#83) — thống kê RAG BM25 (corpus + 30 ngày RetrievalLog). */
+  rag?: MlRagStatus | null;
+  /** #83 — số liệu bảng intraday 5-phút (tiến độ cổng "Lớp chuỗi đầy đủ"). */
+  intraday?: MlIntradayStatus | null;
+}
+
+/* ───── L1 RAG + Intraday 5-phút (#83 — ML_LEARNING/ML_OPS_BLUEPRINT) ───── */
+
+/** Field `rag` của /api/ml/status — cổng L3 đo trên 30 ngày RetrievalLog. */
+export interface MlRagStatus {
+  corpusMessages: number;
+  corpusNews: number;
+  retrievals30d: number;
+  usedInPrompt30d: number;
+  usageRate30d: number | null;
+  lastRetrievalAt: string | null;
+}
+
+/** Field `intraday` của /api/ml/status — bar 5-phút gom từ tick S4. */
+export interface MlIntradayStatus {
+  bars: number;
+  symbols: number;
+  tradingDays: number;
+  lastDayBars: number;
+  lastBarAt: string | null;
+  simulated: number;
+  realtime: number;
 }
 
 /* ───── Cổng bằng chứng B2 + GRU B3 (ML_OPS_BLUEPRINT §4 — #81) ───── */

@@ -1,8 +1,8 @@
 # ML LEARNING BLUEPRINT — PHÒNG HỌC MÁY: TÍCH LUỸ TRI THỨC & HỌC TỪ KẾT QUẢ
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/ML_LEARNING_BLUEPRINT.md` · **Version:** 1.0.1 · **Updated:** 2026-10-08
-> **Status:** **ĐÃ ĐƯỢC DUYỆT (phiên #51) — KẾ HOẠCH TƯƠNG LAI, CHỜ KÍCH HOẠT THEO CỔNG DỮ LIỆU** (user #51: "Về ML Learning thì tôi duyệt" — phê duyệt định hướng; từng giai đoạn L1–L5 chỉ triển khai khi cổng dữ liệu §6 đạt, CRB đã cho thấy mô hình dưới ngưỡng AUC sẽ KHÔNG serving — cùng văn hoá trung thực)
+> **Document:** `docs/ML_LEARNING_BLUEPRINT.md` · **Version:** 1.1.0 · **Updated:** 2026-10-10 (#83 triển khai L1)
+> **Status:** **L1 ✅ ĐÃ TRIỂN KHAI (#83 — BM25 RAG + RetrievalLog + tiêm prompt 6 agent LLM + A13 nâng cấp) · L2 ✅ hấp thụ vào A2 ML_OPS (#79) · L3-L5 chờ cổng §6** (duyệt định hướng #51; hiệu lệnh triển khai L1 do user phát động #83: "trước hết triển khai L1")
 > **Cross-refs:** [CONTROL_RISK_QUANT_BLUEPRINT.md](./CONTROL_RISK_QUANT_BLUEPRINT.md) (CRB-6 đặc trưng logistic · CRB-1 σ cho state RL — **ĐÃ TRIỂN KHAI #51**) · [MARKET_EXPANSION_BLUEPRINT.md](./MARKET_EXPANSION_BLUEPRINT.md) (B7 ensemble · B8 scorecard/Brier · B9 đồng thuận) · [DB_SCHEMA.md](./DB_SCHEMA.md) · [DATA_SOURCES.md](./DATA_SOURCES.md)
 > **Người soạn:** Kỹ sư AI / Kiến trúc sư hệ thống (phiên #50–#51)
 
@@ -157,8 +157,8 @@ thêm một lịch chạy mới)
 
 | Giai đoạn | Cổng mở khi | Dữ liệu đo |
 |---|---|---|
-| L1 | User phê duyệt triển khai | — |
-| L2 | Sau L1 ≥ 1 chu kỳ kiểm định RetrievalLog hoạt động | RetrievalLog ghi đúng 100% chu kỳ |
+| L1 | User phê duyệt triển khai | ✅ **ĐÃ TRIỂN KHAI #83** — rag.ts (BM25+recency ~460d) · RetrievalLog · tiêm chu kỳ + single-run · A13 báo cáo |
+| L2 | Sau L1 ≥ 1 chu kỳ kiểm định RetrievalLog hoạt động | ✅ **hấp thụ vào A2 ML_OPS #79** (Wilson/Brier/calibration chạy thật — không đợi L1) |
 | L3 | RetrievalLog ≥ 30 ngày VÀ khối RAG được dùng (tin nhắn/tin nằm trong top-8 của ≥ 10% chu kỳ) | truy vấn RetrievalLog |
 | L4 | Mỗi regime có ≥ 250 phiên dữ liệu lịch sử | quét Bar theo nhãn regime hồi tố |
 | L5 | ≥ 3 tháng BanditEvent settle + ≥ 200 phiếu có confidence | count BanditEvent |

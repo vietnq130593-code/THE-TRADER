@@ -37,6 +37,9 @@ import { buildEvidenceBundle, type LlmVoteInput } from "@/lib/bayes/evidence";
 import { synthesizeMarketAssessment } from "@/lib/bayes/synthesis";
 import { saveMarketAssessment, attachCycleRunId, attachRiskQuantKelly } from "@/lib/bayes/persist";
 import { maybeAutoEnableConsensus } from "@/lib/consensus";
+// L1 (ML_LEARNING_BLUEPRINT §2 — phiên #83): BM25 RAG — truy hồi tri thức
+// broadcast/tin cũ tiêm prompt 5 agent nghiên cứu + Chủ tịch + RetrievalLog.
+import { retrieveForCycle } from "@/lib/ml/rag";
 import {
   runRiskQuantEngine,
   toRiskQuantView,
@@ -485,6 +488,20 @@ export async function POST() {
       ]);
     const marketBlock = market.block;
 
+    // ── L1 (#83) — TRÍ THỨC TRUY HỒI (RAG): 1 lần/chu kỳ ──
+    // Sau snapshot (query cần tín hiệu mở + top mover), TRƯỚC dựng prompt.
+    // Fail-soft tuyệt đối: lỗi rag → block=null → prompt y như trước L1.
+    const rag = await retrieveForCycle(true).catch((ragErr) => {
+      console.error("[api/agents/run] RAG L1 lỗi (chu kỳ chạy không RAG):", ragErr);
+      return null;
+    });
+    const ragBlock = rag?.block ?? null;
+    if (rag && ragBlock) {
+      console.log(
+        `[rag] L1 truy hồi ${rag.hits.length}/${rag.corpusSize} docs · query ${rag.queryTokens.length} token · block ${ragBlock.length} ký tự (~${Math.round(ragBlock.length / 2.5)} token) · log ${rag.logId ?? "(lỗi ghi)"}`
+      );
+    }
+
     // ══ ĐỢT A · Nền tảng dữ liệu — 3 NHỊP CON (§3.3 blueprint v1.1 — #57) ══
     // Tránh phụ thuộc vòng trong cùng đợt song song: nhịp 1: S0 ∥ S2 →
     // nhịp 2: A9 (readiness do chính A9 tính qua FeatureContract — cùng thư
@@ -507,19 +524,19 @@ export async function POST() {
     const prompts: Record<string, { system: string; user: string }> = {
       "market-analyst": {
         system: ROLE_PROMPTS["market-analyst"].system,
-        user: [marketBlock, flowsBlock, ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       "fair-value": {
         system: ROLE_PROMPTS["fair-value"].system,
-        user: [marketBlock, valuationBlock, ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, valuationBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       "news-sentiment": {
         system: ROLE_PROMPTS["news-sentiment"].system,
-        user: [marketBlock, newsBlock, flowsBlock, ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, newsBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       liquidity: {
         system: ROLE_PROMPTS["liquidity"].system,
-        user: [marketBlock, liquidityBlock, ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, liquidityBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       // risk-manager KHÔNG build ở đây — prompt cần khối QUANT của
       // RiskQuantEngine (chạy sau đợt B, trước đợt C — phiên #51 CRB §2)
@@ -661,7 +678,7 @@ export async function POST() {
         : null;
     prompts["risk-manager"] = {
       system: ROLE_PROMPTS["risk-manager"].system,
-      user: [marketBlock, flowsBlock, ...(quantPromptBlock ? [quantPromptBlock] : [])].join("\n\n"),
+      user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(quantPromptBlock ? [quantPromptBlock] : [])].join("\n\n"),
     };
 
     // ══ ĐỢT C · Ủy ban Kiểm soát (VETO) — risk LLM + 2 service ═════
@@ -852,6 +869,8 @@ export async function POST() {
     const strategistUserPrompt = [
       [marketBlock, newsBlock, flowsBlock, valuationBlock, liquidityBlock].join("\n\n"),
       `TÍN HIỆU ĐANG MỞ:\n${openSignalsBlock}`,
+      // L1 (#83) — tri thức truy hồi cho Chủ tịch (ngữ cảnh đối chiếu, không phải bằng chứng)
+      ...(ragBlock ? ["", ragBlock] : []),
       // P0-4 §3.3 — cờ chất lượng dữ liệu A9 cho Chủ tịch (8-1b: DEGRADED →
       // cờ prompt; SEVERE → cờ + RiskAlert ack-bắt-buộc; KHÔNG hard-stop)
       ...(dqPromptBlock ? ["", dqPromptBlock] : []),

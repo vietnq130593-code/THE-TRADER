@@ -57,6 +57,8 @@ import {
   pendingSettleCount,
   settlePendingRewards,
 } from "@/lib/ml/bandit";
+// L1 (#83): thống kê RAG (corpus + RetrievalLog 30 ngày) cho A13.
+import { ragStats } from "@/lib/ml/rag";
 import type { RiskQuantResult } from "@/lib/risk/engine";
 
 export interface ServiceRunResult {
@@ -917,20 +919,46 @@ function hoursAgo(at: Date): string {
   return h <= 0 ? "vừa xong" : `${h} giờ trước`;
 }
 
-/** A13 Learning & RAG — ký ức phân tích tích luỹ. */
+/** A13 Learning & RAG — ký ức phân tích tích luỹ.
+ *  L1 (#83 — ML_LEARNING_BLUEPRINT §2): giờ báo cáo CỔNG RAG thật — corpus
+ *  (500 broadcast + 200 tin) + 30 ngày RetrievalLog (đo "RAG được nhìn thấy
+ *  chưa" — cổng L3) thay vì chỉ đếm như trước. */
 async function runLearningRag(): Promise<ServiceRunResult> {
-  const [broadcastCount, distinctAgents, newsTotal] = await Promise.all([
+  // ragStats fail-soft nội bộ (lỗi DB → số 0) — A13 không bao giờ làm hỏng đợt.
+  const [stats, broadcastCount, distinctAgents, newsTotal] = await Promise.all([
+    ragStats(),
     db.agentMessage.count({ where: { broadcast: true } }),
     db.agentMessage.groupBy({ by: ["fromAgentId"], where: { broadcast: true } }),
     db.newsItem.count(),
   ]);
   const agents = distinctAgents.length;
+  const usage =
+    stats.usageRate30d == null
+      ? "chưa có mẫu"
+      : `${(stats.usageRate30d * 100).toFixed(0)}%`;
+  const lastAt = stats.lastRetrievalAt
+    ? new Date(stats.lastRetrievalAt).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
+    : "chưa từng";
 
   return {
-    content: `Ký ức đội agent: ${broadcastCount.toLocaleString("vi-VN")} tin broadcast từ ${agents} agent + ${newsTotal.toLocaleString("vi-VN")} tin tức đã nạp — ngữ cảnh truy hồi (RAG) sẵn sàng cho chu kỳ kế tiếp (truy xuất top-8 theo thời gian).`,
-    reasoning: "Đếm AgentMessage broadcast + nhóm theo agent + NewsItem.",
+    content: `Ký ức đội agent: ${broadcastCount.toLocaleString("vi-VN")} tin broadcast từ ${agents} agent + ${newsTotal.toLocaleString("vi-VN")} tin tức đã nạp. Truy hồi RAG (BM25 + recency, L1): corpus đang lập chỉ mục ${stats.corpusMessages} tin + ${stats.corpusNews} tin; 30 ngày qua ${stats.retrievals30d} lần truy hồi — ${stats.usedInPrompt30d} lần được tiêm vào prompt (tỉ lệ ${usage}); lần cuối ${lastAt}. Top-8 tri thức liên quan đã nối vào prompt 5 agent nghiên cứu + Chủ tịch mỗi chu kỳ.`,
+    reasoning:
+      "Đếm AgentMessage broadcast + NewsItem; đọc corpus RAG + RetrievalLog 30 ngày (L1).",
     sentiment: null,
-    output: { broadcastCount, agents, newsTotal, retrievalTopK: 8 },
+    output: {
+      broadcastCount,
+      agents,
+      newsTotal,
+      retrievalTopK: 8,
+      rag: {
+        corpusMessages: stats.corpusMessages,
+        corpusNews: stats.corpusNews,
+        retrievals30d: stats.retrievals30d,
+        usedInPrompt30d: stats.usedInPrompt30d,
+        usageRate30d: stats.usageRate30d,
+        lastRetrievalAt: stats.lastRetrievalAt?.toISOString() ?? null,
+      },
+    },
   };
 }
 

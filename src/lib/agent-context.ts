@@ -12,6 +12,9 @@ import {
   ALLOCATION_REBALANCE_THRESHOLD_PCT,
   ALLOCATION_STYLE,
 } from "@/lib/exec/allocation";
+// L1 (#83 — ML_LEARNING_BLUEPRINT §2): BM25 RAG cho single-run của 5 agent
+// nghiên cứu + Chủ tịch (chu kỳ tiêm ở api/agents/run — cùng 1 thư viện).
+import { retrieveForCycle } from "@/lib/ml/rag";
 
 /**
  * Khối ngữ cảnh + role-prompt DÙNG CHUNG cho single-run & chat
@@ -806,16 +809,33 @@ export async function buildSingleRunPrompt(
     buildValuationBlock(),
     buildLiquidityBlock(),
   ]);
+  // L1 (#83 — ML_LEARNING_BLUEPRINT §2): tri thức truy hồi RAG cho 5 agent
+  // nghiên cứu + Chủ tịch cả khi chạy đơn lẻ (cùng khối như chu kỳ — đo qua
+  // RetrievalLog). Fail-soft: lỗi → block null → prompt y như trước L1.
+  const rag = await retrieveForCycle(true).catch(() => null);
+  const ragBlock = rag?.block ?? null;
   switch (code) {
     case "market-analyst":
     case "risk-manager":
-      return { system: role.system, user: [market.block, flows].join("\n\n") };
+      return {
+        system: role.system,
+        user: [market.block, flows, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+      };
     case "news-sentiment":
-      return { system: role.system, user: [market.block, news, flows].join("\n\n") };
+      return {
+        system: role.system,
+        user: [market.block, news, flows, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+      };
     case "fair-value":
-      return { system: role.system, user: [market.block, valuation].join("\n\n") };
+      return {
+        system: role.system,
+        user: [market.block, valuation, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+      };
     case "liquidity":
-      return { system: role.system, user: [market.block, liquidity].join("\n\n") };
+      return {
+        system: role.system,
+        user: [market.block, liquidity, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+      };
     case "portfolio-strategist": {
       // F-73A-03: single-run cấp cùng block tỷ trọng như chu kỳ — hợp đồng
       // allocation cần currentPct đo từ DB, không để LLM bịa.
@@ -829,6 +849,7 @@ export async function buildSingleRunPrompt(
           valuation,
           liquidity,
           `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
+          ...(ragBlock ? [ragBlock] : []),
           ...(weights ? ["", weights] : []),
         ].join("\n\n"),
       };

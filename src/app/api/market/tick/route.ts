@@ -13,6 +13,13 @@ import {
 import { invalidateFeatureCache, TOPBYADTV_CACHE_PREFIX } from "@/lib/feature-cache";
 import { getRealtimeRuntime, markRealtimeAttempt } from "@/lib/settings";
 import { fetchFinfoLastPrices, type FinfoQuote } from "@/lib/vndirect";
+// IntradayBar (#83 — ML_OPS_BLUEPRINT §6 "Lớp chuỗi đầy đủ"): gom tick 10s
+// vào bucket 5-phút + flush chunk — độ phân giải chuỗi giá thứ hai của hệ thống.
+import {
+  recordIntradayTick,
+  flushIntradayBuckets,
+  flushAllIntradayBuckets,
+} from "@/lib/intraday";
 // E-P0-1 (EXECUTION_OPS_BLUEPRINT v1.1): biểu phí/thuế chuyển về MỘT nguồn duy nhất
 // src/lib/exec/constants.ts (đọc roster config A11 percent → fraction + guard biên
 // đơn vị REV-2) — trước P0 FEE_RATE=0.0015/TAX_RATE=0.001 hardcode tại đây
@@ -401,6 +408,12 @@ async function runTick(): Promise<NextResponse> {
       // real-eod/realtime-vndirect: ngoài phiên, bảng giá đang neo ở mức đóng cửa
       // THẬT (eod-sync dchart) — đánh dấu mode "real" thay vì "simulated" cho đúng
       // sự thật hiển thị; trong phiên khi tick chạy sẽ trở lại nguồn tương ứng mode.
+      // IntradayBar (#83): ngoài phiên = hết bucket mới — đóng sổ mọi bucket đang
+      // chạy (phiên đã chấm dứt, ghi nốt bar 5-phút cuối cùng của ngày).
+      const closedBuckets = await flushAllIntradayBuckets().catch(() => 0);
+      if (closedBuckets > 0) {
+        console.log(`[intraday] đóng sổ ngoài phiên: ${closedBuckets} bar 5-phút đã ghi`);
+      }
       if (realAnchor) {
         await markSource("market-quotes", {
           mode: "real",
@@ -464,6 +477,7 @@ async function runTick(): Promise<NextResponse> {
     let ticked = 0;
     let rolled = 0;
     let barsWritten = 0; // F-63A-04/#63 — đếm bar THẬT được ghi (chỉ mode simulated)
+    let intradayBarsWritten = 0; // #83 — bar 5-phút ghi trong tick này (IntradayBar)
     let realtimeUsed = 0; // số mã lấy giá THẬT từ finfo trong tick này
     const lastByInstrument = new Map<string, number>();
 
@@ -656,6 +670,17 @@ async function runTick(): Promise<NextResponse> {
           tradedAt: now,
         },
       });
+      // IntradayBar (#83) — gom tick vào bucket 5-phút (thuần cache, 0 DB —
+      // flush sau pha ghi). volDelta = phần KHỐI LƯỢNG MỚI của tick này trong
+      // phiên dồn (Q3 chỉ tăng nên ≥ 0 — cả nhánh finfo lẫn random-walk).
+      recordIntradayTick({
+        instrumentId: inst.id,
+        tradingDayIso: todayIso,
+        price: next,
+        volDelta: nextVolume - volumeBase,
+        isRealtime: Boolean(rtq && Number.isFinite(rtq.last) && rtq.last > 0),
+        at: now,
+      });
       lastByInstrument.set(inst.id, next);
       ticked++;
     }
@@ -681,6 +706,14 @@ async function runTick(): Promise<NextResponse> {
       await Promise.all(
         chunk.map((w) => db.quote.update({ where: { id: w.quoteId }, data: w.data }))
       );
+    }
+
+    // IntradayBar (#83) — pha 3: ghi bucket 5-phút chờ flush (bucket đóng ở
+    // biên 5-phút + safety-flush 120s). Fail-soft nội bộ (lỗi bucket không
+    // chặn tick); bucket lỗi giữ queue thử lần tick sau.
+    const intradayWritten = await flushIntradayBuckets().catch(() => 0);
+    if (intradayWritten > 0) {
+      intradayBarsWritten += intradayWritten;
     }
 
     // P2-3/#62 + F-63A-04/#63 — dồn MỘT invalidation duy nhất sau vòng lặp:
@@ -872,6 +905,7 @@ async function runTick(): Promise<NextResponse> {
       ticked,
       rolled,
       fills,
+      intradayBarsWritten, // #83 — bar 5-phút đã ghi (bucket đóng/safety-flush)
       ...(rt.active ? { realtime: { used: realtimeUsed, fetchAttempted: rtFetchAttempted } } : {}),
     });
   } catch (err) {

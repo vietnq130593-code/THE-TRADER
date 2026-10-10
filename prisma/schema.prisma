@@ -188,6 +188,7 @@ model Instrument {
 
   quotes Quote[]
   bars Bar[]
+  intradayBars IntradayBar[]
   signals Signal[]
   watchlistItems WatchlistItem[]
   positions Position[]
@@ -255,6 +256,39 @@ model Bar {
 // ─────────────────────────────────────────────────────────────────
 // 3. MULTI-AGENT SYSTEM
 // ─────────────────────────────────────────────────────────────────
+
+// L1 (ML_LEARNING_BLUEPRINT §2 — phiên #83): chuỗi intraday 5-phút gom từ
+// tick S4 — độ phân giải thời gian thứ HAI của hệ thống (Bar EOD là thứ nhất).
+// Mục đích: mở lại cổng bằng chứng B2/GRU khi đủ dữ liệu (ML_OPS_BLUEPRINT
+// §6 "Lớp chuỗi đầy đủ"). source đánh dấu trung thực nguồn tick góp bar:
+// "simulated" (random-walk quanh ref thật) | "realtime-finfo" (giá cuối thật).
+// date = ngày phiên ICT (neo 15:00Z cùng quy ước Bar) · startTime = mốc UTC
+// bucket 5-phút (floor theo đồng hồ ICT) · volume = DELTA khối lượng dồn
+// phiên trong bucket (Q3 chỉ tăng nên delta ≥ 0) · tickCount = số tick góp
+// (phát hiện bucket đứt do restart — trung thực độ phủ).
+model IntradayBar {
+  id String @id @default(cuid())
+  instrumentId String
+  instrument Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  date DateTime // ngày phiên ICT (neo `${iso}T15:00:00.000Z` — cùng Bar)
+  startTime DateTime // mốc UTC bắt đầu bucket 5-phút
+  open Int
+  high Int
+  low Int
+  close Int
+  volume Int // KLGD delta trong bucket (tích luỹ dồn phiên trừ mốc đầu bucket)
+  value BigInt? // giá trị ước tính (close × volume)
+  source String @default("simulated") // simulated | realtime-finfo
+  tickCount Int @default(1)
+  firstSeenAt DateTime @default(now()) // PIT — không đổi sau tạo
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([instrumentId, startTime])
+  @@index([instrumentId, date])
+  @@index([startTime])
+  @@index([source])
+}
 
 model Agent {
   id String @id @default(cuid())
@@ -667,6 +701,23 @@ model MlModel {
   createdAt   DateTime @default(now())
 
   @@index([kind, status])
+}
+
+// L1 (ML_LEARNING_BLUEPRINT §3 — phiên #83): log MỖI LẦN truy hồi RAG —
+// đo được "RAG có được nhìn thấy/không" (cổng L3: ≥30 ngày & ≥10% chu kỳ).
+// query/results dùng Json (string[] / mảng {refTable, refId, score}) theo
+// quy tắc schema: primitive type không dùng list — Json giữ nguyên ý Text[].
+model RetrievalLog {
+  id           String   @id @default(cuid())
+  cycleAt      DateTime @default(now()) // mốc chu kỳ gọi truy hồi
+  query        Json // string[] — token truy vấn (symbols + từ khoá ngữ cảnh)
+  topK         Int
+  results      Json // [{refTable: "AgentMessage"|"NewsItem", refId, score}]
+  usedInPrompt Boolean // true khi block được tiêm ≥1 prompt agent
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([usedInPrompt, createdAt])
 }
 
 // Cánh tay Thompson sampling — 6 arms = 5 LLM research agents

@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
 import { banditSnapshot, pendingSettleCount } from "@/lib/ml/bandit";
+// L1 + Intraday (#83 — additive fields `rag` + `intraday`): thống kê truy hồi
+// RAG (cổng L3) + số liệu bảng intraday 5-phút (cổng "Lớp chuỗi đầy đủ").
+import { ragStats } from "@/lib/ml/rag";
+import { intradayStats } from "@/lib/intraday";
 import {
   featureAt,
   loadTopSeries,
@@ -428,7 +432,7 @@ export async function GET() {
     });
     const driftPromise = dlRowPromise.then((dlRow) => driftForServing(dlRow));
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru, rag, intraday] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -439,6 +443,9 @@ export async function GET() {
       driftPromise,
       gatePayload(),
       gruPayload(),
+      // #83 — fail-soft nội bộ (lỗi DB → số 0 trung thực, không chặn status)
+      ragStats().catch(() => null),
+      intradayStats().catch(() => null),
     ]);
 
     const dlMetrics = dlRow
@@ -504,6 +511,31 @@ export async function GET() {
       // B2/B3 (#81) — additive: cổng bằng chứng + GRU (FE mới đọc, FE cũ bỏ qua)
       gate,
       gru,
+      // L1 (#83) — additive: RAG corpus + 30 ngày RetrievalLog (cổng L3 đo đây:
+      // ≥30 ngày & tỉ lệ dùng ≥10% chu kỳ). FE mới đọc, FE cũ bỏ qua.
+      rag: rag
+        ? {
+            corpusMessages: rag.corpusMessages,
+            corpusNews: rag.corpusNews,
+            retrievals30d: rag.retrievals30d,
+            usedInPrompt30d: rag.usedInPrompt30d,
+            usageRate30d: rag.usageRate30d,
+            lastRetrievalAt: rag.lastRetrievalAt ? rag.lastRetrievalAt.toISOString() : null,
+          }
+        : null,
+      // Intraday (#83) — additive: số liệu bảng bar 5-phút (tiến độ cổng "Lớp
+      // chuỗi đầy đủ" — khi đủ dữ liệu sẽ re-đo cổng bằng chứng B2 cho GRU).
+      intraday: intraday
+        ? {
+            bars: intraday.bars,
+            symbols: intraday.symbols,
+            tradingDays: intraday.tradingDays,
+            lastDayBars: intraday.lastDayBars,
+            lastBarAt: intraday.lastBarAt ? intraday.lastBarAt.toISOString() : null,
+            simulated: intraday.simulated,
+            realtime: intraday.realtime,
+          }
+        : null,
     };
     return NextResponse.json(toPlain(payload));
   } catch (err) {

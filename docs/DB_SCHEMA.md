@@ -1,7 +1,7 @@
 # The Trader — Data Dictionary & Database Schema
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (Multi-Agent Trading System) cho VNDIRECT
-> **Document:** `docs/DB_SCHEMA.md` · **Version:** 0.7.2 · **Updated:** 2026-10-08
+> **Document:** `docs/DB_SCHEMA.md` · **Version:** 0.8.2 · **Updated:** 2026-10-10 (#83)
 > **Source of truth:** [`prisma/schema.prisma`](../prisma/schema.prisma) — tài liệu này mô tả đúng schema đã implement. Mọi thay đổi schema phải được phản ánh lại đây.
 > **Cross-refs:** [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) (API surface) · [DATA_SOURCES.md](./DATA_SOURCES.md) (field mapping theo nguồn dữ liệu)
 
@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-The Trader lưu trữ toàn bộ trạng thái của một hệ thống giao dịch chứng khoán giấy (paper trading) điều khiển bởi **23 AI agent chia 5 nhóm** (research · control · executive · platform · ml — xem [TECHNICAL_BLUEPRINT.md §5.1](./TECHNICAL_BLUEPRINT.md)): dữ liệu thị trường (instrument / quote / bar), trạng thái đa agent (run / task / message), luồng tín hiệu → lệnh → khớp lệnh → vị thế, tầng rủi ro – tuân thủ (risk alert / audit log), và từ v0.3 thêm tầng dữ liệu ngoài: tin tức RSS (`NewsItem`) + trạng thái nguồn dữ liệu để stale marking (`DataSourceStatus`). Phiên #34 thêm cấu hình runtime (`AppSetting`) + nhận định Bayes (`MarketAssessment`); phiên #35 thêm 3 bảng học máy (`MlModel` · `BanditArm` · `BanditEvent`); **phiên #38 (MARKET_EXPANSION_BLUEPRINT) thêm dữ liệu tài chính cơ bản (`FinancialFundamental`) + mở rộng `Market` (US · HK) + `Instrument.currency` + `Signal.consensusGate/consensusRatio`**. Tổng cộng **31 model** (phiên #51 thêm `RiskQuantSnapshot` — đồng bộ số đếm theo cam kết §9.1 lúc triển khai P0 #57; **phiên #60 — DATA_PLATFORM_BLUEPRINT P1** thêm 3 bảng: `CorporateEvent` (§6.26 — sự kiện doanh nghiệp + auto-adjust split) · `ForeignFlow` (§6.27 — dòng khối ngoại persist mode simulated) · `DataQualityReport` (§6.28 — verdict A9 theo asOf); kèm cột additive `Bar.firstSeenAt/lastSyncedAt` (PIT) + `MlModel.meta` (window-hash SHA-256) — backup trước push ở `db/backup-pre-p1/`; **phiên #62 — DATA_PLATFORM_BLUEPRINT P2** thêm 2 bảng: `FeatureValue` (§6.29 — cache giá trị đặc trưng 2 lớp L1/L2) · `NotificationOutbox` (§6.30 — hộp thư đi S1 webhook/email pending-egress)).
+The Trader lưu trữ toàn bộ trạng thái của một hệ thống giao dịch chứng khoán giấy (paper trading) điều khiển bởi **23 AI agent chia 5 nhóm** (research · control · executive · platform · ml — xem [TECHNICAL_BLUEPRINT.md §5.1](./TECHNICAL_BLUEPRINT.md)): dữ liệu thị trường (instrument / quote / bar), trạng thái đa agent (run / task / message), luồng tín hiệu → lệnh → khớp lệnh → vị thế, tầng rủi ro – tuân thủ (risk alert / audit log), và từ v0.3 thêm tầng dữ liệu ngoài: tin tức RSS (`NewsItem`) + trạng thái nguồn dữ liệu để stale marking (`DataSourceStatus`). Phiên #34 thêm cấu hình runtime (`AppSetting`) + nhận định Bayes (`MarketAssessment`); phiên #35 thêm 3 bảng học máy (`MlModel` · `BanditArm` · `BanditEvent`); **phiên #38 (MARKET_EXPANSION_BLUEPRINT) thêm dữ liệu tài chính cơ bản (`FinancialFundamental`) + mở rộng `Market` (US · HK) + `Instrument.currency` + `Signal.consensusGate/consensusRatio`**. Tổng cộng **33 model** (phiên #83 thêm 2 bảng L1+intraday: `IntradayBar` §6.31 · `RetrievalLog` §6.32; trước đó phiên #51 thêm `RiskQuantSnapshot` — đồng bộ số đếm theo cam kết §9.1 lúc triển khai P0 #57; **phiên #60 — DATA_PLATFORM_BLUEPRINT P1** thêm 3 bảng: `CorporateEvent` (§6.26 — sự kiện doanh nghiệp + auto-adjust split) · `ForeignFlow` (§6.27 — dòng khối ngoại persist mode simulated) · `DataQualityReport` (§6.28 — verdict A9 theo asOf); kèm cột additive `Bar.firstSeenAt/lastSyncedAt` (PIT) + `MlModel.meta` (window-hash SHA-256) — backup trước push ở `db/backup-pre-p1/`; **phiên #62 — DATA_PLATFORM_BLUEPRINT P2** thêm 2 bảng: `FeatureValue` (§6.29 — cache giá trị đặc trưng 2 lớp L1/L2) · `NotificationOutbox` (§6.30 — hộp thư đi S1 webhook/email pending-egress)).
 
 Schema được thiết kế theo chuẩn **financial-grade**:
 
@@ -19,7 +19,7 @@ Schema được thiết kế theo chuẩn **financial-grade**:
 - **Integer money** — toàn bộ giá trị tiền tệ VND là số nguyên (xem §3), tránh sai số dấu chấm động vốn là yêu cầu bắt buộc trong hệ thống tài chính.
 - **Unique + composite indexes** phục vụ đúng truy vấn của dashboard và ràng buộc toàn vẹn dữ liệu thị trường (dedup OHLCV theo `(instrumentId, date)`).
 
-**Engine:** **Supabase Postgres** qua Prisma 6.19.3 (`DATABASE_URL=postgresql://...pooler.supabase.com:5432/postgres?schema=trader` trong `.env`) — **kho dữ liệu chính trên đám mây**, bền vững qua reset sandbox. 31 model đặt trong schema riêng `trader` trên cùng project Supabase còn giữ schema `public` Gen-1 (36 bảng + 95.259 bar EOD thật 2013→2026 — nguồn dự phòng cho dữ liệu thật VNDIRECT). Ops SQL trực tiếp qua `tools/db-console.mjs` (Management API, HTTPS).
+**Engine:** **Supabase Postgres** qua Prisma 6.19.3 (`DATABASE_URL=postgresql://...pooler.supabase.com:5432/postgres?schema=trader` trong `.env`) — **kho dữ liệu chính trên đám mây**, bền vững qua reset sandbox. 33 model đặt trong schema riêng `trader` trên cùng project Supabase còn giữ schema `public` Gen-1 (36 bảng + 95.259 bar EOD thật 2013→2026 — nguồn dự phòng cho dữ liệu thật VNDIRECT). Ops SQL trực tiếp qua `tools/db-console.mjs` (Management API, HTTPS).
 
 ---
 
@@ -970,6 +970,61 @@ model NotificationOutbox {
 - Dùng bởi: `src/lib/notify.ts` (dispatchDigest/retryPendingOutbox/listOutbox) gắn trong `runNotificationOfficer` (mỗi chu kỳ) · route `GET/POST /api/notify` · UI Settings "Kênh thông báo S1".
 - Cấu hình kênh: AppSetting `notify` `{enabled, webhookUrl, emailTo}` (PUT /api/settings `{notify}` — validate http(s)/email).
 
+### 6.31 `IntradayBar` — Bar 5-phút gom từ tick S4 (phiên #83 — ML_OPS_BLUEPRINT §6 "Lớp chuỗi đầy đủ")
+
+Độ phân giải thời gian **thứ hai** của hệ thống (Bar EOD là thứ nhất) — mở đường re-đo cổng bằng chứng B2 cho lớp mô hình chuỗi GRU khi đủ dữ liệu. Tick 10s trong phiên được gom thành bucket 5-phút (floor UTC tròn 5-phút — biên trùng khớp ICT lệch tròn giờ) qua `src/lib/intraday.ts` (cache in-process + flush chunk 10: bucket đóng ở biên + safety-flush 120s). `volume` là **delta** khối lượng dồn phiên trong bucket (Q3 chỉ tăng ⇒ ≥ 0); `source` đánh dấu trung thực nguồn tick góp bar (`simulated` = random-walk quanh ref EOD thật · `realtime-finfo` = ≥ 1 tick giá thật); `tickCount` = số tick góp — bucket đứt do restart lộ ngay (độ phủ trung thực); `firstSeenAt` PIT không đổi sau tạo. Restart giữa bucket: bucket được ghi lại từ tick sau restart (tickCount phản ánh phần nhìn thấy — không bịa phần mất).
+
+```prisma
+model IntradayBar {
+  id           String    @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  date         DateTime  // ngày phiên ICT (neo `${iso}T15:00:00.000Z` — cùng Bar)
+  startTime    DateTime  // mốc UTC bắt đầu bucket 5-phút (floor theo đồng hồ)
+  open         Int
+  high         Int
+  low          Int
+  close        Int
+  volume       Int       // KLGD delta trong bucket (khối lượng dồn phiên trừ mốc đầu bucket)
+  value        BigInt?   // giá trị ước tính close × volume
+  source       String    @default("simulated") // simulated | realtime-finfo
+  tickCount    Int       @default(1)
+  firstSeenAt  DateTime  @default(now()) // PIT — không đổi sau tạo
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([instrumentId, startTime])
+  @@index([instrumentId, date])
+  @@index([startTime])
+  @@index([source])
+}
+```
+
+- Dùng bởi: `src/lib/intraday.ts` (recordIntradayTick/flushIntradayBuckets/flushAllIntradayBuckets/intradayStats) · tick route `POST /api/market/tick` (pha 3 + payload `intradayBarsWritten` + đóng sổ ngoài phiên) · route `GET /api/market/intraday?symbol=VCB&days=5` (coverage bucket kín tickCount ≥ 25) · ml/status field `intraday` (additive #83) · UI ml-panel khối "Chuỗi intraday 5-phút" · script nghiệm thu hermetic `scripts/intraday-verify.ts` (13/13 PASS).
+- Nhịp tích luỹ: ~76 mã × 72 bucket/phiên ≈ 5,5k row/phiên — tự chạy từ phiên giao dịch kế tiếp (deploy ngày T7 ngoài phiên).
+
+### 6.32 `RetrievalLog` — Log mỗi lần truy hồi RAG (phiên #83 — ML_LEARNING_BLUEPRINT §2 L1)
+
+Đo được "RAG có được nhìn thấy/không" — **cổng L3** (pgvector semantic) đo trên bảng này: ≥ 30 ngày RetrievalLog VÀ khối RAG được dùng (usedInPrompt) ≥ 10% chu kỳ. Mỗi lần `retrieveForCycle()` (1 lần/chu kỳ sau snapshot + mỗi single-run agent LLM) ghi 1 row: query token (symbols tín hiệu mở + top mover + từ khoá), top-8 results kèm điểm hybrid 0,7·BM25 + 0,3·recency, cờ usedInPrompt (block vào ≥ 1 prompt). `query`/`results` dùng **Json** (string[] / mảng `{refTable, refId, score}`) theo quy tắc schema primitive-không-dùng-list — giữ nguyên ý `Text[]` của blueprint.
+
+```prisma
+model RetrievalLog {
+  id           String   @id @default(cuid())
+  cycleAt      DateTime @default(now()) // mốc chu kỳ gọi truy hồi
+  query        Json     // string[] — token truy vấn
+  topK         Int
+  results      Json     // [{refTable: "AgentMessage"|"NewsItem", refId, score}]
+  usedInPrompt Boolean  // true khi block được tiêm ≥ 1 prompt agent
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([usedInPrompt, createdAt])
+}
+```
+
+- Dùng bởi: `src/lib/ml/rag.ts` (retrieveForCycle/ragStats — TTL cache corpus 60s) · chu kỳ `POST /api/agents/run` (1 retrieval/chu kỳ) · single-run `buildSingleRunPrompt` · A13 learning-rag báo cáo 30 ngày · ml/status field `rag` (additive #83).
+- Corpus RAG (không lưu DB — index in-process): 500 `AgentMessage` broadcast gần nhất + 200 `NewsItem` gần nhất.
+
 ---
 
 ## 7. Enum Dictionary
@@ -1066,6 +1121,7 @@ Seed **delete toàn bộ dữ liệu cũ trước khi ghi** (clean slate) — ch
 
 | Ngày | Thay đổi |
 |---|---|
+| 2026-10-10 | **v0.8.2 — Phiên #83 (31 → 33 model):** (1) **§6.31 `IntradayBar`** — bar 5-phút gom từ tick S4 (ML_OPS_BLUEPRINT §6 "Lớp chuỗi đầy đủ"): `unique [instrumentId, startTime]` floor UTC 5-phút · volume = delta khối lượng dồn phiên · source simulated/realtime-finfo trung thực nguồn tick · tickCount độ phủ (bucket đứt do restart lộ ngay) · firstSeenAt PIT; `src/lib/intraday.ts` + tick route pha 3 + API `GET /api/market/intraday` + ml/status field `intraday`; script hermetic `scripts/intraday-verify.ts` 13/13 PASS (bắt + vá bug identity khi flush bucket đóng); (2) **§6.32 `RetrievalLog`** — log mỗi lần truy hồi RAG L1 (ML_LEARNING_BLUEPRINT §2): query/results Json · usedInPrompt — dữ liệu cổng L3 (≥30 ngày & ≥10% chu kỳ); `src/lib/ml/rag.ts` BM25+recency · tiêm prompt 6 agent LLM (chu kỳ + single-run) · A13 nâng cấp · ml/status field `rag`. |
 | 2026-10-10 | **v0.8.1 — Phiên #81 ML_OPS_BLUEPRINT Giai đoạn B (31 model — 0 model mới, 0 migrate):** (1) `MlModel.kind` + giá trị `dl-gru` (B3 — chỉ tạo khi cổng bằng chứng B2 PASS, luôn `archived` shadow); (2) `MlModel.meta` JSON thêm trường: `featureSet` ("v2-lag16" B1 — bản cũ thiếu → đọc "v1-lag10") · `gateVerdict` (B2 — verdict cổng của bản lag-16) · `window` (B3 — chỉ dl-gru); (3) AppSetting keys mới: **`ml-gate`** (verdict cổng + ΔBrier CI + rank-IC 16 đặc trưng + autocorr — ghi bởi `scripts/ml-evidence-gate.ts`) · **`ml-gru`** (kill-switch tầng 1 `enabled` off mặc định + shadow rolling Brier — chỉ tồn tại khi dl-gru được train); (4) §6.23 bảng bổ sung dòng `meta` (PIT P1-2 + featureHist A3 + các trường B — trước đó chỉ ghi ở changelog) + mô tả weights arch chuỗi ("10-16-8-3" cũ \| "16-24-12-3" v2-lag16 \| "gru16-24w20"); (5) AuditLog action mới `ML_GATE` (swap serving khi cổng PASS qua ΔBrier) + `ML_GRU_KILL` (kill-switch tầng 2) — cột String sẵn có, 0 migrate. Đo thật: bản v13-v18 dl-mlp v2-lag16 archived (v13 kèm `gateVerdict: FAIL` — serving v8 giữ theo cổng) · AppSetting `ml-gate` verdict FAIL ΔBrier CI [+0,0046; +0,0079] |
 | 2026-10-08 | **v0.7.2 — DATA_PLATFORM_BLUEPRINT P2 (phiên #62, 29 → 31 model):** (1) **§6.29 `FeatureValue`** `{key unique, value String JSON, computedAt, expiresAt}` + index expiresAt — cache đặc trưng 2 lớp L1 process + L2 bảng (kỷ luật §6: KHÔNG Redis); topByAdtv wrap cache TTL 10' + invalidation chủ động tại MỌI đường ghi Bar; đo: chu kỳ ổn định 0-45ms (trước 750-850ms); (2) **§6.30 `NotificationOutbox`** `{channel WEBHOOK/EMAIL, target, subject, payload, status PENDING_EGRESS/SENT/FAILED, attempts, lastAttemptAt, lastError, sentAt}` + index (status, createdAt DESC) — hộp thư đi S1 pattern pending-egress như finfo, tự retry mỗi chu kỳ + POST /api/notify; cấu hình AppSetting `notify`; kèm P2-2 (news reliability trong DataSourceStatus meta.reliability — 0 bảng mới) + P2-4 (overlay AppSetting `vn-holidays` — 0 bảng mới); chi tiết xem DATA_PLATFORM_BLUEPRINT Changelog v1.6 |
 | 2026-10-08 | **v0.7.1 — fixbug #61 (F-612R-03/04, 0 đổi schema):** (1) §7 Enum Dictionary sửa **12 → 13 enum** + bổ sung dòng `CorporateEventKind` thiếu (SPLIT/BONUS/DIVIDEND/RESTATE — làm rõ `CorporateEvent.status`/`ForeignFlow.mode` là String validate tầng code, không phải enum); (2) đồng bộ 2 chỗ blueprint §5 P1 ghi "detail Json / checks Json" → "String (JSON-hoá)" đúng schema thật — chi tiết vòng rà + findings xem DATA_PLATFORM_BLUEPRINT Changelog v1.5 |
