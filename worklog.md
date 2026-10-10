@@ -2653,3 +2653,20 @@ Stage Summary:
 - Findings Fixbug-B: 2 (P1:1 · P2:1) — F-B811-01 toast nói đúng lý do promotionReason · F-B811-02 buildTrainingSequences start index — cả hai vá + tái hiện PASS. Vòng 2 + Vòng Xác Nhận sạch.
 - Sản phẩm: 12 file sửa + 3 file mới (gru.ts · ml-evidence-gate.ts · 4 screenshot bằng chứng) · 0 model DB mới · 0 migrate · AppSetting keys ml-gate (đã ghi verdict FAIL) + ml-gru (chưa tồn tại — off mặc định).
 - Bài học dữ liệu thật quan trọng nhất: ở tần suất NGÀY, thêm quá khứ explicit (lag/đạo hàm) KHÔNG cải thiện chất lượng xác suất — CI ΔBrier hoàn toàn dương. Lớp chuỗi chỉ đáng mở khi có intraday 5-phút (đúng dự đoán blueprint §0.4/B4 — "không phải bây giờ ≠ không bao giờ", re-đo mỗi quý).
+
+---
+Task ID: 82-ML-STATUS
+Agent: main-orchestrator (Z.ai Code)
+Task: Kiểm chứng trạng thái toàn bộ nhóm Học máy sau Giai đoạn B (#81) — trả lời user "nhóm học máy đã hoàn thành chưa, phase nào còn, việc tiếp theo là gì"
+
+Work Log:
+- Đọc worklog #79/#80/#81 + ML_OPS_BLUEPRINT v1.2 + ML_LEARNING_BLUEPRINT v1.0.1 + Fixbug.md + worklog tail (Task 75→81).
+- Đo DB Supabase (env -u DATABASE_URL): BanditEvent=0 (đúng thiết kế — phiếu đầu tiên chín 2026-10-13) · 6 arm Beta(1,1) pulls=0 · AppSetting ml-gate verdict FAIL · SERVING dl-mlp v8 + rl-q v13 · 31 MlModel · 38 assessment · 4 AuditLog ML_SETTLE toàn 0/0 idempotent.
+- Khảo cổ anomaly ML_SETTLE 16:15:07Z thứ 7 (23:15 ICT): xác nhận KHÔNG phải bug — file guard T7/CN lưu 16:03:52, engine boot 16:12:07 (SAU edit), settleDue() toán học chặn dow=6; audit đó là curl smoke "settle 200 idempotent" Vòng 2 fixbug #80 (Vòng 2 đếm "AuditLog 4 dòng" khớp đúng). Engine sống (PID 12844 bun --hot, news 15ph tick đều, log.1 tươi 19:12Z).
+- Đo cổng L4 bằng chính máy analytics (loadSegmentBaskets 500 phiên + buildDatedBasketIndex + regimeTimeline, toàn lịch sử 2013-01-02→2026-10-09 = 3.434 phiên, 10 mã rổ top ADTV): BULL 1907 ✓ · BEAR 821 ✓ · VOLATILE 566 ✓ · SIDEWAYS 140 ✗ (<250) → cổng L4 chưa mở đủ 4/4 regime.
+- Kiểm kê cổng còn lại: L1 rag.ts + model RetrievalLog CHƯA tồn tại (cổng = duyệt user, đã có #51 — chờ hiệu lệnh) · L3 phụ thuộc L1 + 30 ngày RetrievalLog · L5 cần ≥3 tháng BanditEvent + ≥200 phiếu confidence (hiện 0, đồng hồ chạy từ 10-13) · IntradayBar/QuoteHistory chưa có trong schema (chìa khoá mở lại cổng B2/GRU).
+- git status sạch (toàn bộ #81 đã push origin/main) · AGENT_CYCLE 240ph + settle 16:15 ICT + retrain CN 04:00 + drift PSI tự chạy, 0 việc tay · dev.log API 200 chảy liên tục.
+
+Stage Summary:
+- KẾT LUẬN: ML_OPS (A+B) HOÀN TẤT triệt để — A fixbug #80 sạch (4 P2 vá) · B fixbug #81 sạch (2 vòng + xác nhận) · GRU khoá theo B4 là KẾT QUẢ thiết kế của cổng bằng chứng (verdict FAIL đo thật), không phải việc dở dang. ML_LEARNING: L2 đã hấp thụ vào A2 và chạy; còn L1 (sẵn sàng khi user hiệu lệnh) · L3/L4/L5 chờ cổng dữ liệu thật.
+- Đề xuất việc tiếp theo: (1) L1 BM25 RAG ~200 dòng $0 — mở đồng hồ cho L3; (2) K1-K4 kế hoạch trader (nền sẵn: AgentTask model · BrokerAccount sandbox · chu kỳ 240ph đã bật); (3) EXECUTION_OPS P2 tự tiến hoá (E-P2-1..5, cổng P0-P1 ổn ≥2 tuần); (4) bảng intraday 5-phút để mở lại cổng chuỗi GRU (re-đo mỗi quý ~2027-01).
