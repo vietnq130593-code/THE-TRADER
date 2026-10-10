@@ -2414,3 +2414,44 @@ Stage Summary:
 - PAT GitHub ĐÚNG tài khoản vietnq130593-code, push thành công 0b11629 lên origin/main — toàn bộ công việc #72-#74 đã an toàn trên remote.
 - PAT Zen hoạt động: provider opencode-zen + space-bunny-free free-tier đã chạy agent thật đầu tiên sau khôi phục (cost $0) — hệ thống LLM 23 agents dùng lại đúng backbone như trước reset, chạy được cả ngoài sandbox.
 - .env đủ 15 biến (DATABASE_URL Supabase schema trader · 6 SUPABASE_* · GITHUB_PAT · OPENCODE_ZEN_API_KEY · LIVE_TRADING=false · MARKET_DATA_MODE/STRICT_SESSION · DCHART_BASE_URL · LLM_PROVIDER=auto).
+
+---
+Task ID: 76-ML-ARCH-1a
+Agent: explore-ml-arch (Z.ai Code)
+Task: Kiểm kê kiến trúc hiện tại NHÓM HỌC MÁY (ml group) — nền cho nâng cấp theo ML_LEARNING_BLUEPRINT; read-only, không sửa code.
+
+Work Log:
+- Đọc worklog các section ML liên quan (Grep theo Task ID): 34-BAYES · 35-ML/35-FE · 48-FIXBUG · 49-ARCH (chẩn đoán 4 chức năng) · 50-ARCH (soạn blueprint) · 51-IMPL (duyệt định hướng) · 64-PERF-P3 + 65-FIXBUG-r1a/r1b (bandit memo/TTL voteMemo 15s, ensureArms parallel 1 lần/process, settle reset cache).
+- Đọc trọn agent-roster.ts (5 nhóm: research 5 · control 3 · executive 4 · platform 4 · ml 7 — nhóm ml = learning-rag A13 · backtest A14 · rl-gym S3 · rl-policy A16 · dl-trainer A17 · rl-trainer A18 · model-registry A19, toàn kind "service", kèm config từng agent).
+- Đọc agent-service-runs.ts: 7 runner ML (runMlForecast gọi mlForecastEnsemble · runLearningRag chỉ ĐẾM broadcast/news · runBacktest equal-weight 90 phiên · runRlGym cộng dồn episodes mọi version · runRlPolicy policyStance từ Q-table serving · runDlTrainer metrics + predictProba 5 mã · runRlTrainer settlePendingRewards + banditSnapshot · runModelRegistry động từ MlModel + llmStatus).
+- Mổ lib ML: ensemble.ts (score = 0,7×(pUp−pDown) + 0,3×tanh(z), deadband 0,05, PROJ_WINDOW 60, fallback linreg ±1%) · nn.ts (MLP 10→16→8→3, Adam β1 0,9/β2 0,999/ε 1e-8, LR 0,01, batch 32, ≤60 epoch, patience 12, class-weight 1/freq, seed 42, split 80/20 theo thời gian) · rl.ts (Q-learning 48 state = trend×RSI4×mom5×exposure3, 3 action ±0,5, α 0,1 γ 0,95 ε 1→0,05 decay 0,99, 300 episode × 230 bước, reward = exposure×ret − 0,001|Δexp|, softmax temp 0,25) · bandit.ts (6 arm Beta(α+1,β+1), settle 5 phiên ngưỡng ±0,5%, FLAT khớp 0,7/sai 0,2, scan 30 assessment, voteMemo cap 128 + TTL cache 15s, ensureArms parallel) · features.ts (10 đặc trưng PIT, loadTopSeries topByAdtv HOSE-STOCK, ML_MAX_SAMPLES 60k, trainingWindowDigest SHA-256 windowHash).
+- API: GET /api/ml/status (4 query parallel + TTL cache) · POST /api/ml/train (cooldown 60s + 429 Retry-After, mutex in-flight F-612R-06, settle bandit trước train, 2 train tuần tự try/catch độc lập, saveModel $transaction archive+create, meta PIT windowHash).
+- UI: ml-panel.tsx 3 khối MLP/Q-learning/Bandit + nút Huấn luyện; hook use-ml.ts (refetch 30s, staleTime 15s, 404 no-retry, 429 Retry-After toast). Scorecard B8 (agents-workspace + research/scorecard.ts): hit-rate + Brier + đóng góp posterior + streak — KHÔNG Wilson CI, KHÔNG calibration bucket.
+- Schema prisma: MlModel (kind/version/status/weights/featureNorm/metrics/meta PIT/trainedAt, @@index [kind,status]) · BanditArm (agentCode unique, α/β/pulls/wins/lastRewardAt) · BanditEvent (assessmentId×agentCode unique, direction/castAt/settledAt/reward/confidence B8) · RiskQuantSnapshot (24 cột CRB — liên quan gián tiếp).
+- Đọc TRỌN docs/ML_LEARNING_BLUEPRINT.md v1.0.1 (183 dòng): status "ĐÃ ĐƯỢC DUYỆT (phiên #51) — KẾ HOẠCH TƯƠNG LAI, CHỜ KÍCH HOẠT THEO CỔNG DỮ LIỆU §6"; L1 BM25 RAG viết tay (k₁ 1,5 · b 0,75 · recency nửa đời 72h · cap 1.200 token · RetrievalLog) → L2 Wilson 95% CI + Brier Murphy decomposition + calibration bucket + agent×regime → L3 pgvector Supabase + RRF hybrid → L4 RL 48→192 state (4 bảng Q regime-conditioned, cổng ≥250 phiên/regime) → L5 AgentLesson chưng cất (1 LLM call/tháng, vòng kiểm chứng 60 ngày, kill-switch). Grep src: KHÔNG có BM25/RetrievalLog/KnowledgeAgent/AgentLesson/pgvector → 0/5 giai đoạn đã code; nền có sẵn: BanditEvent.confidence (L2), quant/regime.ts classifyRegime (L4), corpus 662 broadcast + 494 news.
+- Đo DB live (read-only SELECT): MlModel dl-mlp 8 version (v8 serving 2026-10-08, valAcc 39,42%, 60.000 mẫu, windowHash f0d09267…) · rl-q 5 version (v5 serving, stance "giảm" exposure 0, windowHash 2b47bb0e…) · BanditArm 6 arm toàn Beta(1,1) pulls=0 · BanditEvent=0 · MarketAssessment=35 → vòng học bandit chưa từng settle lần nào ở deployment này (latent đúng như review #65 ghi nhận).
+
+Stage Summary:
+- Bản kiểm kê 10 đầu mục hoàn chỉnh có bằng chứng file:dòng — nhóm ML = 7 service agents chạy ĐỢT B song song trong chu kỳ 23 agents (route.ts:62-64, 91-94); ml-forecast là CỬ TRI THỨ 6 của Bayes (evidence.ts:269-311) + cổng đồng thuận 80% B9 (consensus.ts) với weight × posteriorMean bandit; rl-policy là bằng chứng quant LR 1,4/1,0 w 0,5 (evidence.ts:486-513).
+- Điểm mạnh: thuật toán THẬT viết tay deterministic (MLP backprop+Adam, Q-learning, Thompson sampling), PIT window-hash, versioning $transaction, honest metrics (valAcc ~39-40% vs random 33%), scorecard Brier B8.
+- Khoảng trống (khớp chẩn đoán #49 + blueprint §0): tích luỹ tri thức = ĐẾM (A13), KHÔNG có RAG/BM25/semantic (L1/L3/L5 0 dòng code) · L2 thiếu Wilson CI + calibration (Brier có sẵn) · bandit 0 event settled → toàn posterior 0,5, weight học CHƯA tác dụng thực tế · backtest 1 chiến lược equal-weight 90 phiên, chưa có PIT backtest kiểm định ensemble/RL · RL 48 state tham mưu, chưa regime-conditioned · retrain thủ công (nút/POST), chưa có lịch.
+- Blueprint CHƯA triển khai bất kỳ giai đoạn nào (đúng cam kết "kế hoạch tương lai chờ cổng dữ liệu §6"); mọi nâng cấp kế tiếp nên lấy blueprint làm spec gốc.
+
+---
+Task ID: 76-ML-DOC-MAP
+Agent: main-orchestrator (Z.ai Code)
+Task: Đổi PAT GitHub mới + Phân tích kiến trúc nhóm Học máy & ánh xạ 4 tài liệu để nâng cấp (nhiệm vụ phân tích — 0 sửa code nguồn)
+
+Work Log:
+- PAT mới ghp_4m5••• (user cấp thay PAT #75): GET /user → 200 login vietnq130593-code (đúng tài khoản) · GET /repos/THE-TRADER → 200 push=true. Cập nhật ~/.git-credentials (600) + .env GITHUB_PAT · git fetch OK.
+- Phái 1 Explore subagent (76-ML-ARCH-1a — đã tự append worklog dòng 2418-2438) kiểm kê kiến trúc nhóm ML: 7 agent (learning-rag A13 · backtest A14 · rl-gym S3 · rl-policy A16 · dl-trainer A17 · rl-trainer A18 · model-registry A19) + 8 SERVICE_RUNNERS + ensemble 0,7/0,3 + bandit Thompson 6 arm + API/UI + schema + ML_LEARNING_BLUEPRINT v1.0.1 (đã duyệt #51, 0/5 giai đoạn triển khai).
+- Tự đọc lại TRỌN 79 trang 4 PDF (Machine Learning 20 · MATH 14 · Data Analytics 29 · DEEP LEARNING 16) — lần này theo thấu kính NHÓM ML (lần trước theo thấu kính nhóm Điều hành EXEC-DOC-MAP-1).
+- Kiểm chứng chéo độc lập (không tin mù subagent): roster.ts:19-22/86/292-376 ✓ nhóm 5 "ml — Phòng Học máy" 7 agent · ML_LEARNING_BLUEPRINT.md:5 status "ĐÃ ĐƯỢC DUYỆT (phiên #51)" ✓ · ensemble.ts:29-33 W_MLP=0,7/W_LINREG=0,3/deadband 0,05 ✓ · DB live: BanditArm 6 arm toàn alpha=1/beta=1/pulls=0 · BanditEvent=0 · MarketAssessment=35 · dl-mlp v8 serving valAcc 39,42% 60k mẫu 10 đặc trưng · rl-q v5 stance "giảm" exposure 0 · corpus RAG 662 broadcast + 494 news.
+- Tổng hợp báo cáo đầy đủ cho user: kiến trúc hiện tại (5 nhóm định vị + 7 agent + luồng dữ liệu Đợt B→Bayes/consensus) · chẩn đoán mạnh/yếu (điểm yếu số 1: tích luỹ tri thức = 0 dòng · số 2: bandit DORMANT 0 event chưa từng settle · số 3: kiểm định mỏng 1 chiến lược · số 4: MLP valAcc 39% sát baseline) · bản đồ 44+ cụm nội dung 4 tài liệu → 12 hướng nâng cấp nhóm ML (đánh thức vòng học + kiểm định thống kê Wilson/t-test/CLT n≥30 · L1 BM25 RAG · MLOps drift PSI + retrain lịch · Ridge/L2 + log-transform + robust scaling · AUC-PR/macro-F1/Brier-val · PCA/K-Means regime · GPT-4-as-judge cho L5 · SciPy curve_fit Holt qua Python worker...) · danh mục KHÔNG dùng có chủ đích (CNN/CV · R · agent framework Python · deep RL DQN...).
+- Đề xuất bước kế tiếp (chờ user duyệt): soạn docs/ML_OPS_BLUEPRINT.md v1.0 theo pattern EXECUTION_OPS (soạn→chốt→triển khai→fixbug), hấp thụ L1-L5 từ ML_LEARNING_BLUEPRINT đã duyệt + bổ sung các cụm mới từ 4 tài liệu.
+
+Stage Summary:
+- PAT GitHub mới hợp lệ đã cấu hình; fetch/push OK.
+- Kiến trúc nhóm ML đã đo trọn với bằng chứng file:dòng + DB live; phát kiến quan trọng nhất: vòng học bandit chưa từng đóng (0 event/35 assessment) — mọi nâng cấp học-from-kết-quả đều phụ thuộc đánh thức cơ chế này trước.
+- 4 tài liệu (79 trang) ánh xạ xong theo thấu kính ML — sẵn sàng làm nền cho ML_OPS_BLUEPRINT v1.0 khi user duyệt.
+- 0 sửa code nguồn; chỉ worklog.
