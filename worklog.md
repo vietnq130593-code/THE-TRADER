@@ -2475,3 +2475,20 @@ Stage Summary:
 - Khuyết điểm #76 được tự phê: chưa tách khung temporal 5 lớp · LSTM bị loại ngầm không cổng điều kiện · chưa định nghĩa cổng bằng chứng đo được · chưa nhận diện intraday là unlock lớp chuỗi.
 - Đề xuất chờ duyệt: ưu tiên L4 đánh thức vòng học (P0) → L1 đặc trưng lag + đo cổng (P1) → GRU gated (P2) — không code gì trước khi user duyệt.
 - 0 sửa code nguồn; chỉ worklog + commit.
+
+---
+Task ID: 78-ML-OPS-BLUEPRINT
+Agent: main-orchestrator (Z.ai Code)
+Task: Soạn docs/ML_OPS_BLUEPRINT.md v1.0 gộp Giai đoạn A+B theo chỉ đạo user + đo nhịp cập nhật dữ liệu Supabase (hàng ngày/hàng giờ)
+
+Work Log:
+- Đo nhịp dữ liệu Supabase (đọc DB + engine-state live, read-only): Bar EOD 15:45 ICT hằng ngày tự động — engine-state eodSyncDate=2026-10-10 · lastEodSyncAt 18:42 ICT · dữ liệu tới phiên 10-09 đủ 75 mã · Quote 76 dòng UPSERT latest-only (tick 10s chỉ lưu trạng thái cuối, KHÔNG chuỗi intraday) · News RSS 15 phút · Intl Yahoo failStreak 3 (theo dõi, không chặn) · chu kỳ agent scheduler TẮT (AGENT_CYCLE_MINUTES=0) · 4 PDF vẫn còn nguyên trong upload/ (sandbox reset không xoá).
+- Chẩn đoán SỬA CHÍNH vòng bandit so #77: cơ chế KHÔNG hỏng — assessment cũ nhất 10-06 mới có 3 phiên tương lai (settle cần 5, bandit.ts:250-252) → chốt đầu tiên tự nhiên rơi vào 10-13; NHƯNG settle không có lịch riêng (chỉ chạy trong chu kỳ agent Đợt B /agent-service-runs.ts:1138 hoặc nút train api/ml/train:235) mà scheduler chu kỳ đang TẮT → A1 cấp lịch là P0.
+- Soạn docs/ML_OPS_BLUEPRINT.md v1.0 (~230 dòng, pattern EXECUTION_OPS): §0 chẩn đoán đo ngày 10-10 (kèm bảng nhịp dữ liệu trả lời câu hỏi user) · §1 8 nguyên tắc bất biến · §2 ánh xạ tri thức 4 PDF → 12 cụm gắn hạng mục · §3 Giai đoạn A (A1 settle 16:15 ICT qua route POST /api/ml/settle + engine SETTLE_AT + AuditLog ML_SETTLE · A2 Wilson CI + Brier Murphy + calibration bucket + posterior trajectory + agent×regime vào scorecard B8 · A3 PSI 10-bucket histogram trong MlModel.meta + ngưỡng 0,1/0,25 · A4 retrain SUN:04:00 ICT + skip-guard windowHash) · §4 Giai đoạn B (B1 lag16 đặc trưng + MLP v9 arch 16-24-12-3 ~715 tham số · B2 cổng bằng chứng 3 phép đo: autocorr lag1-5 bootstrap CI, rank-IC Spearman từng đặc trưng, ΔBrier paired bootstrap 1000× — PASS/FAIL ghi AppSetting ml-gate · B3 GRU-24 window-20 ~2,6k tham số viết tay gru.ts, shadow 60 phiên, W 0,5/0,3/0,2, kill-switch 2 tầng · B4 đường khi cổng đóng: re-đo mỗi quý hoặc khi intraday) · §5 kiến trúc dữ liệu + schema additive (0 model mới) · §6 cổng kích hoạt tổng hợp gộp L1-L5 cũ + cổng GRU mới · §7 giao thức triển khai+fixbug 3 vòng · §8 5 câu hỏi mở chờ trader · §9 changelog.
+- Không triển khai code — đúng cam kết "soạn → chốt → triển khai"; 5 câu hỏi mở §8 cần trader quyết trước khi vào A.
+
+Stage Summary:
+- ML_OPS_BLUEPRINT v1.0 hoàn chỉnh chờ duyệt — gộp A+B như user chỉ đạo; mọi hạng mục gắn nguồn [ML]/[MATH]/[DA]/[DL] + bằng chứng đo ngày 10-10.
+- Trả lời câu hỏi dữ liệu bằng chứng sống: HÀNG NGÀY có (15:45 ICT tự động, hôm nay đã chạy, PIT kèm theo); HÀNG GIỜ chỉ là "trạng thái cuối" mỗi 10s (Quote upsert latest-only — không có chuỗi lịch sử intraday); EOD là độ phân giải chuỗi giá duy nhất → lớp chuỗi GRU bị chặn bởi dữ liệu, mở khi MARKET_EXPANSION intraday.
+- Phát kiến quan trọng: bandit không hỏng mà "chưa kịp + không có lịch" — chốt đầu tiên 10-13 nếu A1 chạy.
+- 0 sửa code nguồn ngoài docs/; commit+push theo PAT store.
