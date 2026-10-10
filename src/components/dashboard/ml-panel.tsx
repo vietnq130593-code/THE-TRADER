@@ -11,6 +11,7 @@ import {
   Loader2,
   RefreshCw,
   Scale,
+  ShieldCheck,
   Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +44,8 @@ import { isMlNotFound, useMlStatus, useTrainMl } from "@/hooks/use-ml";
 import type {
   BanditArm,
   DlMlpMetrics,
+  MlGateStatus,
+  MlGruStatus,
   MlModelStatus,
   MlStatusResponse,
   RlQMetrics,
@@ -66,6 +69,11 @@ import { cn } from "@/lib/utils";
  * A3 (phiên #79 — ML_OPS_BLUEPRINT §3): khối MLP thêm badge "Drift" + chi
  * tiết PSI top-3 chiều (đọc field additive `drift` của /api/ml/status — hook
  * use-ml chung KHÔNG sửa theo ràng buộc task, đọc qua cast cục bộ tolerant).
+ *
+ * B1/B2/B3/B4 (phiên #81 — ML_OPS_BLUEPRINT §4): khối MLP thêm badge bộ
+ * đặc trưng (v1-lag10 / v2-lag16) + khối mới "Cổng bằng chứng chuỗi" —
+ * verdict ΔBrier CI hiển thị TRUNG THỰC (B4: FAIL không giấu) + dòng trạng
+ * thái GRU giọng thứ ba (chưa triển khai khi cổng chưa mở).
  */
 
 /* ─────────────────── A3 · types field `drift` (local — không sửa hook) ─────────────────── */
@@ -100,6 +108,11 @@ const nf1 = new Intl.NumberFormat("vi-VN", {
 const nf2 = new Intl.NumberFormat("vi-VN", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
+});
+/** 4 chữ số thập phân — ΔBrier/CI cổng bằng chứng (B2 #81). */
+const nf4 = new Intl.NumberFormat("vi-VN", {
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
 });
 
 /** "61,0%" — nhập tỷ lệ 0..1 → ×100. */
@@ -223,6 +236,9 @@ export function MlPanel() {
   const drift =
     (data as (MlStatusResponse & { drift?: DriftStatus }) | undefined)?.drift ??
     null;
+  // B2/B3 (#81) — field additive gate/gru (hook đã có type — tolerant).
+  const gate = data?.gate ?? null;
+  const gru = data?.gru ?? null;
 
   return (
     <Card className="gap-4">
@@ -256,6 +272,11 @@ export function MlPanel() {
           <>
             {/* Khối 1 — MLP dự báo 5 phiên (học sâu) */}
             <MlpBlock model={data?.dlMlp ?? null} drift={drift} />
+
+            <Separator />
+
+            {/* B2/B3/B4 (#81) — Cổng bằng chứng chuỗi + GRU giọng thứ ba */}
+            <GateBlock gate={gate} gru={gru} />
 
             <Separator />
 
@@ -399,6 +420,7 @@ function MlpBlock({
         </h3>
         {model && <VersionBadge version={model.version} />}
         {model && <StatusBadge status={model.status} />}
+        {model && <FeatureSetBadge featureSet={model.featureSet} />}
         {model && <DriftBadge drift={drift} />}
         {model && <TrainedAtCaption trainedAt={model.trainedAt} />}
       </div>
@@ -517,6 +539,138 @@ function DriftDetail({ drift }: { drift: DriftStatus | null }) {
         </p>
       )}
     </div>
+  );
+}
+
+/* ───────────── B1/B2/B3/B4 · Cổng bằng chứng chuỗi + GRU (#81) ───────────── */
+
+/** Badge bộ đặc trưng — v2-lag16 nổi bật (secondary), v1-lag10 muted trung
+ *  thực (bản serving train trước B1). Giá trị lạ hiển thị nguyên văn. */
+function FeatureSetBadge({ featureSet }: { featureSet: string | null | undefined }) {
+  const label = featureSet ?? "v1-lag10";
+  const isV2 = label === "v2-lag16";
+  return (
+    <Badge
+      variant={isV2 ? "secondary" : "outline"}
+      className={cn(
+        "font-mono text-[10px]",
+        !isV2 && "text-muted-foreground"
+      )}
+      title={isV2 ? "Bộ 16 đặc trưng v2-lag16: 6 chiều lag/đạo hàm mới (B1)" : "Bộ 10 đặc trưng v1 (bản train trước B1)"}
+    >
+      {label}
+    </Badge>
+  );
+}
+
+/** Khối Cổng bằng chứng (B2) + trạng thái GRU (B3/B4) — hiển thị TRUNG
+ *  THỰC cả khi cổng KHÔNG mở (B4: "không phải bây giờ ≠ không bao giờ").
+  * Ép mobile an toàn: các hàng flex truncate, badge shrink-0. */
+function GateBlock({ gate, gru }: { gate: MlGateStatus | null; gru: MlGruStatus | null }) {
+  return (
+    <section aria-labelledby="ml-gate-heading" className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3
+          id="ml-gate-heading"
+          className="flex items-center gap-2 text-sm font-semibold"
+        >
+          <ShieldCheck className="size-4 text-muted-foreground" aria-hidden="true" />
+          Cổng bằng chứng chuỗi (B2)
+        </h3>
+      </div>
+
+      {!gate || !gate.available ? (
+        <EmptyNote>
+          Cổng chưa đo — {gate && "reason" in gate && gate.reason
+            ? gate.reason
+            : "chạy scripts/ml-evidence-gate.ts sau khi bản v2-lag16 được huấn luyện"}
+          . Mô hình chuỗi (GRU) chỉ mở khi số liệu xác quyết, không mở vì “hay
+          để có” (nguyên tắc §1.8).
+        </EmptyNote>
+      ) : (
+        <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {gate.verdict === "PASS" ? (
+              <Badge className="bg-emerald-600/15 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-600/15 dark:text-emerald-400">
+                Cổng chuỗi: MỞ
+              </Badge>
+            ) : (
+              <Badge className="bg-rose-600/15 text-[10px] font-semibold text-rose-700 hover:bg-rose-600/15 dark:text-rose-400">
+                Cổng chuỗi: CHƯA mở
+              </Badge>
+            )}
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              ΔBrier CI 95% [{nf4.format(gate.deltaBrier.ciLow)}; {nf4.format(gate.deltaBrier.ciHigh)}]
+              <span className="mx-1">·</span>
+              {gate.newFeaturesSignificant}/6 đặc trưng mới có ý nghĩa
+            </span>
+            {gate.measuredAt ? (
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                Đo {formatDateTime(gate.measuredAt)}
+              </span>
+            ) : null}
+          </div>
+
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            ΔBrier = Brier(v2-lag16) − Brier(v1-lag10) trên cùng cửa sổ dữ liệu
+            (paired bootstrap 1.000×) — âm nghĩa là bộ 16 đặc trưng thắng. {" "}
+            {gate.verdict === "PASS"
+              ? gate.passedVia === "deltabrier"
+                ? "V2 thắng có ý nghĩa thống kê."
+                : "Mở nhờ ≥ 3/6 đặc trưng mới mang thông tin."
+              : "CI chạm 0 hoặc không đủ đặc trưng mới có ý nghĩa — mặc định an toàn: FAIL."}{" "}
+            {gate.swappedServing
+              ? "Đã hoán đổi serving sang v2-lag16."
+              : "Serving giữ nguyên cho tới khi cổng xử quyết."}
+          </p>
+
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            Re-đo mỗi quý, hoặc ngay khi có dữ liệu intraday 5-phút (B4 — “không
+            phải bây giờ ≠ không bao giờ”).
+          </p>
+        </div>
+      )}
+
+      {/* GRU giọng thứ ba — B3/B4 trung thực */}
+      <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-medium">GRU giọng thứ ba (B3)</span>
+          {!gru ? (
+            <Badge variant="outline" className="shrink-0 text-[10px] text-muted-foreground">
+              chưa triển khai — chờ cổng
+            </Badge>
+          ) : (
+            <>
+              <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                v{gru.version}
+              </Badge>
+              <Badge
+                className={cn(
+                  "shrink-0 text-[10px]",
+                  gru.enabled
+                    ? "bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/15 dark:text-emerald-400"
+                    : "bg-amber-500/15 text-amber-700 hover:bg-amber-500/15 dark:text-amber-400"
+                )}
+              >
+                {gru.enabled ? "đang phục vụ (0,5/0,3/0,2)" : "shadow — chưa vào điểm"}
+              </Badge>
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                shadow {nf0.format(gru.shadowSettled)}/60 phiên
+                {gru.gruBrier != null && gru.mlpBrier != null
+                  ? ` · Brier GRU ${nf4.format(gru.gruBrier)} vs MLP ${nf4.format(gru.mlpBrier)}`
+                  : ""}
+                {gru.consecutiveWorse > 0 ? ` · tệ hơn ${gru.consecutiveWorse} phiên liên tiếp` : ""}
+              </span>
+            </>
+          )}
+        </div>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          Khi được triển khai: GRU-24 (3.179 tham số, window 20 phiên) dự báo
+          shadow 60 phiên, chỉ lên giọng thứ ba khi Brier ≤ MLP, kill-switch tự
+          hạ khi tệ hơn 5 phiên liên tiếp.
+        </p>
+      </div>
+    </section>
   );
 }
 

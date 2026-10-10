@@ -1,8 +1,8 @@
 # ML OPS BLUEPRINT — NHÓM HỌC MÁY: ĐÁNH THỨC VÒNG PHẢN HỒI, ĐẶC TRƯNG CHUỖI & CỔNG BẰNG CHỨNG GRU
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/ML_OPS_BLUEPRINT.md` · **Version:** 1.1 · **Created:** 2026-10-10 (phiên #78 — gộp **Giai đoạn A + B thành MỘT blueprint** theo chỉ đạo của trader: "Gộp cả A và B vào trong 1 blueprint đi") · **v1.1:** 2026-10-10 (phiên #79 — trader tiết lộ 4 kế hoạch tương lai K1-K4 + uỷ quyền chọn §8 → 5/5 DUYỆT, triển khai Giai đoạn A)
-> **Status:** **§8 ĐÃ TRẢ LỜI (phiên #79 — trader uỷ quyền) — TRIỂN KHAI GIAI ĐOẠN A (P0) THEO GIAO THỨC §7**
+> **Document:** `docs/ML_OPS_BLUEPRINT.md` · **Version:** 1.2 · **Created:** 2026-10-10 (phiên #78 — gộp **Giai đoạn A + B thành MỘT blueprint** theo chỉ đạo của trader: "Gộp cả A và B vào trong 1 blueprint đi") · **v1.1:** 2026-10-10 (phiên #79 — trader tiết lộ 4 kế hoạch tương lai K1-K4 + uỷ quyền chọn §8 → 5/5 DUYỆT, triển khai Giai đoạn A) · **v1.2:** 2026-10-10 (phiên #81 — triển khai Giai đoạn B: B1 v2-lag16 · B2 cổng đo thật **verdict FAIL** · B3 GRU gated khoá · B4 đường cổng đóng)
+> **Status:** **GIAI ĐOẠN A ✅ TRIỂN KHAI + FIXBUG #80 TRIỆT ĐỂ · GIAI ĐOẠN B ✅ TRIỂN KHAI (#81) — CỔNG B2 VERDICT FAIL: GRU KHOÁ THEO B4 (re-đo mỗi quý / khi có intraday)**
 > **Nguồn kế thừa:** review `77-ML-TEMPORAL-REVIEW` (khung temporal 5 lớp + câu hỏi LSTM) · kiểm kê `76-ML-ARCH-1a` (7 agents + 8 runners + bằng chứng file:dòng) · ánh xạ `76-ML-DOC-MAP` (4 tài liệu 79 trang theo thấu kính ML) · hấp thụ **L1–L5 đã duyệt** từ [ML_LEARNING_BLUEPRINT.md](./ML_LEARNING_BLUEPRINT.md) v1.0.1 (phiên #51)
 > **Nguồn tri thức (4 tài liệu user tải lên, `upload/` gitignored):** `Machine Learning.pdf` 20 trang **[ML]** · `MATH.pdf` 14 trang **[MATH]** · `Data Analytics.pdf` 29 trang **[DA]** · `DEEP LEARNING.pdf` 16 trang **[DL]** — mọi hạng mục gắn nhãn nguồn kèm cụm nội dung.
 > **Cross-refs:** [EXECUTION_OPS_BLUEPRINT.md](./EXECUTION_OPS_BLUEPRINT.md) (pattern triển khai P0→P1 + giao thức fixbug 3 vòng đối kháng) · [DATA_PLATFORM_BLUEPRINT.md](./DATA_PLATFORM_BLUEPRINT.md) (FeatureContract P0-3 · PIT P1-2 · rổ topByAdtv P0-2) · [MARKET_EXPANSION_BLUEPRINT.md](./MARKET_EXPANSION_BLUEPRINT.md) (B7 ensemble · B8 scorecard/Brier · B9 cổng đồng thuận) · [CONTROL_RISK_QUANT_BLUEPRINT.md](./CONTROL_RISK_QUANT_BLUEPRINT.md) (CRB-1 σ regime) · [DB_SCHEMA.md](./DB_SCHEMA.md) · [Fixbug.md](../Fixbug.md)
@@ -190,13 +190,14 @@ Lưu:      MlModel kind "dl-gru" · meta {window:20, featureSet:"v2-lag16", gate
 2. Sau 60 phiên: chỉ khi Brier-shadow ≤ Brier-MLP → lên giọng thứ 3: `W_MLP 0,5 · W_LINREG 0,3 · W_GRU 0,2` (điều chỉnh một lần khi swap, ghi changelog meta).
 3. **Kill-switch 2 tầng**: AppSetting `ml-gru` (off mặc định) + A19 tự hạ (archive) khi Brier serving GRU tệ hơn MLP 5 phiên liên tiếp.
 
-**Nghiệm thu B3:** (1) BPTT gradient check trên văn cảnh giả lập (đạo hàm số học khớp解析 4 chữ số); (2) train 60k × window 20 < 20 phút CPU Bun; (3) deterministic seed; (4) MLP/linreg KHÔNG đổi khi GRU off (bit-flip test: tắt AppSetting → ensemble ra đúng kết quả cũ); (5) kill-switch hạGRU trong 1 chu kỳ.
+**Nghiệm thu B3:** (1) BPTT gradient check trên văn cảnh giả lập (đạo hàm số học khớp GIẢI TÍCH 4 chữ số — đo thật #81: rel ≤ 2,1e-6 trên 60 vị trí × 13 khối); (2) train 60k × window 20 < 20 phút CPU Bun; (3) deterministic seed; (4) MLP/linreg KHÔNG đổi khi GRU off (bit-flip test: tắt AppSetting → ensemble ra đúng kết quả cũ); (5) kill-switch hạGRU trong 1 chu kỳ.
 
 ### B4 — Đường khi cổng KHÔNG mở (kỷ luật "không phải bây giờ ≠ không bao giờ")
 
 - Verdict FAIL hiển thị trung thực trên UI + ghi trong docs này (changelog) — không giấu.
+- **KẾT QUẢ ĐO THẬT #81 (2026-10-10, windowHash 30f2d982fa29…, 60k mẫu, val 12k):** ΔBrier = Brier(v2-lag16) − Brier(v1-lag10 cùng cửa sổ) = **+0,0062, CI 95% [+0,0046; +0,0079]** — hoàn toàn >0: bộ 16 đặc trưng THUA về chất lượng xác suất trên cùng dữ liệu. Rank-IC: **0/6** đặc trưng mới đạt |IC| ≥ 0,02 với CI loại trừ 0 (lag1 −0,012 · ΔRSI5 −0,018 — đều dưới ngưỡng). Autocorr lag-1 0,009 CI [−0,017; +0,037] vắt qua 0 — **không còn tín hiệu tuần tự đáng kể ở tần suất ngày**, đúng chẩn đoán §0.4. → **VERDICT: FAIL — GRU khoá, serving giữ v8-lag10 (valAcc 0,3942), UI ml-panel hiển thị "Cổng chuỗi: CHƯA mở" + ΔBrier CI thật.**
 - Chỉ số re-đo: mỗi quý HOẶC ngay khi MARKET_EXPANSION bật lưu chuỗi intraday 5-phút (`QuoteHistory/IntradayBar`) — đó là lúc lớp chuỗi gần như chắc chắn mở (SNR tần suất phút >> ngày, sequence length thật sự dài).
-- Kỷ luật: không "thử GRU cho biết" ngoài cổng — mọi mô hình mới qua cùng format cổng (nguyên tắc §1.8).
+- Kỷ luật: không "thử GRU cho biết" ngoài cổng — mọi mô hình mới qua cùng format cổng (nguyên tắc §1.8). `POST /api/ml/train {target:"dl-gru"}` trả 400 kèm lý do khi cổng chưa mở.
 
 ## §5. Kiến trúc dữ liệu & nhịp (đo 2026-10-10 — nền cho A/B)
 
@@ -212,11 +213,11 @@ Xem bảng đo §0.4. Ba hệ quả kiến trúc:
 
 | Bước | Cổng mở khi | Dữ liệu đo |
 |---|---|---|
-| Giai đoạn A (A1-A4) | **ĐÃ DUYỆT (phiên #79 — uỷ quyền chọn theo K1-K4, xem §8)** | — |
-| B1 (đặc trưng v2) | A hoàn tất (A1 chạy thật ≥ 1 settle) | AuditLog ML_SETTLE |
-| B2 (cổng bằng chứng) | B1 train xong v9 | windowHash khớp v8 |
-| **B3 (GRU)** | **B2 PASS** (ΔBrier CI < 0 hoặc ≥3/6 đặc trưng mới |IC| ≥ 0,02) | gate verdict AppSetting |
-| GRU lên ensemble | Shadow 60 phiên Brier ≤ MLP | A19 rolling Brier |
+| Giai đoạn A (A1-A4) | **ĐÃ DUYỆT (phiên #79) + ĐÃ TRIỂN KHAI + FIXBUG #80 TRIỆT ĐỂ** | — |
+| B1 (đặc trưng v2) | **ĐÃ TRIỂN KHAI #81** (A1 chạy thật ≥ 1 settle) | AuditLog ML_SETTLE · bản v13+ v2-lag16 đã train |
+| B2 (cổng bằng chứng) | **ĐÃ ĐO #81 — verdict FAIL** (train xong v2-lag16, windowHash khớp) | AppSetting `ml-gate` — ΔBrier CI [+0,0046; +0,0079] · 0/6 đặc trưng mới có ý nghĩa |
+| **B3 (GRU)** | **KHOÁ (B2 FAIL)** — code gru.ts sẵn sàng gated, chỉ train khi verdict PASS | `POST /api/ml/train {target:"dl-gru"}` chặn 400 trung thực |
+| GRU lên ensemble | Shadow 60 phiên Brier ≤ MLP (chỉ khi B3 mở) | A19 rolling Brier |
 | L1 BM25 RAG | Trader duyệt (đã có #51) | — |
 | L2 analytics | Sau A2 ≥ 1 chu kỳ (đã nằm trong A2) | Wilson hiển thị đúng |
 | L3 pgvector | RetrievalLog ≥ 30 ngày & RAG dùng ≥ 10% chu kỳ | truy vấn RetrievalLog |
@@ -253,5 +254,6 @@ Xem bảng đo §0.4. Ba hệ quả kiến trúc:
 
 | Version | Ngày | Nội dung |
 |---|---|---|
+| 1.2 | 2026-10-10 (phiên #81) | **TRIỂN KHAI GIAI ĐOẠN B** — B1: `features.ts` v2-lag16 (10→16 chiều, 6 lag/đạo hàm PIT-safe, 10 chiều đầu giữ nguyên — v8 serving đọc x[0..9] tương thích ngược) · `nn.ts` tham số hoá arch (16→24→12→3 = 747 tham số, fromJSON nạp cả "10-16-8-3" cũ) · train route meta.featureSet + promotion guard featureSet-aware (khác bộ đặc trưng chỉ lên serving khi cổng PASS) + skip-guard so hash VÀ featureSet · status route thêm field `dlMlp.featureSet` + `gate` + `gru` (additive) · UI badge featureSet + khối "Cổng bằng chứng chuỗi". B2: `scripts/ml-evidence-gate.ts` (autocorr lag 1-5 + rank-IC 16 đặc trưng + ΔBrier paired bootstrap 1.000× — deterministic seed 20261011, chạy 2 lần cùng số liệu) → **VERDICT FAIL** (ΔBrier CI [+0,0046; +0,0079] > 0 · 0/6 đặc trưng mới có ý nghĩa) → AppSetting `ml-gate` + meta.gateVerdict · serving giữ v8 (không swap). B3: `gru.ts` GRU-24 viết tay BPTT đầy đủ (3.179 tham số, gradient check numeric khớp giải tích rel ≤ 2,1e-6) + ensemble giọng thứ ba GATED (shadow 60 phiên + kill-switch 2 tầng AppSetting `ml-gru` off mặc định + bit-flip verify không model → ensemble ra kết quả cũ) + train target dl-gru chặn 400 khi cổng FAIL. B4: hiển thị trung thực trên UI + ghi §4 B4 kết quả đo. Nghiệm thu: train 2 lần deterministic (valAcc 0,395 · epochs 24 khớp tuyệt đối) · windowHash không đổi giữa v13-lag16 và v12-lag10 (cùng dữ liệu khác đặc trưng) · skip-guard skip khi hash+featureSet trùng · GRU 400 kèm verdict · E2E desktop+mobile 0 console error. Fixbug-B Vòng 1: F-B811-01 toast promoted=false nói đúng lý do (thêm promotionReason — trước hiện "39,5% < 39,4%" sai sự thật khi lý do là cổng featureSet) · F-B811-02 buildTrainingSequences khởi đầu t warmup+W−1 (19 phiên đầu mỗi mã từng bị bỏ âm thầm). |
 | 1.1 | 2026-10-10 (phiên #79) | Trader tiết lộ 4 kế hoạch tương lai (K1 cơ chế thử nghiệm tiền ảo · K2 nút Chạy agent = chế độ liên tục · K3 Nhiệm vụ = công việc ngày/tuần · K4 Ban Điều hành giao nhiệm vụ) + uỷ quyền chọn §8 → 5/5 DUYỆT (Q3: bật `AGENT_CYCLE_MINUTES=240` làm cầu nối K2) — bắt đầu triển khai Giai đoạn A. Sửa chi tiết §5: AuditLog.action là String (0 migrate). |
 | 1.0 | 2026-10-10 (phiên #78) | Soạn bản đầu — gộp Giai đoạn A (đánh thức vòng phản hồi: A1 settle lịch · A2 Wilson/Brier/calibration · A3 PSI drift · A4 retrain Chủ nhật) + Giai đoạn B (B1 lag16 · B2 cổng bằng chứng bootstrap · B3 GRU-24 gated shadow kill-switch · B4 đường khi cổng đóng) + đo nhịp dữ liệu Supabase §0.4 + hấp thụ L1-L5 cổng từ ML_LEARNING_BLUEPRINT v1.0.1. Chờ trader duyệt §8. |

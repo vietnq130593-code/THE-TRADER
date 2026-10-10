@@ -813,20 +813,21 @@ Báo cáo tài chính từ **finfo VNDIRECT** (`src/lib/fundamentals.ts`) — pi
 
 **Relations:** `instrument` (n-1, Cascade). **Indexes:** `@@unique([instrumentId, period, year])` — một mã một kỳ đúng một dòng (upsert idempotent, MERGE bổ sung trường non-null); `@@index([instrumentId, year(sort: Desc)])` — bản mới nhất cho valuation block (`latestFundamentals` — trong cùng năm ưu tiên FY → Q4 → Q3 → Q2 → Q1, chỉ trả dòng mode `real`). **Retention:** giữ toàn bộ lịch sử các kỳ; ingest hằng tuần (Chủ nhật ICT trong runDataCollector, rate-limit 500ms/request, cap 150 mã).
 
-### 6.23 `MlModel` — Mô hình học máy đã huấn luyện (phiên #35)
+### 6.23 `MlModel` — Mô hình học máy đã huấn luyện (phiên #35; meta mở rộng #60/#79/#81)
 
 | Field | Type | Constraints / Default | Mô tả |
 |---|---|---|---|
 | `id` | String | PK, `cuid()` | Định danh duy nhất |
-| `kind` | String | — | `dl-mlp` \| `rl-q` |
+| `kind` | String | — | `dl-mlp` \| `rl-q` \| **`dl-gru` (B3 #81 — chỉ tạo khi cổng B2 PASS, luôn `archived` shadow)** |
 | `version` | Int | — | Số phiên bản — mỗi lần train tạo bản mới, bản cũ cùng kind chuyển `archived` |
 | `status` | String | default `"serving"` | `serving` \| `archived` (versioning) |
-| `weights` | String | — | JSON trọng số (MLP layers \| Q-table 48×3) |
-| `featureNorm` | String | nullable | JSON z-score mean/std chuẩn hoá đặc trưng (MLP) |
-| `metrics` | String | — | JSON: `epochs/samples/trainAcc/valAcc/valLoss/topSymbols` (MLP) \| `episodes/epsilonEnd/avgReward/stance` (RL) |
+| `weights` | String | — | JSON trọng số (MLP layers — arch ghi trong JSON: "10-16-8-3" bản cũ \| "16-24-12-3" v2-lag16 \| GRU "gru16-24w20" \| Q-table 48×3) |
+| `featureNorm` | String | nullable | JSON z-score mean/std chuẩn hoá đặc trưng (MLP/GRU) |
+| `metrics` | String | — | JSON: `epochs/samples/trainAcc/valAcc/valLoss/topSymbols` (MLP) \| `episodes/epsilonEnd/avgReward/stance` (RL) \| `params/window` (GRU) |
+| `meta` | String | nullable | **JSON (P1-2 #60 + A3 #79 + B #81)**: `windowHash` SHA-256 + `trainDateFrom/To` + `samples/symbols/horizonDays/featureCount` (PIT) · `featureHist {edges[9], train[10]}` (A3 — hợp đồng PSI, số chiều theo bộ đặc trưng) · **`featureSet` (B1 #81: "v2-lag16" — bản cũ thiếu → đọc "v1-lag10")** · **`gateVerdict` (B2 #81 — verdict cổng của bản lag-16)** · `window` (B3 — chỉ dl-gru) |
 | `trainedAt` / `createdAt` | DateTime | `now()` | Thời điểm train / tạo |
 
-**Relations:** standalone. **Indexes:** `@@index([kind, status])` — tìm bản `serving` nhanh. **Retention:** giữ mọi version để đối chiếu deterministic (seed 42).
+**Relations:** standalone. **Indexes:** `@@index([kind, status])` — tìm bản `serving` nhanh. **Retention:** giữ mọi version để đối chiếu deterministic (seed 42). **AppSetting keys ML (B #81):** `ml-gate` (verdict cổng bằng chứng + ΔBrier CI + rank-IC — ghi bởi `scripts/ml-evidence-gate.ts`) · `ml-gru` (kill-switch tầng 1 `enabled` off mặc định + shadow rolling Brier — chỉ tồn tại khi dl-gru được train).
 
 ### 6.24 `BanditArm` — Cánh tay Thompson sampling (phiên #35; 6 arms từ phiên #38)
 
@@ -1065,6 +1066,7 @@ Seed **delete toàn bộ dữ liệu cũ trước khi ghi** (clean slate) — ch
 
 | Ngày | Thay đổi |
 |---|---|
+| 2026-10-10 | **v0.8.1 — Phiên #81 ML_OPS_BLUEPRINT Giai đoạn B (31 model — 0 model mới, 0 migrate):** (1) `MlModel.kind` + giá trị `dl-gru` (B3 — chỉ tạo khi cổng bằng chứng B2 PASS, luôn `archived` shadow); (2) `MlModel.meta` JSON thêm trường: `featureSet` ("v2-lag16" B1 — bản cũ thiếu → đọc "v1-lag10") · `gateVerdict` (B2 — verdict cổng của bản lag-16) · `window` (B3 — chỉ dl-gru); (3) AppSetting keys mới: **`ml-gate`** (verdict cổng + ΔBrier CI + rank-IC 16 đặc trưng + autocorr — ghi bởi `scripts/ml-evidence-gate.ts`) · **`ml-gru`** (kill-switch tầng 1 `enabled` off mặc định + shadow rolling Brier — chỉ tồn tại khi dl-gru được train); (4) §6.23 bảng bổ sung dòng `meta` (PIT P1-2 + featureHist A3 + các trường B — trước đó chỉ ghi ở changelog) + mô tả weights arch chuỗi ("10-16-8-3" cũ \| "16-24-12-3" v2-lag16 \| "gru16-24w20"); (5) AuditLog action mới `ML_GATE` (swap serving khi cổng PASS qua ΔBrier) + `ML_GRU_KILL` (kill-switch tầng 2) — cột String sẵn có, 0 migrate. Đo thật: bản v13-v18 dl-mlp v2-lag16 archived (v13 kèm `gateVerdict: FAIL` — serving v8 giữ theo cổng) · AppSetting `ml-gate` verdict FAIL ΔBrier CI [+0,0046; +0,0079] |
 | 2026-10-08 | **v0.7.2 — DATA_PLATFORM_BLUEPRINT P2 (phiên #62, 29 → 31 model):** (1) **§6.29 `FeatureValue`** `{key unique, value String JSON, computedAt, expiresAt}` + index expiresAt — cache đặc trưng 2 lớp L1 process + L2 bảng (kỷ luật §6: KHÔNG Redis); topByAdtv wrap cache TTL 10' + invalidation chủ động tại MỌI đường ghi Bar; đo: chu kỳ ổn định 0-45ms (trước 750-850ms); (2) **§6.30 `NotificationOutbox`** `{channel WEBHOOK/EMAIL, target, subject, payload, status PENDING_EGRESS/SENT/FAILED, attempts, lastAttemptAt, lastError, sentAt}` + index (status, createdAt DESC) — hộp thư đi S1 pattern pending-egress như finfo, tự retry mỗi chu kỳ + POST /api/notify; cấu hình AppSetting `notify`; kèm P2-2 (news reliability trong DataSourceStatus meta.reliability — 0 bảng mới) + P2-4 (overlay AppSetting `vn-holidays` — 0 bảng mới); chi tiết xem DATA_PLATFORM_BLUEPRINT Changelog v1.6 |
 | 2026-10-08 | **v0.7.1 — fixbug #61 (F-612R-03/04, 0 đổi schema):** (1) §7 Enum Dictionary sửa **12 → 13 enum** + bổ sung dòng `CorporateEventKind` thiếu (SPLIT/BONUS/DIVIDEND/RESTATE — làm rõ `CorporateEvent.status`/`ForeignFlow.mode` là String validate tầng code, không phải enum); (2) đồng bộ 2 chỗ blueprint §5 P1 ghi "detail Json / checks Json" → "String (JSON-hoá)" đúng schema thật — chi tiết vòng rà + findings xem DATA_PLATFORM_BLUEPRINT Changelog v1.5 |
 | 2026-10-05 | Tái tạo tài liệu sau reset workspace; đồng bộ 1-1 với `prisma/schema.prisma` (17 model, 12 enum) |

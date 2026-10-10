@@ -33,6 +33,13 @@ export const dynamic = "force-dynamic";
  * sẽ tự có sau lần train kế tiếp. Đo drift nằm SAU TTL cache module 15s
  * (cùng kỷ luật snapCache bandit #64 — UI poll 30s nên cache hấp thụ 1/2
  * request); KHÔNG thêm query khi chưa có histogram (chỉ JSON.parse meta).
+ *
+ * B1/B2/B3 (#81 — ML_OPS_BLUEPRINT §4): thêm 3 field additive:
+ *  - `dlMlp.featureSet` — nhãn bộ đặc trưng bản serving (v1-lag10 / v2-lag16)
+ *  - `gate` — verdict cổng bằng chứng B2 (đọc AppSetting "ml-gate" — 0 query
+ *    thêm khi chưa đo); kèm ΔBrier CI + rank-IC để FE hiển thị trung thực
+ *  - `gru` — trạng thái GRU giọng thứ ba (kind dl-gru, shadow AppSetting
+ *    "ml-gru") — null khi chưa từng train (cổng chưa mở).
  */
 
 type DlMlpMetricsRow = {
@@ -274,6 +281,141 @@ async function driftForServing(dlRow: {
   return value;
 }
 
+/* ───────── B2/B3 · Cổng bằng chứng + GRU (đọc AppSetting, additive) ───────── */
+
+/** Field `gate` — unavailable kèm reason trung thực (chưa chạy script đo). */
+type GatePayload =
+  | { available: false; reason: string }
+  | {
+      available: true;
+      verdict: "PASS" | "FAIL";
+      measuredAt: string;
+      windowHash: string;
+      /** CI 95% của ΔBrier = Brier(v2-lag16) − Brier(v8-lag10) trên val block
+       *  cùng windowHash (paired bootstrap 1.000×). Âm = v2 thắng. */
+      deltaBrier: { mean: number; ciLow: number; ciHigh: number };
+      /** Số đặc trưng mới (6) đạt |rank-IC| ≥ 0,02 với CI loại trừ 0. */
+      newFeaturesSignificant: number;
+      /** Quy tắc mở: "deltabrier" (ΔBrier CI < 0) | "rankic" (≥3/6 đặc trưng
+       *  mới có ý nghĩa) — null khi FAIL. */
+      passedVia: "deltabrier" | "rankic" | null;
+      /** Có hoán đổi serving v2-lag16 sau verdict không. */
+      swappedServing: boolean;
+    };
+
+const GATE_NO_MEASUREMENT =
+  "chưa đo — chạy scripts/ml-evidence-gate.ts sau khi bản v2-lag16 được huấn luyện";
+
+/** Đọc AppSetting "ml-gate" (ghi bởi scripts/ml-evidence-gate.ts) — tolerant:
+ *  thiếu key / JSON hỏng / sai shape → unavailable + reason, KHÔNG 500. */
+async function gatePayload(): Promise<GatePayload> {
+  try {
+    const row = await db.appSetting.findUnique({ where: { key: "ml-gate" } });
+    if (!row) return { available: false, reason: GATE_NO_MEASUREMENT };
+    const g = JSON.parse(row.value) as Record<string, unknown>;
+    const verdict = g.verdict === "PASS" || g.verdict === "FAIL" ? g.verdict : null;
+    if (verdict == null) return { available: false, reason: GATE_NO_MEASUREMENT };
+    const db_ = g.deltaBrier as { mean?: unknown; ciLow?: unknown; ciHigh?: unknown } | undefined;
+    const num = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
+    const mean = num(db_?.mean);
+    const ciLow = num(db_?.ciLow);
+    const ciHigh = num(db_?.ciHigh);
+    if (mean == null || ciLow == null || ciHigh == null) {
+      return { available: false, reason: "meta cổng thiếu số liệu ΔBrier — chạy lại script đo" };
+    }
+    const passedVia =
+      g.passedVia === "deltabrier" || g.passedVia === "rankic" ? g.passedVia : null;
+    return {
+      available: true,
+      verdict,
+      measuredAt: typeof g.measuredAt === "string" ? g.measuredAt : "",
+      windowHash: typeof g.windowHash === "string" ? g.windowHash : "",
+      deltaBrier: { mean, ciLow, ciHigh },
+      newFeaturesSignificant:
+        typeof g.newFeaturesSignificant === "number" && Number.isFinite(g.newFeaturesSignificant)
+          ? g.newFeaturesSignificant
+          : 0,
+      passedVia,
+      swappedServing: g.swappedServing === true,
+    };
+  } catch {
+    return { available: false, reason: GATE_NO_MEASUREMENT };
+  }
+}
+
+/** Field `gru` — null khi chưa từng train dl-gru (cổng chưa mở, B4 trung thực). */
+interface GruPayload {
+  version: number;
+  status: string;
+  trainedAt: string;
+  valAcc: number | null;
+  params: number | null;
+  window: number | null;
+  /** AppSetting "ml-gru" — kill-switch tầng 1 (off mặc định) + shadow stats. */
+  enabled: boolean;
+  shadowSettled: number;
+  gruBrier: number | null;
+  mlpBrier: number | null;
+  /** Brier GRU tệ hơn MLP N phiên liên tiếp — ≥5 tự hạ (kill-switch tầng 2). */
+  consecutiveWorse: number;
+}
+
+async function gruPayload(): Promise<GruPayload | null> {
+  try {
+    const row = await db.mlModel.findFirst({
+      where: { kind: "dl-gru" },
+      orderBy: { version: "desc" },
+    });
+    if (!row) return null;
+    let valAcc: number | null = null;
+    let params: number | null = null;
+    let window: number | null = null;
+    try {
+      const m = JSON.parse(row.metrics) as Record<string, unknown>;
+      if (typeof m.valAcc === "number") valAcc = m.valAcc;
+      if (typeof m.params === "number") params = m.params;
+      if (typeof m.window === "number") window = m.window;
+    } catch {
+      // metrics hỏng → giữ null trung thực
+    }
+    let enabled = false;
+    let shadowSettled = 0;
+    let gruBrier: number | null = null;
+    let mlpBrier: number | null = null;
+    let consecutiveWorse = 0;
+    try {
+      const setting = await db.appSetting.findUnique({ where: { key: "ml-gru" } });
+      if (setting) {
+        const g = JSON.parse(setting.value) as Record<string, unknown>;
+        enabled = g.enabled === true;
+        const sh = g.shadow as Record<string, unknown> | undefined;
+        if (sh && typeof sh.settled === "number") shadowSettled = sh.settled;
+        if (sh && typeof sh.gruBrier === "number") gruBrier = sh.gruBrier;
+        if (sh && typeof sh.mlpBrier === "number") mlpBrier = sh.mlpBrier;
+        if (sh && typeof sh.consecutiveWorse === "number") consecutiveWorse = sh.consecutiveWorse;
+      }
+    } catch {
+      // AppSetting hỏng → mặc định off trung thực
+    }
+    return {
+      version: row.version,
+      status: row.status,
+      trainedAt: row.trainedAt.toISOString(),
+      valAcc,
+      params,
+      window,
+      enabled,
+      shadowSettled,
+      gruBrier,
+      mlpBrier,
+      consecutiveWorse,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function GET() {
   try {
     // A3: dl-mlp query khởi động TRƯỚC rồi drift nối tiếp (concurrent với 3
@@ -286,7 +428,7 @@ export async function GET() {
     });
     const driftPromise = dlRowPromise.then((dlRow) => driftForServing(dlRow));
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -295,6 +437,8 @@ export async function GET() {
       banditSnapshot(),
       pendingSettleCount(),
       driftPromise,
+      gatePayload(),
+      gruPayload(),
     ]);
 
     const dlMetrics = dlRow
@@ -309,6 +453,17 @@ export async function GET() {
         ])
       : null;
 
+    // B1 (#81) — featureSet bản serving từ meta (bản cũ không có → v1-lag10)
+    const dlFeatureSet = (() => {
+      if (!dlRow?.meta) return "v1-lag10";
+      try {
+        const m = JSON.parse(dlRow.meta) as { featureSet?: unknown };
+        return typeof m.featureSet === "string" ? m.featureSet : "v1-lag10";
+      } catch {
+        return "v1-lag10";
+      }
+    })();
+
     const payload = {
       dlMlp:
         dlRow && dlMetrics
@@ -316,6 +471,7 @@ export async function GET() {
               version: dlRow.version,
               status: dlRow.status,
               trainedAt: dlRow.trainedAt.toISOString(),
+              featureSet: dlFeatureSet,
               metrics: {
                 ...dlMetrics,
                 horizonDays: dlMetrics.horizonDays ?? 5,
@@ -345,6 +501,9 @@ export async function GET() {
       pendingSettles,
       // A3 — additive field: FE cũ bỏ qua, FE mới (ml-panel badge Drift) đọc.
       drift,
+      // B2/B3 (#81) — additive: cổng bằng chứng + GRU (FE mới đọc, FE cũ bỏ qua)
+      gate,
+      gru,
     };
     return NextResponse.json(toPlain(payload));
   } catch (err) {

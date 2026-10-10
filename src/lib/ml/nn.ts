@@ -1,13 +1,17 @@
 /**
- * src/lib/ml/nn.ts — MẠNG NƠ-RON MLP THẬT: 10 → 16 ReLU → 8 ReLU → 3 softmax
- * (phiên #35). Backprop VIẾT TAY (cross-entropy + class-weight 1/freq) +
- * tối ưu Adam (β1 0,9 · β2 0,999 · ε 1e-8). Khởi tạo He-normal, trọng số
- * lưu Float64Array phẳng để chạy nhanh trên Bun (~50k mẫu × ≤60 epoch < 30s).
+ * src/lib/ml/nn.ts — MẠNG NƠ-RON MLP THẬT, KIẾN TRÚC THAM SỐ HOÁ (B1 #81).
+ *
+ * Backprop VIẾT TAY (cross-entropy + class-weight 1/freq) + tối ưu Adam
+ * (β1 0,9 · β2 0,999 · ε 1e-8). Khởi tạo He-normal, trọng số lưu Float64Array
+ * phẳng để chạy nhanh trên Bun. Kiến trúc mặc định **v2-lag16: 16 → 24 ReLU →
+ * 12 ReLU → 3 softmax (747 tham số)** — ML_OPS_BLUEPRINT §4 B1; `fromJSON`
+ * nạp đúng arch ghi trong weights JSON (bản v8 serving "10-16-8-3" vẫn đọc
+ * được — tương thích ngược qua cửa hoán đổi theo cổng B2).
  *
  * Quy ước class: 0 = DOWN · 1 = FLAT · 2 = UP. predictProba trả theo thứ tự
  * [pUp, pFlat, pDown] cho dễ dùng phía serving/Bayes. Cut 80/20 THEO THỜI GIAN
  * (val = block cuối — không leakage tương lai), shuffle chỉ trong train split.
- * Early-stop patience 8 epoch theo valLoss, khôi phục trọng số tốt nhất.
+ * Early-stop patience theo valLoss, khôi phục trọng số tốt nhất.
  *
  * RNG seed cố định (mulberry32) → kết quả huấn luyện deterministic/lặp lại
  * được — metrics trung thực, không "may rủi" từng lần train.
@@ -29,11 +33,37 @@ export interface MlpMetrics {
   valLoss: number;
 }
 
-/** Cấu hình MLP (10→16→8→3 cố định — đổi phải train lại từ đầu). */
-const IN = 10;
-const H1 = 16;
-const H2 = 8;
-const OUT = 3;
+/** Kiến trúc MLP — tham số hoá B1 (#81), không còn hardcode 10-16-8-3. */
+export interface MlpArch {
+  in: number;
+  h1: number;
+  h2: number;
+  out: number;
+}
+
+/**
+ * Kiến trúc v2-lag16 (B1 — ML_OPS_BLUEPRINT §4): IN 16 → H1 24 → H2 12 →
+ * OUT 3 = 24×16+24 + 12×24+12 + 3×12+3 = **747 tham số** (~84 mẫu/tham số
+ * danh nghĩa trên 60k mẫu — vùng an toàn so GRU §B3).
+ */
+export const MLP_ARCH_V2: MlpArch = { in: 16, h1: 24, h2: 12, out: 3 };
+
+/** Chuỗi arch canonical "in-h1-h2-out" (ghi vào weights JSON khi lưu). */
+export function mlpArchString(arch: MlpArch): string {
+  return `${arch.in}-${arch.h1}-${arch.h2}-${arch.out}`;
+}
+
+/** Parse "in-h1-h2-out" → MlpArch; throw khi sai format (fromJSON dùng). */
+export function parseMlpArch(s: string): MlpArch {
+  const parts = s.split("-");
+  if (parts.length !== 4) throw new Error(`arch MLP sai định dạng: "${s}"`);
+  const nums = parts.map((p) => Number(p));
+  if (nums.some((n) => !Number.isInteger(n) || n <= 0)) {
+    throw new Error(`arch MLP sai số: "${s}"`);
+  }
+  return { in: nums[0], h1: nums[1], h2: nums[2], out: nums[3] };
+}
+
 const ADAM_B1 = 0.9;
 const ADAM_B2 = 0.999;
 const ADAM_EPS = 1e-8;
@@ -71,6 +101,7 @@ function softmax(z: Float64Array): Float64Array {
 
 /** Mô hình MLP — dùng như class: new MLP() → fit → predictProba. */
 export class MLP {
+  private readonly arch: MlpArch;
   // Trọng số phẳng: W1[H1×IN], b1[H1], W2[H2×H1], b2[H2], W3[OUT×H2], b3[OUT]
   private W1: Float64Array;
   private b1: Float64Array;
@@ -81,7 +112,9 @@ export class MLP {
   /** Chuẩn hoá z-score đặc trưng (set sau khi fit trên X đã chuẩn hoá). */
   norm: MlpNorm | null = null;
 
-  constructor(seed: number = RNG_SEED) {
+  constructor(arch: MlpArch = MLP_ARCH_V2, seed: number = RNG_SEED) {
+    this.arch = arch;
+    const { in: IN, h1: H1, h2: H2, out: OUT } = arch;
     const rng = mulberry32(seed);
     const init = (rows: number, cols: number, fanIn: number) => {
       const arr = new Float64Array(rows * cols);
@@ -97,8 +130,25 @@ export class MLP {
     this.b3 = new Float64Array(OUT);
   }
 
+  /** Số tham số khả huấn luyện (metrics/nghiệm thu ghi rõ). */
+  get paramCount(): number {
+    const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
+    return H1 * IN + H1 + H2 * H1 + H2 + OUT * H2 + OUT;
+  }
+
+  /** Chuỗi arch "in-h1-h2-out" của bản này. */
+  get archString(): string {
+    return mlpArchString(this.arch);
+  }
+
+  /** Số chiều đầu vào của arch (caller kiểm tương thích featureSet). */
+  get inputSize(): number {
+    return this.arch.in;
+  }
+
   /** Forward 1 mẫu (đã chuẩn hoá) → softmax 3 class [DOWN, FLAT, UP]. */
   private forward(x: number[], cache: { h1: Float64Array; h2: Float64Array; p: Float64Array }): void {
+    const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
     const { W1, b1, W2, b2, W3, b3 } = this;
     const h1 = cache.h1;
     for (let j = 0; j < H1; j++) {
@@ -128,10 +178,17 @@ export class MLP {
    * Huấn luyện trên X ĐÃ CHUẨN HOÁ (caller dùng standardize trước).
    * Cross-entropy có class-weight w_c = (N/3)/N_c (1/tần suất, chuẩn hoá
    * mean 1) — val loss KHÔNG weighting để so sánh epoch ↔ epoch công bằng.
+   * Xếp độ dài theo cột arch.in (bản lag16 16 chiều — caller cùng featureSet).
    */
   fit(X: number[][], y: number[]): MlpMetrics {
+    const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
     const n = X.length;
     if (n < OUT * 10) throw new Error(`MLP fit cần ≥ ${OUT * 10} mẫu, nhận ${n}`);
+    for (const row of X) {
+      if (row.length !== IN) {
+        throw new Error(`MLP fit nhận vector ${row.length} chiều ≠ arch ${IN} (featureSet lệch?)`);
+      }
+    }
     const rng = mulberry32(RNG_SEED + 7);
 
     // Class-weight 1/freq (mất class → weight 1)
@@ -261,7 +318,7 @@ export class MLP {
         stale = 0;
       } else {
         stale++;
-        if (stale >= PATIENCE) break; // early-stop patience 8 theo valLoss
+        if (stale >= PATIENCE) break; // early-stop theo valLoss
       }
     }
 
@@ -301,12 +358,17 @@ export class MLP {
   }
 
   /**
-   * Xác suất 3 class cho 1 vector đặc trưng RAW (tự áp norm nếu có).
-   * Trả [pUp, pFlat, pDown] — lưu ý mapping ngược với class index nội bộ.
+   * Xác suất 3 class cho 1 vector đặc trưng RAW (tự áp norm nếu có — norm theo
+   * arch.in chiều, vector dài hơn tự cắt an toàn). Trả [pUp, pFlat, pDown] —
+   * lưu ý mapping ngược với class index nội bộ.
    */
   predictProba(x: number[]): [number, number, number] {
     const input = this.norm ? this.applyNormInternal(x) : x;
-    const cache = { h1: new Float64Array(H1), h2: new Float64Array(H2), p: new Float64Array(OUT) };
+    const cache = {
+      h1: new Float64Array(this.arch.h1),
+      h2: new Float64Array(this.arch.h2),
+      p: new Float64Array(this.arch.out),
+    };
     this.forward(input, cache);
     return [cache.p[2], cache.p[1], cache.p[0]]; // [UP, FLAT, DOWN]
   }
@@ -321,10 +383,10 @@ export class MLP {
     return x.map((v, j) => (v - (mean[j] ?? 0)) / ((std[j] ?? 1) || 1));
   }
 
-  /** Serialize trọng số + norm → chuỗi JSON lưu cột MlModel.weights. */
+  /** Serialize trọng số + norm + arch → chuỗi JSON lưu cột MlModel.weights. */
   toJSON(): string {
     return JSON.stringify({
-      arch: `${IN}-${H1}-${H2}-${OUT}`,
+      arch: this.archString,
       W1: Array.from(this.W1),
       b1: Array.from(this.b1),
       W2: Array.from(this.W2),
@@ -335,7 +397,9 @@ export class MLP {
     });
   }
 
-  /** Nạp mô hình từ JSON (weights + norm). Throw khi JSON hỏng/sai kiến trúc. */
+  /** Nạp mô hình từ JSON (arch + weights + norm). Throw khi JSON hỏng/sai
+   *  kiến trúc — đọc đúng arch ghi trong JSON (v8 "10-16-8-3" hay v2
+   *  "16-24-12-3" đều nạp được — B1 tương thích ngược). */
   static fromJSON(json: string): MLP {
     const raw = JSON.parse(json) as {
       arch?: string;
@@ -347,11 +411,11 @@ export class MLP {
       b3?: number[];
       norm?: MlpNorm | null;
     };
-    const mlp = new MLP(1); // init tạm — ghi đè bằng trọng số JSON
-    const expect = `${IN}-${H1}-${H2}-${OUT}`;
-    if (raw.arch !== expect) throw new Error(`MLP kiến trúc ${raw.arch ?? "?"} ≠ ${expect}`);
+    const arch = parseMlpArch(raw.arch ?? "");
+    const { in: IN, h1: H1, h2: H2, out: OUT } = arch;
+    const mlp = new MLP(arch, 1); // init tạm — ghi đè bằng trọng số JSON
     const copy = (src: number[] | undefined, len: number, name: string): Float64Array => {
-      if (!Array.isArray(src) || src.length !== len) throw new Error(`MLP weights thiếu ${name}`);
+      if (!Array.isArray(src) || src.length !== len) throw new Error(`MLP weights thiếu ${name} (arch ${mlpArchString(arch)})`);
       return Float64Array.from(src);
     };
     mlp.W1 = copy(raw.W1, H1 * IN, "W1");

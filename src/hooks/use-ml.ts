@@ -84,6 +84,9 @@ export interface MlModelStatus<TMetrics> {
   /** "serving" | "training" | … (UI map, không đoán cứng). */
   status: string;
   trainedAt: string;
+  /** B1 (#81) — nhãn bộ đặc trưng (v1-lag10 / v2-lag16); API cũ thiếu →
+   *  undefined (UI hiển thị trung thực theo mặc định). */
+  featureSet?: string;
   metrics: TMetrics;
 }
 
@@ -95,6 +98,42 @@ export interface MlStatusResponse {
   bandit: { arms: BanditArm[]; lastSettleAt: string | null } | null;
   /** Số phiếu LLM chờ kết toán reward. */
   pendingSettles: number;
+  /** B2 (#81) — verdict cổng bằng chứng chuỗi (additive; chưa đo →
+   *  available:false + reason). */
+  gate?: MlGateStatus;
+  /** B3/B4 (#81) — trạng thái GRU giọng thứ ba (null khi chưa từng train). */
+  gru?: MlGruStatus | null;
+}
+
+/* ───── Cổng bằng chứng B2 + GRU B3 (ML_OPS_BLUEPRINT §4 — #81) ───── */
+
+/** Field `gate` của /api/ml/status — mirror hợp đồng route. */
+export type MlGateStatus =
+  | { available: false; reason?: string }
+  | {
+      available: true;
+      verdict: "PASS" | "FAIL";
+      measuredAt: string;
+      windowHash: string;
+      deltaBrier: { mean: number; ciLow: number; ciHigh: number };
+      newFeaturesSignificant: number;
+      passedVia: "deltabrier" | "rankic" | null;
+      swappedServing: boolean;
+    };
+
+/** Field `gru` của /api/ml/status — null khi chưa từng train dl-gru. */
+export interface MlGruStatus {
+  version: number;
+  status: string;
+  trainedAt: string;
+  valAcc: number | null;
+  params: number | null;
+  window: number | null;
+  enabled: boolean;
+  shadowSettled: number;
+  gruBrier: number | null;
+  mlpBrier: number | null;
+  consecutiveWorse: number;
 }
 
 /* ─────────────────── Types (hợp đồng POST /api/ml/train) ─────────────────── */
@@ -102,19 +141,25 @@ export interface MlStatusResponse {
 /** Response train — dlMlp/rlQ là BẢN METRICS (không bọc version/status).
  *  A4 (phiên #79) — serving-swap guard trả thêm trường tuỳ chọn promoted
  *  (false = valAcc bản mới thua bản serving → lưu archived, KHÔNG thay mô
- *  hình đang phục vụ). F-801-03 (Fixbug #80): UI đọc để toast trung thực. */
+ *  hình đang phục vụ). F-801-03 (Fixbug #80): UI đọc để toast trung thực.
+ *  F-B811-01 (Fixbug-B #81): thêm promotionReason — promoted=false giờ có
+ *  2 đường (thua valAcc baseline HOẶC khác featureSet khi cổng B2 chưa mở),
+ *  toast phải nói đúng LÝ DO THẬT thay vì đoán từ phép so số. */
 export interface MlTrainResponse {
   ok: boolean;
   trained: string[];
   durationMs: number;
   dlMlp: DlMlpMetrics | null;
   rlQ: RlQMetrics | null;
-  /** false = bản mới không lên serving (valAcc thấp hơn bản đang phục vụ). */
+  /** false = bản mới không lên serving. */
   promoted?: boolean;
   /** valAcc bản serving TRƯỚC khi train (null = chưa có bản nào). */
   servingValAcc?: number | null;
   /** valAcc bản vừa train. */
   newValAcc?: number;
+  /** "valacc" = thua baseline (A4) · "featureset-gate" = khác bộ đặc trưng,
+   *  cổng B2 chưa mở (B1 #81) · "first" = chưa có bản trước. */
+  promotionReason?: "valacc" | "featureset-gate" | "first";
 }
 
 /* ─────────────────── Fetch helpers ─────────────────── */
@@ -216,19 +261,30 @@ export function useTrainMl() {
           : null;
       const episodes = res.rlQ?.episodes ?? null;
 
-      // F-801-03 (Fixbug #80): serving-swap guard A4 — promoted=false nghĩa là
-      // bản vừa train KHÔNG thay mô hình đang phục vụ (valAcc thấp hơn). Toast
-      // phải nói rõ, tránh hiểu lầm "train xong là đang dùng bản mới".
+      // F-801-03 (Fixbug #80) + F-B811-01 (Fixbug-B #81): serving-swap guard —
+      // promoted=false nghĩa là bản vừa train KHÔNG thay mô hình đang phục vụ.
+      // Toast phải nói đúng LÝ DO (backend gửi promotionReason — tolerant khi
+      // backend cũ chưa có trường thì fallback so số như F-801-03).
       const pct = (v: number | null | undefined): string | null =>
         typeof v === "number" && Number.isFinite(v)
           ? `${(v * 100).toFixed(1).replace(".", ",")}%`
           : null;
-      const notServing =
-        res.promoted === false
-          ? pct(res.servingValAcc ?? null) != null && pct(res.newValAcc ?? null) != null
-            ? `Bản mới KHÔNG lên serving — valAcc ${pct(res.newValAcc)} < bản đang phục vụ ${pct(res.servingValAcc)} (giữ bản cũ, nguyên tắc §1.5).`
-            : "Bản mới KHÔNG lên serving (valAcc thấp hơn bản đang phục vụ) — giữ bản cũ."
-          : null;
+      let notServing: string | null = null;
+      if (res.promoted === false) {
+        if (res.promotionReason === "featureset-gate") {
+          notServing =
+            "Bản mới KHÔNG lên serving — cổng bằng chứng B2 chưa mở cho bộ đặc trưng v2-lag16 (giữ bản v1-lag10 đang phục vụ).";
+        } else if (res.promotionReason === "first") {
+          notServing = "Bản mới KHÔNG lên serving — chưa có bản serving trước đó để so.";
+        } else {
+          const np = pct(res.newValAcc ?? null);
+          const sp = pct(res.servingValAcc ?? null);
+          notServing =
+            np != null && sp != null
+              ? `Bản mới KHÔNG lên serving — valAcc ${np} < bản đang phục vụ ${sp} (giữ bản cũ, nguyên tắc §1.5).`
+              : "Bản mới KHÔNG lên serving (valAcc thấp hơn bản đang phục vụ) — giữ bản cũ.";
+        }
+      }
 
       const title =
         valAccPct != null && episodes != null

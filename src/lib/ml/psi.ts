@@ -94,10 +94,10 @@ export function bucketProportions(values: number[], edges: number[]): number[] {
 }
 
 /**
- * Tên 10 đặc trưng THEO ĐÚNG THỨ TỰ featureAt trong features.ts (đối chiếu
- * code dòng 347–358 — serving phụ thuộc thứ tự này). Chiều ngoài phạm vi
- * (tương lai B1 lag-16) hiển thị "f${d}" — code đọc theo edges.length,
- * không hardcode 10.
+ * Tên 16 đặc trưng THEO ĐÚNG THỨ TỰ featureAt trong features.ts (đối chiếu
+ * code featureAt — serving phụ thuộc thứ tự này). 10 chiều đầu = v1 giữ nguyên;
+ * 6 chiều sau = B1 v2-lag16 (#81 — ML_OPS_BLUEPRINT §4). Chiều ngoài phạm vi
+ * hiển thị "f${d}" — code đọc theo edges.length, không hardcode.
  */
 export const FEATURE_NAMES: string[] = [
   "RSI14/100",        // x[0]  (rsi ?? 50) / 100
@@ -110,6 +110,13 @@ export const FEATURE_NAMES: string[] = [
   "độ lệch ret20",    // x[7]  std20 của logret1
   "giá/đỉnh60−1",     // x[8]  close / max60 − 1
   "logret 1 phiên",   // x[9]
+  // ── B1 v2-lag16 (#81) ──
+  "logret t−1 (lag1)",   // x[10]
+  "logret t−2 (lag2)",   // x[11]
+  "logret t−3 (lag3)",   // x[12]
+  "ΔRSI 5 phiên",        // x[13] (rsi14(t) − rsi14(t−5)) / 100
+  "Δvolz 5 phiên",       // x[14] clip(volz20(t),±8) − clip(volz20(t−5),±8)
+  "độ dốc SMA20 5 phiên", // x[15] sma20(t)/sma20(t−5) − 1
 ];
 
 /** Tên chiều theo index — an toàn mọi số chiều (10 hôm nay · 16 sau B1). */

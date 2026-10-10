@@ -17,9 +17,16 @@
  *   quote-volume của latestFeatures).
  *
  * buildTrainingSet(topN): quét top-N mã thanh khoản rồi trượt cửa sổ trên
- * chuỗi EOD thật — mỗi phiên t đủ 60 phiên lịch sử và t+5 tồn tại → 10 đặc
+ * chuỗi EOD thật — mỗi phiên t đủ 60 phiên lịch sử và t+5 tồn tại → 16 đặc
  * trưng + nhãn hướng 5 phiên tới. Nhãn: close(t+5)/close(t)−1 > +0,5% → 2
  * (UP), < −0,5% → 0 (DOWN), còn lại 1 (FLAT).
+ *
+ * B1 (phiên #81 — ML_OPS_BLUEPRINT §4): bộ đặc trưng v2-lag16 — thêm 6 chiều
+ * lag/đạo hàm THUẦN QUÁ KHỨ (PIT-an toàn) trên chuỗi EOD hiện có. 10 chiều
+ * đầu GIỮ NGUYÊN thứ tự & công thức v1 (bản serving v8-lag10 đọc x[0..9] của
+ * vector 16 chiều — tương thích ngược). windowHash KHÔNG đổi (hash trên bar,
+ * không phụ thuộc đặc trưng) — cùng dữ liệu, khác bộ đặc trưng, cổng B2 so
+ * trực tiếp v2 với v1 trên cùng windowHash.
  */
 
 import { db } from "@/lib/db";
@@ -27,8 +34,14 @@ import { loadTopDatedSeries, topByAdtv } from "@/lib/dated-series";
 // P1-2 PIT — SHA-256 window-hash của cửa sổ train (node:crypto, backend only)
 import { createHash } from "node:crypto";
 
-/** Số đặc trưng đầu vào của MLP (thay đổi phải đổi cả kiến trúc mạng). */
-export const ML_FEATURE_COUNT = 10;
+/** Số đặc trưng đầu vào của MLP (thay đổi phải đổi cả kiến trúc mạng).
+ *  B1 (#81 — ML_OPS_BLUEPRINT §4): 10 → 16 (v2-lag16). */
+export const ML_FEATURE_COUNT = 16;
+/** Nhãn bộ đặc trưng hiện hành — lưu MlModel.meta.featureSet khi train
+ *  (B1: bản v8 cũ không có trường này → đọc về "v1-lag10"). */
+export const ML_FEATURE_SET = "v2-lag16";
+/** Nhãn bộ đặc trưng v1 (10 chiều) — bản train trước B1. */
+export const ML_FEATURE_SET_V1 = "v1-lag10";
 /** Số phiên lịch sử tối thiểu trước điểm lấy mẫu (warmup RSI/MACD/SMA50/max60). */
 export const ML_WARMUP_BARS = 60;
 /** Horizon dự báo (phiên). */
@@ -328,11 +341,24 @@ function buildRolling(closes: number[], volumes: number[]): RollingSeries {
   };
 }
 
+/** Clip z-score khối lượng ±8 (chung x[6] và Δvolz5 x[14]). */
+function clip8(v: number): number {
+  return Math.max(-8, Math.min(8, v));
+}
+
 /**
- * Vector 10 đặc trưng tại chỉ số t (đã qua warmup ≥ 60 phiên); null nếu
+ * Vector 16 đặc trưng tại chỉ số t (đã qua warmup ≥ 60 phiên); null nếu
  * dữ liệu không đủ. Thứ tự cố định — mô hình serving phụ thuộc thứ tự này:
- * [rsi14/100, macdHist/close, logret5, logret10, sma20/sma50−1,
- *  close/sma20−1, volz20, std20(logret1), close/max60−1, logret1]
+ * [0] rsi14/100          [1] macdHist/close    [2] logret5      [3] logret10
+ * [4] sma20/sma50−1      [5] close/sma20−1     [6] volz20(clip ±8)
+ * [7] std20(logret1)     [8] close/max60−1     [9] logret1
+ * ——— B1 v2-lag16 (6 chiều mới, thuần quá khứ) ———
+ * [10] r_lag1 = logret1(t−1)   [11] r_lag2 = logret1(t−2)   [12] r_lag3 = logret1(t−3)
+ * [13] ΔRSI5   = (rsi14(t) − rsi14(t−5))/100   (quật đảo động lượng RSI)
+ * [14] Δvolz5  = clip(volz20(t),±8) − clip(volz20(t−5),±8) (thay đổi tương đối KL)
+ * [15] sma20slope = sma20(t)/sma20(t−5) − 1 (độ dốc đường trung bình)
+ * 10 chiều đầu giữ NGUYÊN công thức v1 — bản v8-lag10 serving đọc đúng
+ * x[0..9] của vector này (tương thích ngược khi hoán đổi theo cổng B2).
  */
 // A3 (phiên #79): export cho ml/psi.ts đo drift — tái dùng CÙNG featureAt của
 // train (FeatureContract P0-3 — không đường tính đặc trưng thứ 2).
@@ -346,6 +372,11 @@ export function featureAt(r: RollingSeries, t: number): number[] | null {
   if (max60 == null || max60 <= 0) return null;
   const rsi = r.rsi14[t];
   const hist = r.macdHist[t];
+  // B1 — 6 đặc trưng lag v2 (t ≥ 59 ⇒ t−5 ≥ 54: mọi chuỗi con đã qua warmup;
+  // nhánh t < 5 chỉ là belt-and-braces cho caller gọi tay với t nhỏ hơn)
+  const rsiPrev5 = t >= 5 ? r.rsi14[t - 5] : null;
+  const volzPrev5 = t >= 5 ? r.volz20[t - 5] : null;
+  const sma20Prev5 = t >= 5 ? r.sma20[t - 5] : null;
   return [
     (rsi ?? 50) / 100, // RSI phẳng → trung tính 0,5
     hist != null ? hist / close : 0,
@@ -353,10 +384,17 @@ export function featureAt(r: RollingSeries, t: number): number[] | null {
     r.logret10[t] ?? 0,
     sma20 / sma50 - 1,
     close / sma20 - 1,
-    Math.max(-8, Math.min(8, r.volz20[t] ?? 0)), // clip đuôi dài z-score KL
+    clip8(r.volz20[t] ?? 0), // clip đuôi dài z-score KL
     r.std20ret[t] ?? 0,
     close / max60 - 1,
     r.ret1[t] ?? 0,
+    // ── B1 v2-lag16 ──
+    t >= 1 ? (r.ret1[t - 1] ?? 0) : 0,
+    t >= 2 ? (r.ret1[t - 2] ?? 0) : 0,
+    t >= 3 ? (r.ret1[t - 3] ?? 0) : 0,
+    ((rsi ?? 50) - (rsiPrev5 ?? 50)) / 100, // ΔRSI5 — cùng scale 0..1 với x[0]
+    clip8(r.volz20[t] ?? 0) - clip8(volzPrev5 ?? 0), // Δvolz5 — biên ±16 tự nhiên
+    sma20Prev5 != null && sma20Prev5 > 0 ? sma20 / sma20Prev5 - 1 : 0,
   ];
 }
 
@@ -416,6 +454,122 @@ export async function buildTrainingSet(topN = 20): Promise<TrainingSetWithSeries
     dates: keep.map((i) => dts[i]),
     series, // F-611-01/#61 — digest phải hash CHÍNH chuỗi này
   };
+}
+
+/* ─────────────── B3 · Chuỗi đặc trưng cho GRU (ML_OPS_BLUEPRINT §4 B3) ─────────────── */
+
+/** Tập huấn luyện CHUỖI cho GRU: mỗi mẫu = cửa sổ W phiên × 16 đặc trưng
+ *  (t−W+1..t) + nhãn hướng 5 phiên tới tại t. Lấy mẫu từ t ≥ warmup+W−1
+ *  (mọi bước u của cửa sổ đều hợp lệ featureAt — F-B811-02: trước đây t
+ *  khởi đầu ở warmup−1 khiến 19 phiên đầu bị featureAt trả null, mẫu bị
+ *  bỏ âm thầm). Là SUBSET của buildTrainingSet (thiếu W−1 mẫu đầu mỗi mã) —
+ *  GRU tự cắt 80/20 riêng theo thời gian, không đòi khớp mẫu 1-1 với MLP. */
+export interface SequenceTrainingSet {
+  /** [n][window][16] — chuỗi đặc trưng RAW (chuẩn hoá z-score do GRU tự nắm). */
+  X: number[][][];
+  y: number[];
+  symbols: string[];
+  dates: string[];
+  series: SymbolSeries[];
+}
+
+/** Số phiên trong cửa sổ chuỗi GRU (B3: window 20). */
+export const ML_GRU_WINDOW = 20;
+
+/**
+ * Xây tập chuỗi trên top-N mã: mirror buildTrainingSet về điều kiện nhãn +
+ *  sort theo ngày + cap ML_MAX_SAMPLES; khác ở shape (cửa sổ W×16 thay vì
+ *  vector 16) và điểm bắt đầu (t ≥ ML_WARMUP_BARS−1+windowSize−1 — F-B811-02).
+ */
+export async function buildTrainingSequences(
+  topN = 20,
+  windowSize = ML_GRU_WINDOW
+): Promise<SequenceTrainingSet> {
+  const series = await loadTopSeries(topN);
+  const xs: number[][][] = [];
+  const ys: number[] = [];
+  const syms: string[] = [];
+  const dts: string[] = [];
+
+  const tStart = ML_WARMUP_BARS - 1 + (windowSize - 1); // F-B811-02 — mọi bước u = t−W+1..t đều ≥ warmup−1
+  for (const s of series) {
+    if (s.closes.length < tStart + 1 + ML_HORIZON_DAYS) continue;
+    const roll = buildRolling(s.closes, s.volumes);
+    for (let t = tStart; t < s.closes.length; t++) {
+      const y = labelAt(roll, t);
+      if (y == null) continue;
+      // Cửa sổ t−W+1..t: featureAt từng bước (u ≥ warmup−1 ⇒ không null)
+      const win: number[][] = [];
+      for (let u = t - windowSize + 1; u <= t; u++) {
+        const x = featureAt(roll, u);
+        if (x == null) {
+          win.length = 0;
+          break;
+        }
+        win.push(x);
+      }
+      if (win.length !== windowSize) continue;
+      xs.push(win);
+      ys.push(y);
+      syms.push(s.symbol);
+      dts.push(s.bars[t].date.toISOString().slice(0, 10));
+    }
+  }
+
+  const order = xs.map((_, i) => i).sort((a, b) => (dts[a] < dts[b] ? -1 : dts[a] > dts[b] ? 1 : 0));
+  const take = Math.min(order.length, ML_MAX_SAMPLES);
+  const keep = order.slice(order.length - take);
+  return {
+    X: keep.map((i) => xs[i]),
+    y: keep.map((i) => ys[i]),
+    symbols: keep.map((i) => syms[i]),
+    dates: keep.map((i) => dts[i]),
+    series,
+  };
+}
+
+/**
+ * Cửa sổ W phiên × 16 đặc trưng PHIÊN CUỐI của từng mã top-10 (serving GRU —
+ * mirror latestFeatures nhưng trả chuỗi thay vì vector đơn). Chỉ nạp đủ
+ * warmup + W phiên/mã — nhẹ như latestFeatures.
+ */
+export async function latestFeatureWindows(
+  windowSize = ML_GRU_WINDOW
+): Promise<{ symbol: string; x: number[][] }[]> {
+  const ranked = await topByAdtv(10, { market: "HOSE", type: "STOCK" });
+  const need = ML_WARMUP_BARS + windowSize - 1;
+
+  const barLists = await Promise.all(
+    ranked.map((t) =>
+      db.bar
+        .findMany({
+          where: { instrumentId: t.id },
+          orderBy: { date: "desc" },
+          take: need,
+          select: { close: true, volume: true },
+        })
+        .then((rows) => rows.filter((b) => b.close > 0).reverse())
+    )
+  );
+
+  const out: { symbol: string; x: number[][] }[] = [];
+  ranked.forEach((t, i) => {
+    const rows = barLists[i];
+    if (rows.length < need) return;
+    const roll = buildRolling(
+      rows.map((b) => b.close),
+      rows.map((b) => b.volume)
+    );
+    const t0 = rows.length - windowSize;
+    const win: number[][] = [];
+    for (let u = t0; u < rows.length; u++) {
+      const x = featureAt(roll, u);
+      if (x == null) return; // thiếu 1 bước → bỏ mã (fail-soft)
+      win.push(x);
+    }
+    out.push({ symbol: t.symbol, x: win });
+  });
+  return out;
 }
 
 /* ─────────────── FEATURECONTRACT · snapshot phiên cuối (P0-3) ─────────────── */
