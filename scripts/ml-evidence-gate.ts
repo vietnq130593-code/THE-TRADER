@@ -31,6 +31,7 @@ import {
   buildTrainingSet,
   featureAt,
   rollingFeatures,
+  standardize,
   trainingWindowDigest,
   ML_FEATURE_COUNT,
   ML_HORIZON_DAYS,
@@ -260,8 +261,152 @@ async function main() {
     }
   }
   if (!baseline) {
-    console.error("LỖI: không tìm thấy bản lag-10 nào để làm baseline so sánh.");
-    process.exit(1);
+    /* ── F1 (#99 · ML_AUTOML_BLUEPRINT §3-C0 bước a — GATE TỰ LÀNH): từ B1
+     * trở đi train route chỉ sinh v2-lag16 — DB sạch sau đổi DB không còn
+     * BẢN LAG-10 nào cho baseline ΔBrier (v1.0 blueprint định "train twin"
+     * nhưng không có đường nào train lag-10). Script TỰ train twin lag-10
+     * trên CHÍNH cửa sổ hiện tại: 10 chiều đầu giữ nguyên công thức (đúng
+     * ngữ nghĩa featureSetOf — “v1-lag10” = 10 chiều đầu của v2-lag16), cùng
+     * arch/activations/lossWeights/hyper/seed như bản ứng viên lag-16 (đọc
+     * candidate.meta.tuning) — so sánh “cùng dữ liệu, khác bộ đặc trưng”.
+     * Deterministic (mulberry32 trong fit) — chạy lại cùng windowHash ra
+     * cùng twin. predictProba bản 10 chiều đọc an toàn từ vector 16 chiều
+     * (nn.ts tự cắt — applyNormInternal + forward chỉ đọc arch.in chiều đầu). */
+    const tun = (() => {
+      const fallback = {
+        hidden: [24, 12] as number[],
+        activations: ["relu", "relu"] as ("relu" | "tanh" | "sigmoid")[],
+        lossWeights: [1, 1, 1] as [number, number, number],
+        lr: 0.01,
+        batchSize: 64,
+        epochs: 120,
+        patience: 12,
+        l2: 0,
+        valFraction: 0.2,
+        seed: 42,
+      };
+      try {
+        const m = JSON.parse(candidate.meta ?? "{}") as {
+          tuning?: {
+            arch?: unknown;
+            hidden?: unknown;
+            activations?: unknown;
+            lossWeights?: unknown;
+            lr?: unknown;
+            batchSize?: unknown;
+            epochs?: unknown;
+            maxEpochs?: unknown;
+            patience?: unknown;
+            l2?: unknown;
+            valFraction?: unknown;
+            seed?: unknown;
+          };
+        };
+        const t = m.tuning ?? {};
+        const num = (v: unknown, d: number): number =>
+          typeof v === "number" && Number.isFinite(v) ? v : d;
+        // meta.tuning của train route lưu `arch` chuỗi "16-24-12-3"
+        // (AppliedMlpTuning) — hidden = các số giữa; chấp nhận cả mảng hidden
+        // (phòng format khác trong tương lai).
+        let hidden: number[] | null = null;
+        if (typeof t.arch === "string") {
+          const parts = t.arch.split("-").map((s) => Number(s));
+          if (
+            parts.length >= 3 &&
+            parts.every((p) => Number.isInteger(p) && p >= 1 && p <= 96)
+          ) {
+            hidden = parts.slice(1, -1);
+          }
+        } else if (
+          Array.isArray(t.hidden) &&
+          t.hidden.length >= 1 &&
+          t.hidden.length <= 5 &&
+          t.hidden.every((h) => typeof h === "number" && Number.isInteger(h) && h >= 1 && h <= 96)
+        ) {
+          hidden = t.hidden as number[];
+        }
+        const hiddenFinal = hidden ?? fallback.hidden;
+        const activations =
+          Array.isArray(t.activations) &&
+          t.activations.length === hiddenFinal.length &&
+          t.activations.every((a) => a === "relu" || a === "tanh" || a === "sigmoid")
+            ? (t.activations as ("relu" | "tanh" | "sigmoid")[])
+            : fallback.activations.slice(0, hiddenFinal.length);
+        const lossWeights =
+          Array.isArray(t.lossWeights) &&
+          t.lossWeights.length === 3 &&
+          t.lossWeights.every((w) => typeof w === "number" && Number.isFinite(w) && w > 0 && w <= 10)
+            ? (t.lossWeights as [number, number, number])
+            : fallback.lossWeights;
+        return {
+          hidden: hiddenFinal,
+          activations,
+          lossWeights,
+          lr: num(t.lr, fallback.lr),
+          batchSize: num(t.batchSize, fallback.batchSize),
+          // meta ghi `maxEpochs` (AppliedMlpTuning) — chấp nhận cả `epochs`
+          epochs: num(t.maxEpochs ?? t.epochs, fallback.epochs),
+          patience: num(t.patience, fallback.patience),
+          l2: num(t.l2, fallback.l2),
+          valFraction: num(t.valFraction, fallback.valFraction),
+          seed: num(t.seed, fallback.seed),
+        };
+      } catch {
+        return fallback;
+      }
+    })();
+    console.log(
+      `gate tự lành (F1/#99): không còn bản lag-10 nào — train twin ${[10, ...tun.hidden, 3].join("-")} trên windowHash ${windowMeta.windowHash.slice(0, 12)}… (cùng hyper bản ứng viên v${candidate.version})`
+    );
+    try {
+      const X10 = set.X.map((row) => row.slice(0, 10));
+      const { mean, std, Xstd } = standardize(X10);
+      const twin = new MLP({ in: 10, hidden: tun.hidden, out: 3 }, tun.activations, tun.seed);
+      const twinFit = twin.fit(Xstd, set.y, {
+        learningRate: tun.lr,
+        batchSize: tun.batchSize,
+        maxEpochs: tun.epochs,
+        patience: tun.patience,
+        lossWeights: tun.lossWeights,
+        l2: tun.l2,
+        valFraction: tun.valFraction,
+        seed: tun.seed,
+      });
+      twin.setNorm({ mean, std });
+      const maxVersion = await db.mlModel.aggregate({
+        where: { kind: "dl-mlp" },
+        _max: { version: true },
+      });
+      const twinVersion = (maxVersion._max.version ?? 0) + 1;
+      baseline = await db.mlModel.create({
+        data: {
+          kind: "dl-mlp",
+          version: twinVersion,
+          status: "archived", // twin baseline — KHÔNG BAO GIỜ serving
+          weights: twin.toJSON(),
+          featureNorm: JSON.stringify({ mean, std }),
+          metrics: JSON.stringify(twinFit),
+          meta: JSON.stringify({
+            featureSet: "v1-lag10",
+            windowHash: windowMeta.windowHash,
+            trainDateFrom: windowMeta.trainDateFrom,
+            trainDateTo: windowMeta.trainDateTo,
+            samples: windowMeta.samples,
+            twin: true,
+            twinOf: candidate.version,
+            tuning: tun,
+          }),
+        },
+      });
+      notes.push(
+        `gate tự lành (F1/#99): twin lag-10 v${baseline.version} tự train trên cùng windowHash ${windowMeta.windowHash.slice(0, 12)}… (arch ${[10, ...tun.hidden, 3].join("-")}, cùng hyper bản ứng viên v${candidate.version}) — baseline ΔBrier “cùng dữ liệu, khác bộ đặc trưng”.`
+      );
+    } catch (twinErr) {
+      console.error(
+        `LỖI: gate tự lành không train được twin lag-10 (${twinErr instanceof Error ? twinErr.message : String(twinErr)}) — không có baseline so sánh.`
+      );
+      process.exit(1);
+    }
   }
   const baselineMeta = metaOf(baseline);
   if (baselineMeta.windowHash === windowMeta.windowHash) {
@@ -270,7 +415,7 @@ async function main() {
     );
     if (baseline.id !== serving.id) {
       notes.push(
-        `baseline là bản archived v${baseline.version} (twin cùng cửa sổ) — serving v${serving.version} train trên cửa sổ cũ nên không dùng làm baseline ΔBrier.`
+        `baseline là bản archived v${baseline.version} (twin cùng cửa sổ); serving v${serving.version} ${servingMeta.windowHash === windowMeta.windowHash ? "cùng cửa sổ (chính là bản ứng viên vừa đề xuất)" : "train trên cửa sổ cũ"} — không dùng serving làm baseline để ΔBrier đo thuần "khác bộ đặc trưng".`
       );
     }
   }

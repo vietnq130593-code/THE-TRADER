@@ -6,6 +6,9 @@ import { banditSnapshot, pendingSettleCount } from "@/lib/ml/bandit";
 // RAG (cổng L3) + số liệu bảng intraday 5-phút (cổng "Lớp chuỗi đầy đủ").
 import { ragStats } from "@/lib/ml/rag";
 import { intradayStats } from "@/lib/intraday";
+// C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1/Q4): tiến độ cổng dữ liệu
+// "tin tức → đặc trưng v3-news22" — đo từ NewsItem (PIT-strict), TTL cache 60s.
+import { newsCoverageReport } from "@/lib/ml/news-coverage";
 import {
   featureAt,
   loadTopSeries,
@@ -432,7 +435,7 @@ export async function GET() {
     });
     const driftPromise = dlRowPromise.then((dlRow) => driftForServing(dlRow));
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru, rag, intraday] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru, rag, intraday, newsGate] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -446,6 +449,8 @@ export async function GET() {
       // #83 — fail-soft nội bộ (lỗi DB → số 0 trung thực, không chặn status)
       ragStats().catch(() => null),
       intradayStats().catch(() => null),
+      // C2-pipeline (#99) — fail-soft như rag/intraday (available:false + reason)
+      newsCoverageReport(),
     ]);
 
     const dlMetrics = dlRow
@@ -536,6 +541,10 @@ export async function GET() {
             realtime: intraday.realtime,
           }
         : null,
+      // C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1) — additive: tiến độ cổng
+      // dữ liệu tin tức → đặc trưng (phiên có tin PIT /60 + coverage lexicon).
+      // FE mới đọc (tab Dữ liệu), FE cũ bỏ qua — tự chín theo crawler 15 phút.
+      newsGate,
     };
     return NextResponse.json(toPlain(payload));
   } catch (err) {

@@ -1033,6 +1033,32 @@ model RetrievalLog {
 - Dùng bởi: `src/lib/ml/rag.ts` (retrieveForCycle/ragStats — TTL cache corpus 60s) · chu kỳ `POST /api/agents/run` (1 retrieval/chu kỳ) · single-run `buildSingleRunPrompt` · A13 learning-rag báo cáo 30 ngày · ml/status field `rag` (additive #83).
 - Corpus RAG (không lưu DB — index in-process): 500 `AgentMessage` broadcast gần nhất + 200 `NewsItem` gần nhất.
 
+### 6.33 `SweepRun` — Lịch sử đợt sweep AutoML L1 (phiên #99 — ML_AUTOML_BLUEPRINT §4.5)
+
+**Controller AutoML L1 deterministic** ghi MỘT row mỗi đợt sweep: mọi ứng viên (kể cả thua) đều công khai trên champion board — `logJson` lưu đầy đủ `{i, arch, activations, lossWeights, valAcc, valLoss, brier, params, score, ms, error?}`; `championJson` lưu champion kèm verdict cổng 4 điều kiện (`swapProposed` + `swapReason` tiếng Việt). Ứng viên trúng cổng lưu thành `MlModel` (meta thêm `sweepRunId` + `sweepIndex`, status serving sau swap $transaction + AuditLog `ML_SWEEP_SWAP`). Skip-guard như A4: engine POST `force:false` cùng windowHash với đợt gần nhất → KHÔNG tạo row (trả `{skipped:true}` $0). `featureSet` mặc định "v2-lag16" — sẵn cho v3-news22 tương lai khỏi migrate (F7).
+
+```prisma
+model SweepRun {
+  id            String    @id @default(cuid())
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  windowHash    String    // cùng chuẩn MlModel.meta — skip-guard như A4
+  featureSet    String    @default("v2-lag16")
+  candidates    Int       // số ứng viên ngân sách
+  evaluated     Int       // số ứng viên đã train xong
+  seed          Int       // seed dãy ứng viên — deterministic
+  status        String    // running | done | failed
+  championJson  String?   // {index, arch, activations, lossWeights, hyper, valAcc, valLoss, brier, paramCount, score, swapProposed, swapReason, modelVersion}
+  logJson       String?   // [{i, tag, arch, activations, lossWeights, valAcc, valLoss, brier, params, score, ms, error?}]
+
+  @@index([startedAt(sort: Desc)])
+}
+```
+
+- Dùng bởi: `src/lib/ml/sweep.ts` (runSweepOnce — tạo/cập nhật row) · `GET /api/ml/sweep` (lịch sử 10 đợt gần nhất cho tab "Tự động tìm kiếm") · engine `ML_SWEEP_AT SUN:04:15` (POST force:false).
+- AppSetting liên quan: **`ml-sweep`** `{enabled, budgetCandidates (mặc định 16), seed (20261012), deltaSwap (0,01), maxParamFactor (2), lastRunAt}` — kill-switch từng đợt (§1.6 ML_AUTOML).
+- Đo thật #99: sweep budget 3 → 28.061ms · champion 16-32-16-3 valAcc 0,423 · swap v5→v9 + AuditLog ML_SWEEP_SWAP 2026-10-11T21:06:58Z.
+
 ---
 
 ## 7. Enum Dictionary
@@ -1129,6 +1155,7 @@ Seed **delete toàn bộ dữ liệu cũ trước khi ghi** (clean slate) — ch
 
 | Ngày | Thay đổi |
 |---|---|
+| 2026-10-12 | **v0.9.2 — Phiên #99 (ML_AUTOML_BLUEPRINT v1.1 — 35 model, 1 model mới additive, 0 cột đổi, 0 mất dữ liệu):** (1) **§6.33 `SweepRun`** MỚI — lịch sử đợt sweep AutoML L1 deterministic (windowHash · featureSet mặc định v2-lag16 · candidates/evaluated · seed · status running/done/failed · championJson cổng 4 điều kiện · logJson toàn bộ ứng viên kể cả thua · `@@index([startedAt(sort: Desc)])` cho UI lịch sử); (2) **§6.23 `MlModel.meta`** thêm trường additive `sweepRunId` + `sweepIndex` trên các bản do sweep train (mọi ứng viên archived — chỉ champion qua cổng mới serving + AuditLog `ML_SWEEP_SWAP`); twin lag-10 baseline của gate tự lành ghi `meta {featureSet "v1-lag10", twin:true, twinOf}`; (3) **§6.20 AppSetting** thêm key **`ml-sweep`** `{enabled, budgetCandidates, seed, deltaSwap, maxParamFactor, lastRunAt}` — kill-switch từng đợt; key `ml-gate` được ghi lại bởi gate tự lành (verdict FAIL + measuredAt + twin baseline — đo 2026-10-11T20:15:31Z); (4) không bảng nào cho C2-pipeline (đo coverage tin tức đọc `NewsItem` trực tiếp — 0 bảng mới); nghiễm thu: `bun run db:push` additive sạch · sweep thật budget 3 → SweepRun done + swap v5→v9 + audit · 15/15 verify PASS · lint/tsc 0. |
 | 2026-10-12 | **v0.9.1 — fixbug #95 (giao thức FB-1→FB-6, 34 model — 0 model mới, 0 cột mới, 1 index additive, 0 mất dữ liệu):** (1) **§6.7 `AgentRun`** bổ sung dòng `taskId` (cột có từ #94 nhưng thiếu trong bảng docs) + **`@@index([taskId])`** (F-K3-06 — tra cứu run theo nhiệm vụ cho verify V4 + guard route; index additive, không đổi cột); (2) **§6.8 `AgentTask.schedule`** chú thích **F-K4-02**: K4 giao việc BẮT BUỘC có lịch — engine due-check chỉ dispatch nhiệm vụ `schedule≠null`, nhiệm vụ "một lần" từ Chủ tịch là dead-letter chiếm hạn mức nên prompt yêu cầu lịch tường minh + validate từ chối; (3) các bug fixbug khác (F-K4-01 parser 2-khối JSON · F-K3-01 watchdog RUNNING · F-K3-02 DELETE 409 theo `Agent.status` · F-K4-03 $transaction lô create) không đổi schema — chi tiết chuỗi FB-1→FB-6 xem `worklog.md` + TECHNICAL_BLUEPRINT Changelog v1.8.1. Nghiệm thu `scripts/k3k4-verify.ts` 47/47 PASS (hermetic tự dọn). |
 | 2026-10-12 | **v0.9.0 — Phiên #94 K3 nhiệm vụ định kỳ + K4 Chủ tịch giao việc (34 model — 0 model mới, 8 cột additive, 0 mất dữ liệu):** (1) **§6.8 `AgentTask` +7 cột** — `schedule` (null \| "HH:MM" \| "DOW:HH:MM" — grammar chung `src/lib/schedule.ts`) · `nextDueAt` (index riêng cho engine due-check) · `lastRunAt` · `runCount` · `failStreak` (kill-switch 5 lỗi → tự paused + RiskAlert `K3_TASK_AUTOPAUSED`) · `paused` · `createdByAgentId` (K4 — null = trader tạo); (2) **`AgentRun.taskId`** (String nullable) — liên kết lịch sử chạy với nhiệm vụ; (3) API mới: `POST/GET /api/agents/[id]/tasks` (server tự tính nextDueAt theo ICT — chống lệch múi giờ client) · `PATCH/DELETE /api/agents/[id]/tasks/[taskId]` (pause/resume tính lại lịch; DELETE 409 khi đang RUNNING) · `GET/POST /api/k4` (setting + giới hạn); single-run `[id]/run` nhận `{taskId}` tiêm block NHIỆM VỤ ĐỊNH KỲ vào prompt + cập nhật AgentTask sau chạy; (4) engine `k3TaskDueCheck` tick 60s — task due → agent RUNNING thì defer +5 phút, ngược lại dispatch POST run {taskId}; (5) AppSetting key mới **`k4`** — `{enabled:false, maxOpenTasksPerAgent:3, maxTasksPerCycle:5}` — Chủ tịch (portfolio-strategist) giao việc trong chu kỳ 23 agents khi bật: JSON assignTasks validate fail-soft 8 luật (cấm nhóm executive · lịch ≥+4h · độ dài · hạn mức…), JSON rác bị bỏ không crash chu kỳ; (6) AuditLog action mới: `K3_TASK_CREATED/UPDATED/DELETED/PAUSED/RESUMED/AUTOPAUSED` · `K4_ENABLED/DISABLED/CONFIG_UPDATED/TASK_ASSIGNED`; (7) `ml-tuning` v2 MLP N-layer (hidden[] 1..5 lớp · activations relu/tanh/sigmoid từng lớp · lossWeights [DOWN,FLAT,UP] · l2 · valFraction · seed) — migration tự động từ h1/h2 cũ. Nghiệm thu `scripts/k3k4-verify.ts` 40/40 PASS (single-run LLM thật theo taskId 10s COMPLETED + engine dispatch thật 75s) + `scripts/ml-arch-verify.ts` 6/6 PASS. |
 | 2026-10-13 | **v0.8.5 — Phiên #93 chọn model AI từ UI (0 model mới, 0 cột mới, 0 migrate):** (1) AppSetting key mới **`llm-model`** (§6.20) — `{model: "<id>"}` model LLM của toàn 23 agent; ghi qua `POST /api/llm/models {model}` (validate 422 chống model lạ — phải nằm trong danh sách live/fallback); ưu tiên DB → env `OPENCODE_ZEN_MODEL` → `space-bunny-free`; `src/lib/llm.ts` đọc mỗi cuộc gọi (cache 5s) nên đổi model không cần restart; (2) AuditLog action mới (cột String sẵn có): **`LLM_MODEL_SET`** (entity `AppSetting`, entityId `llm-model`, before/after JSON — đã ghi thật 2 lần trong nghiệm thu); (3) bảo vệ 429 ba lớp trong `src/lib/llm.ts` — throttle toàn cục 900ms/lượt + ≤2 song song (env `LLM_MIN_SPACING_MS`/`LLM_MAX_CONCURRENT`) · retry 3 lần 2s/6s/15s + jitter + Retry-After · phát hiện 429 REST + CLI. |

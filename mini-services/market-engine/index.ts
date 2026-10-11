@@ -39,6 +39,13 @@
  *        A4 #79, cùng cửa sổ reprobe B14 — không thêm cửa sổ vận hành mới):
  *        POST /api/ml/train {"force": false} — route tự skip khi windowHash
  *        không đổi (không có bar mới) nên tuần không dữ liệu là $0.
+ *      - ML_SWEEP_AT (mặc định "SUN:04:15" Chủ nhật 04:15 ICT hằng tuần —
+ *        C1 #99 · ML_AUTOML_BLUEPRINT §4.6, SAU A4 retrain 04:00): POST
+ *        /api/ml/sweep {"force": false} — đợt sweep AutoML L1 deterministic
+ *        16 ứng viên + cổng 4 điều kiện; route tự skip khi windowHash không
+ *        đổi; kill-switch AppSetting "ml-sweep".enabled (§1.6) kiểm qua GET
+ *        ?configOnly=1 TRƯỚC khi bắn POST; broadcast WS "ml-sweep"; env
+ *        ML_SWEEP_DISABLED=1 tắt như A4.
  *      - AGENT_CYCLE_MINUTES (0=off): chu kỳ phân tích đa agent tự động —
  *        MẶC ĐỊNH HẬU PHƯƠNG từ K2 #86: chỉ hiệu lực khi AppSetting "k-run"
  *        CHƯA TỪNG được tạo; key tồn tại (kể cả enabled=false) → AppSetting
@@ -117,6 +124,11 @@ const SETTLE_DISABLED = process.env.SETTLE_DISABLED === "1";
 /** A4 (#79) — lịch retrain ML hằng tuần "SUN:04:00" (cùng cửa sổ reprobe B14). */
 const ML_TRAIN_AT = process.env.ML_TRAIN_AT ?? "SUN:04:00";
 const ML_TRAIN_DISABLED = process.env.ML_TRAIN_DISABLED === "1";
+/** C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3) — lịch sweep AutoML L1 hằng tuần
+ *  "SUN:04:15" ICT (SAU A4 retrain 04:00 — sweep dựa vào serving-swap guard
+ *  sống nên phải chạy sau; A4 <5 phút nên guard !mlTrainInFlight đủ thứ tự). */
+const ML_SWEEP_AT = process.env.ML_SWEEP_AT ?? "SUN:04:15";
+const ML_SWEEP_DISABLED = process.env.ML_SWEEP_DISABLED === "1";
 /** K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): giờ ICT kết toán sandbox hằng ngày
  *  (16:30 — SAU settle bandit 16:15 đúng 15 phút để không tranh lock DB; job
  *  4-việc: kênh-2 reward → CashSnapshot → telemetry → audit tổng kết). */
@@ -165,6 +177,10 @@ const REPROBE_SCHEDULE: { dow: number; minutes: number } =
 // như REPROBE_SCHEDULE — parseWeekly truy cập DOW_NAMES const, đặt trước sẽ TDZ).
 const ML_TRAIN_SCHEDULE: { dow: number; minutes: number } =
   parseWeekly(ML_TRAIN_AT) ?? parseWeekly("SUN:04:00") ?? { dow: 0, minutes: 4 * 60 };
+// C1 (#99 — F3) — cùng fail-safe 3 lớp cho lịch sweep (không bao giờ null —
+// bài học #42: schedule null → TypeError mỗi phút giết event loop engine).
+const ML_SWEEP_SCHEDULE: { dow: number; minutes: number } =
+  parseWeekly(ML_SWEEP_AT) ?? parseWeekly("SUN:04:15") ?? { dow: 0, minutes: 4 * 60 + 15 };
 
 function ictNow(): { date: string; minutes: number; dow: number } {
   const now = new Date(Date.now() + 7 * 3_600_000); // ICT = UTC+7
@@ -204,6 +220,12 @@ const stats = {
   lastMlTrainSunday: null as string | null,
   lastMlTrainError: null as string | null,
   mlTrainRuns: 0,
+  // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): lịch sweep AutoML L1 CN 04:15 ICT
+  // (P0-5: Chủ nhật đã sweep sống sót restart — không chạy lại sau restart cùng ngày)
+  lastMlSweepAt: null as string | null,
+  lastMlSweepSunday: null as string | null,
+  lastMlSweepError: null as string | null,
+  sweepRuns: 0,
   // K1 (#87 — §5.4): lịch settle-equity sandbox 16:30 ICT (P0-5 sống sót restart)
   lastK1EquityAt: null as string | null,
   lastK1EquityDate: null as string | null,
@@ -243,6 +265,7 @@ const http = createServer((req, res) => {
         reprobeAt: REPROBE_AT,
         settleAt: SETTLE_AT,
         mlTrainAt: ML_TRAIN_AT,
+        mlSweepAt: ML_SWEEP_AT,
         k1EquityAt: K1_EQUITY_AT,
         ...stats,
       })
@@ -287,6 +310,10 @@ interface EngineState {
   lastSettleAt?: string | null;
   lastMlTrainSunday?: string | null;
   lastMlTrainAt?: string | null;
+  // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): Chủ nhật đã sweep + mốc gần nhất
+  // (P0-5 — restart giữa chừng không chạy lại sweep cùng Chủ nhật)
+  lastMlSweepSunday?: string | null;
+  lastMlSweepAt?: string | null;
   // K1 (#87) — ngày đã settle-equity sandbox + mốc gần nhất (P0-5)
   lastK1EquityDate?: string | null;
   lastK1EquityAt?: string | null;
@@ -321,6 +348,11 @@ async function hydrateEngineState(): Promise<void> {
     if (typeof s.lastSettleAt === "string") stats.lastSettleAt = s.lastSettleAt;
     if (typeof s.lastMlTrainSunday === "string") stats.lastMlTrainSunday = s.lastMlTrainSunday;
     if (typeof s.lastMlTrainAt === "string") stats.lastMlTrainAt = s.lastMlTrainAt;
+    // C1 (#99 — F3) — phục hồi lịch sweep (restart giữa chừng không double-sweep:
+    // route có mutex 429 nhưng tránh cả lần gọi thừa; skip-guard windowHash
+    // ở route cũng chặn thêm — 2 lớp như A4).
+    if (typeof s.lastMlSweepSunday === "string") stats.lastMlSweepSunday = s.lastMlSweepSunday;
+    if (typeof s.lastMlSweepAt === "string") stats.lastMlSweepAt = s.lastMlSweepAt;
     // K1 (#87) — phục hồi lịch settle sandbox (restart giữa chừng không double:
     // route idempotent qua CashSnapshot 1-dòng/ngày + dedupe reward per position,
     // nhưng tránh cả lần gọi thừa)
@@ -330,7 +362,7 @@ async function hydrateEngineState(): Promise<void> {
     if (typeof s.lastIntlFailAt === "number") lastIntlFailAt = s.lastIntlFailAt;
     log(
       "state",
-      `phục hồi state từ DB (P0-5): eod=${stats.lastEodSyncDate ?? "—"} · intl=${stats.lastIntlSyncDate ?? "—"} · reprobe=${stats.lastReprobeSunday ?? "—"} · settle=${stats.lastSettleDate ?? "—"} · ml-train=${stats.lastMlTrainSunday ?? "—"} · intlFailStreak=${intlFailStreak}`
+      `phục hồi state từ DB (P0-5): eod=${stats.lastEodSyncDate ?? "—"} · intl=${stats.lastIntlSyncDate ?? "—"} · reprobe=${stats.lastReprobeSunday ?? "—"} · settle=${stats.lastSettleDate ?? "—"} · ml-train=${stats.lastMlTrainSunday ?? "—"} · ml-sweep=${stats.lastMlSweepSunday ?? "—"} · intlFailStreak=${intlFailStreak}`
     );
   } catch (err) {
     // App chưa sẵn sàng lúc boot engine — giữ state rỗng, sự kiện sync đầu
@@ -359,6 +391,9 @@ async function persistEngineState(): Promise<void> {
         lastSettleAt: stats.lastSettleAt,
         lastMlTrainSunday: stats.lastMlTrainSunday,
         lastMlTrainAt: stats.lastMlTrainAt,
+        // C1 (#99 — F3) — Chủ nhật đã sweep sống sót restart (P0-5)
+        lastMlSweepSunday: stats.lastMlSweepSunday,
+        lastMlSweepAt: stats.lastMlSweepAt,
         lastK1EquityDate: stats.lastK1EquityDate,
         lastK1EquityAt: stats.lastK1EquityAt,
       } satisfies EngineState),
@@ -857,6 +892,71 @@ async function mlTrainAndBroadcast(): Promise<void> {
   }
 }
 
+/** C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3) — sweep AutoML L1 Chủ nhật 04:15
+ *  ICT (SAU A4 04:00): POST /api/ml/sweep {"force": false} — route tự skip
+ *  khi windowHash không đổi (skip-guard như A4, điều kiện 4 cổng §4.4) nên
+ *  tuần không dữ liệu là $0. Timeout 20 phút (đúng trần budget 19 phút của
+ *  runner + biên — sweep 16 ứng viên ~4 phút nhưng từng ứng viên có thể
+ *  chậm tới 60s+). F-481-01 pattern: guard in-flight sweep + !mlTrainInFlight
+ *  (due-check) — due-check 60s không bắn POST chồng khi đợt đang chạy; route
+ *  có thêm mutex 429 dùng chung với train (F2) làm lớp 2.
+ *  Kill-switch §1.6 (F3): TRƯỚC khi bắn POST, GET ?configOnly=1 đọc
+ *  AppSetting ml-sweep.enabled — TẮT → đánh dấu Chủ nhật (im hẳn, không
+ *  hỏi lại mỗi phút; nút "Chạy đợt ngay" trên UI vẫn chạy được — POST route
+ *  không kiểm enabled). GET lỗi → KHÔNG đánh dấu (thử lại phút sau).
+ *  Thất bại POST → KHÔNG đánh dấu Chủ nhật — phút sau thử lại. Broadcast
+ *  WS "ml-sweep" sau khi xong (FE invalidate ["ml-sweep"] + ["ml-status"]). */
+let sweepInFlight = false;
+const ML_SWEEP_POST_TIMEOUT_MS = 20 * 60_000;
+const ML_SWEEP_CONFIG_GET_TIMEOUT_MS = 10_000;
+async function mlSweepAndBroadcast(): Promise<void> {
+  sweepInFlight = true;
+  try {
+    // Kill-switch §1.6 — đường ENGINE kiểm enabled (nút tay thì không).
+    let enabled = true;
+    try {
+      const res = await fetch(`${APP_URL}/api/ml/sweep?configOnly=1`, {
+        signal: AbortSignal.timeout(ML_SWEEP_CONFIG_GET_TIMEOUT_MS),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { config?: { enabled?: unknown } };
+        if (typeof data.config?.enabled === "boolean") enabled = data.config.enabled;
+      }
+    } catch (err) {
+      // GET lỗi → cứ bắn POST (route tự fail-soft) — không tự ý tắt đợt.
+      log("ml-sweep", `đọc kill-switch config lỗi (tiếp tục POST): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!enabled) {
+      const ict = ictNow();
+      stats.lastMlSweepAt = new Date().toISOString();
+      stats.lastMlSweepSunday = ict.date; // im hẳn tuần này (không hỏi lại mỗi phút)
+      log("ml-sweep", "TẮT qua AppSetting ml-sweep.enabled (kill-switch §1.6) — bỏ qua tuần này (nút tay trên UI vẫn chạy được)");
+      return;
+    }
+    const data = await postJson("/api/ml/sweep", { force: false }, {
+      timeoutMs: ML_SWEEP_POST_TIMEOUT_MS,
+    });
+    stats.lastMlSweepAt = new Date().toISOString();
+    stats.sweepRuns++;
+    stats.lastMlSweepError = null;
+    const ict = ictNow();
+    stats.lastMlSweepSunday = ict.date;
+    io.emit("ml-sweep", data);
+    const champion = (data as { champion?: { tag?: string; arch?: string } }).champion;
+    log(
+      "ml-sweep",
+      `sweep C1 xong (${data.skipped === true ? `skip — ${data.reason ?? "windowHash không đổi"}` : `${data.evaluated ?? "?"}/${data.candidates ?? "?"} ứng viên · champion ${champion?.tag ?? "—"} ${champion?.arch ?? ""}`}) · ${(data.durationMs ?? "?")}ms${data.swapped === true ? " · SWAP serving" : ""}`
+    );
+  } catch (err) {
+    stats.lastMlSweepError = err instanceof Error ? err.message : String(err);
+    log("ml-sweep", `LỖI (thử lại phút sau): ${stats.lastMlSweepError}`);
+  } finally {
+    sweepInFlight = false;
+    // P0-5 — Chủ nhật đã sweep sống sót restart
+    void persistEngineState();
+  }
+}
+
 /** K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4/§5.5): kết toán sandbox 16:30 ICT.
  *  POST /api/k/sandbox/settle-equity → broadcast "k1-settle". Thuần thuật toán
  *  0 LLM: kênh-2 reward (posterior Beta BanditArm — Q2 trộn) + CashSnapshot
@@ -939,6 +1039,22 @@ function mlTrainDue(): boolean {
   );
 }
 
+/** C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3) — Chủ nhật, đã qua 04:15 ICT, chưa
+ *  sweep Chủ nhật này → chạy đợt sweep AutoML L1. Clone đúng pattern A4:
+ *  guard in-flight sweep + KHÔNG chồng A4 (!mlTrainInFlight — sweep chạy
+ *  SAU A4 cùng sáng, A4 04:00 <5 phút nên 04:15 đủ sóng thoải). */
+function mlSweepDue(): boolean {
+  if (ML_SWEEP_DISABLED || !ML_SWEEP_SCHEDULE) return false;
+  if (sweepInFlight) return false;
+  if (mlTrainInFlight) return false; // không bao giờ đè lên retrain A4
+  const ict = ictNow();
+  return (
+    ict.dow === ML_SWEEP_SCHEDULE.dow &&
+    ict.minutes >= ML_SWEEP_SCHEDULE.minutes &&
+    stats.lastMlSweepSunday !== ict.date
+  );
+}
+
 /** B12 — đã qua 06:15 ICT hôm nay và chưa sync ngày này → sync.
  * F-441-01: lần gần nhất LỖI thì phải đủ backoff nhân đôi (30p → cap 4h)
  * mới được thử lại — chống retry mỗi phút suốt ngày (đấm Yahoo 429). */
@@ -995,7 +1111,7 @@ http.listen(PORT, () => {
   log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL}`);
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
@@ -1031,6 +1147,9 @@ http.listen(PORT, () => {
       // (due-check mới nhất trong try/catch chung — lỗi 1 lịch không giết cả khối)
       if (settleDue()) void settleAndBroadcast();
       if (mlTrainDue()) void mlTrainAndBroadcast();
+      // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): sweep AutoML L1 CN 04:15 ICT
+      // (sau A4 04:00 — cùng try/catch chung, lỗi 1 lịch không giết cả khối)
+      if (mlSweepDue()) void mlSweepAndBroadcast();
       // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
       // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
       if (k1EquityDue()) void k1EquityAndBroadcast();

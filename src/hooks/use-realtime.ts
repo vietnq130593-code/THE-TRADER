@@ -18,6 +18,9 @@ import type { QuotesResponse, WatchlistResponse } from "@/lib/types";
  * - "eod": invalidate dữ liệu giá/bar sau mỗi lần đồng bộ EOD THẬT VNDIRECT
  *   (market-engine 15:45 ICT hằng ngày) — nến/chart/chỉ báo đổi sang giá thật.
  * - "cycle": invalidate dữ liệu agent khi scheduler chạy chu kỳ tự động.
+ * - "ml-sweep": invalidate ["ml-sweep"] + ["ml-status"] sau mỗi đợt sweep
+ *   AutoML L1 (C1 #99 — engine CN 04:15 ICT; champion board + serving snapshot
+ *   đổi ngay khi có SWAP).
  */
 export function useRealtimeMarket(): void {
   const queryClient = useQueryClient();
@@ -89,12 +92,22 @@ export function useRealtimeMarket(): void {
       }, 0);
     };
 
+    // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): đợt sweep AutoML L1 xong (engine
+    // CN 04:15 ICT hoặc nút tay) — làm mới champion board + serving snapshot.
+    const onMlSweep = () => {
+      setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ["ml-sweep"] });
+        void queryClient.invalidateQueries({ queryKey: ["ml-status"] });
+      }, 0);
+    };
+
     s.on("connect", onConnect);
     s.on("disconnect", onDisconnect);
     s.on("quotes", onQuotes);
     s.on("news", onNews);
     s.on("eod", onEod);
     s.on("cycle", onCycle);
+    s.on("ml-sweep", onMlSweep);
 
     return () => {
       s.off("connect", onConnect);
@@ -103,6 +116,7 @@ export function useRealtimeMarket(): void {
       s.off("news", onNews);
       s.off("eod", onEod);
       s.off("cycle", onCycle);
+      s.off("ml-sweep", onMlSweep);
       s.disconnect();
     };
   }, [queryClient, setRealtimeConnected, setLastTickAt]);

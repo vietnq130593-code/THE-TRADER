@@ -36,6 +36,10 @@ interface EngineState {
   lastSettleAt?: string | null;
   lastMlTrainSunday?: string | null;
   lastMlTrainAt?: string | null;
+  // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): Chủ nhật đã sweep + mốc gần nhất
+  // — engine hydrate lúc boot (restart không chạy lại sweep cùng Chủ nhật).
+  lastMlSweepSunday?: string | null;
+  lastMlSweepAt?: string | null;
   updatedAt?: string;
 }
 
@@ -81,6 +85,9 @@ export async function POST(request: Request) {
       "lastSettleAt",
       "lastMlTrainSunday",
       "lastMlTrainAt",
+      // C1 (#99 — F3) — lịch sweep AutoML L1 CN 04:15 ICT (P0-5, additive)
+      "lastMlSweepSunday",
+      "lastMlSweepAt",
     ];
     const clean: EngineState = { updatedAt: new Date().toISOString() };
     for (const k of allowed) {

@@ -107,6 +107,40 @@ export interface MlStatusResponse {
   rag?: MlRagStatus | null;
   /** #83 — số liệu bảng intraday 5-phút (tiến độ cổng "Lớp chuỗi đầy đủ"). */
   intraday?: MlIntradayStatus | null;
+  /** C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1/Q4): tiến độ cổng dữ liệu
+   *  "tin tức → đặc trưng v3-news22" (phiên có tin PIT /60 + coverage
+   *  lexicon) — additive, FE cũ bỏ qua. */
+  newsGate?: MlNewsGateStatus | null;
+}
+
+/* ───── C2-pipeline — cổng dữ liệu tin tức → đặc trưng (#99) ───── */
+
+export interface MlNewsGateSourceCoverage {
+  source: string;
+  news: number;
+  hit: number;
+  /** 0..1 — tỉ lệ tin có ≥ 1 hit lexicon trong nguồn. */
+  coverage: number;
+}
+
+export interface MlNewsGateStatus {
+  available: boolean;
+  reason?: string;
+  totalNews: number;
+  /** Số phiên giao dịch (T2–T6) có ≥ 1 tin biết trước đóng cửa — PIT-strict. */
+  sessionsWithNews: number;
+  /** 60 — ngưỡng cổng dữ liệu trước khi train đặc trưng news (§5.1). */
+  sessionsRequired: number;
+  /** true khi đủ 60 phiên — điều kiện CẦN, chưa tự train gì (còn gate-news §5.3). */
+  readyToTrain: boolean;
+  /** 0..1 — % tin có ≥ 1 hit lexicon (~75 thuật ngữ tài chính VN). */
+  coveragePercent: number;
+  hitTitles: number;
+  measuredTitles: number;
+  perSource: MlNewsGateSourceCoverage[];
+  firstNewsAt: string | null;
+  lastNewsAt: string | null;
+  measuredAt: string;
 }
 
 /* ───── L1 RAG + Intraday 5-phút (#83 — ML_LEARNING/ML_OPS_BLUEPRINT) ───── */

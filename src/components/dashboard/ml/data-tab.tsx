@@ -28,6 +28,9 @@ import { useMlArchitecture, useMlStatus, type MlDbModelInfo } from "@/hooks/use-
 import { formatDateTime } from "@/lib/format";
 import { EmptyNote, nf0 } from "./shared";
 import { RagIntradayBlock } from "./rag-intraday-block";
+// C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1/Q4): khối tiến độ cổng dữ liệu
+// "tin tức → đặc trưng v3-news22" — tự chín theo crawler RSS 15 phút/lần.
+import { NewsGateBlock } from "./news-gate-block";
 
 const GROUP_LABELS: Record<string, string> = {
   market: "Thị trường",
@@ -284,6 +287,7 @@ export function DataTab() {
   const status = useMlStatus();
   const rag = status.data?.rag ?? null;
   const intraday = status.data?.intraday ?? null;
+  const newsGate = status.data?.newsGate ?? null;
 
   if (arch.isLoading) {
     return (
@@ -344,6 +348,11 @@ export function DataTab() {
       {/* RAG + Intraday (#83) */}
       <section aria-label="Tri thức truy hồi và chuỗi 5 phút" className="flex flex-col gap-3">
         <RagIntradayBlock rag={rag} intraday={intraday} />
+      </section>
+
+      {/* C2-pipeline (#99) — cổng dữ liệu tin tức → đặc trưng */}
+      <section aria-label="Cổng dữ liệu tin tức sang đặc trưng" className="flex flex-col gap-3">
+        <NewsGateBlock newsGate={newsGate} />
       </section>
     </div>
   );

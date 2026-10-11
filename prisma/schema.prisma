@@ -725,6 +725,24 @@ model MlModel {
   @@index([kind, status])
 }
 
+// C1 (#99 · ML_AUTOML_BLUEPRINT §4.5) — lịch sử các đợt sweep AutoML L1
+// deterministic: mọi ứng viên (kể cả thua) đều công khai trên champion board.
+model SweepRun {
+  id            String    @id @default(cuid())
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  windowHash    String // cùng chuẩn MlModel.meta — skip-guard như A4
+  featureSet    String    @default("v2-lag16") // sẵn cho v3-news22 tương lai
+  candidates    Int // số ứng viên ngân sách
+  evaluated     Int // số ứng viên đã train xong
+  seed          Int // seed dãy ứng viên — deterministic (hiện dãy cố định, seed lưu cho mở rộng)
+  status        String // running | done | failed
+  championJson  String? // {index, arch, activations, lossWeights, hyper, valAcc, valLoss, brier, paramCount, score, swapProposed, swapReason, modelVersion}
+  logJson       String? // [{i, arch, activations, lossWeights, valAcc, valLoss, brier, params, score, ms, error?}]
+
+  @@index([startedAt(sort: Desc)])
+}
+
 // L1 (ML_LEARNING_BLUEPRINT §3 — phiên #83): log MỖI LẦN truy hồi RAG —
 // đo được "RAG có được nhìn thấy/không" (cổng L3: ≥30 ngày & ≥10% chu kỳ).
 // query/results dùng Json (string[] / mảng {refTable, refId, score}) theo

@@ -52,6 +52,7 @@ import { NnTab } from "@/components/dashboard/ml/nn-tab";
 import { AlgorithmsTab } from "@/components/dashboard/ml/algorithms-tab";
 import { DataTab } from "@/components/dashboard/ml/data-tab";
 import { TuningTab } from "@/components/dashboard/ml/tuning-tab";
+import { SweepTab } from "@/components/dashboard/ml/sweep-tab";
 import { useUiStore } from "@/lib/store";
 import { changeColor, formatDateTime, formatVnd } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -141,7 +142,7 @@ interface HistoryRow {
 
 /**
  * PHIÊN #90 — hiệu lệnh trader: nội dung module Tổng hợp dài cuộn dọc (Bayes
- * + Học máy 1.075d nối đuôi). CHIA 7 TAB NGANG (không thêm module mới —
+ * + Học máy 1.075d nối đuôi). CHIA TAB NGANG (không thêm module mới —
  * trader: "không cần module học máy, chỉ cần chia module tổng hợp thành các
  * tab hợp lý"):
  *
@@ -154,6 +155,8 @@ interface HistoryRow {
  *   5. Thuật toán     — 10 thẻ file·hàm·hằng số thật (tab #89).
  *   6. Dữ liệu        — pipeline 8 chặng + trình duyệt 34 model + RAG (tab #89).
  *   7. Tinh chỉnh     — ô nhập vận hành thật (tab #89).
+ *   8. Tự động tìm kiếm — sweep AutoML L1 champion board + cổng 4 điều kiện
+ *                       (tab C1 #99 — ML_AUTOML_BLUEPRINT §4.5/F9).
  *
  * 5 tab học máy #89 được PHÂN GIẢI lên ngang hàng (không còn Tabs lồng) —
  * tab đang mở lưu ở store (synthesisTab) để giữ khi đổi module qua lại.
@@ -166,6 +169,7 @@ const SYNTHESIS_TABS = [
   { value: "algorithms", label: "Thuật toán" },
   { value: "data", label: "Dữ liệu" },
   { value: "tuning", label: "Tinh chỉnh" },
+  { value: "automl", label: "Tự động tìm kiếm" },
 ] as const;
 
 export function SynthesisWorkspace() {
@@ -246,7 +250,7 @@ export function SynthesisWorkspace() {
             <div className="leading-tight">
               <p className="text-base font-semibold">Bộ tổng hợp Bayes</p>
               <p className="text-xs text-muted-foreground">
-                7 tab: nhận định 4 bậc nhân quả → bằng chứng cổ phiếu → học
+                8 tab: nhận định 4 bậc nhân quả → bằng chứng cổ phiếu → học
                 máy 3 mô hình → mạng thần kinh trọng số thật → thuật toán ·
                 hàm → kiến trúc dữ liệu → tinh chỉnh vận hành thật
               </p>
@@ -283,7 +287,7 @@ export function SynthesisWorkspace() {
       </Card>
 
       <Tabs value={synthesisTab} onValueChange={setSynthesisTab}>
-        {/* 7 tab — cuộn ngang trên mobile (pattern #89) */}
+        {/* 8 tab — cuộn ngang trên mobile (pattern #89) */}
         <div className="overflow-x-auto custom-scrollbar pb-1">
           <TabsList className="w-max">
             {SYNTHESIS_TABS.map((t) => (
@@ -374,6 +378,11 @@ export function SynthesisWorkspace() {
         {/* ── Tab 7 · Tinh chỉnh — ô nhập vận hành thật ── */}
         <TabsContent value="tuning" className="mt-4">
           <TuningTab />
+        </TabsContent>
+
+        {/* ── Tab 8 · Tự động tìm kiếm — sweep AutoML L1 champion board (C1 #99) ── */}
+        <TabsContent value="automl" className="mt-4">
+          <SweepTab />
         </TabsContent>
       </Tabs>
     </div>

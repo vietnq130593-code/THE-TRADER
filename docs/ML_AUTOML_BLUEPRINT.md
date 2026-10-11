@@ -1,8 +1,8 @@
 # ML AUTOML BLUEPRINT — L1 DETERMINISTIC SWEEP CONTROLLER + TÍNH NĂNG HOÁ ĐẦU VÀO TIN TỨC
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/ML_AUTOML_BLUEPRINT.md` · **Version:** 1.0 · **Created:** 2026-10-12 (phiên #98 — xây theo chỉ đạo của trader: *"Tiến hành xây dựng blueprint trước cho tôi… Dựa vào các thắc mắc của tôi có thể tiếp tục nâng cấp, bổ sung cho blueprint nếu cần thiết"*)
-> **Status:** **DỰ THẢO — CHỜ TRADER DUYỆT ĐỊNH HƯỚNG (chưa triển khai dòng code nào)**
+> **Document:** `docs/ML_AUTOML_BLUEPRINT.md` · **Version:** 1.1 · **Created:** 2026-10-12 (#98) · **Revised:** 2026-10-12 ~03:10 ICT (#99 — trader duyệt: *"review blueprint, xử lý/bổ sung nếu có; các câu hỏi theo khuyến nghị; tôi thích những gì có thể tự động"*)
+> **Status:** **ĐÃ DUYỆT THEO KHUYẾN NGHỊ — ĐÃ TRIỂN KHAI XONG #99** (C0 ✅ serving v5→v9 · ml-gate đo FAIL trung thực với twin tự lành · C1 ✅ sweep thật 28s swap champion 0,423 qua cổng 4 điều kiện + skip-guard 916ms + rerun identical · C2-pipeline ✅ block tiến độ 2/60 phiên tự chín · engine `ML_SWEEP_AT SUN:04:15` wired · 15/15 verify · lint/tsc 0 · E2E desktop+mobile 0 console error — bằng chứng §0.9 + worklog #99 + TECHNICAL v1.9.0 · DB_SCHEMA v0.9.2 · AUTONOMY v1.5)
 > **Nguồn gốc:** Kiểm toán kiến trúc #97 (phán quyết **LEVEL 0 — Static ANN** trưởng thành · L1 ~30% hương vị · L2/L3 0%) + 6 câu hỏi kiểm kê của trader phiên #98 (hàm thưởng · hàm mất mát · Keras · lan truyền tiến/ngược · tin tức trong DB · tin tức → học quy luật).
 > **Cross-refs:** [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) v1.4 (cổng B2 · serving-swap guard · A4 retrain) · [ML_LEARNING_BLUEPRINT.md](./ML_LEARNING_BLUEPRINT.md) v1.1.0 (L1 BM25 RAG) · [DATA_PLATFORM_BLUEPRINT.md](./DATA_PLATFORM_BLUEPRINT.md) (FeatureContract P0-3 · PIT P1-2) · [MARKET_EXPANSION_BLUEPRINT.md](./MARKET_EXPANSION_BLUEPRINT.md) (B7/B8/B9) · [DB_SCHEMA.md](./DB_SCHEMA.md) v0.9.1 · [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) v1.8.2 · `worklog.md` Task ID 97 (audit đầy đủ)
 > **Người soạn:** Kiến trúc sư AI / System & Architecture Auditor (phiên #98)
@@ -105,6 +105,23 @@ Tổng **64 tin** (đo 2026-10-12 ICT), khoảng `2026-10-09 → 2026-10-11`, 50
 
 → Tin tức hiện chỉ đến được *quyết định* qua vòng LLM/Bayes/RAG (0.7) — chưa bao giờ đến được *mạng học* (MLP/GRU/Q-learning). Nói cách khác: tri thức tin tức là **gợi ý lúc ra quyết định**, chưa phải **quy luật đã học từ dữ liệu**. Đây chính là khoảng trống hạng mục **C2** của blueprint này (§5) — sinh trực tiếp từ câu hỏi của trader: *"có thể học về quy luật thị trường trong database không"*.
 
+### 0.9 Đối soát v1.0 → v1.1 (phiên #99) — 10 lỗi/thiếu sót đã vá
+
+Đối soát lại TOÀN BỘ claim của v1.0 trực tiếp trên code + DB sống (03:05 ICT): **mọi claim §0 khớp 100%** — nn.ts (softmax 169-180 · actDerivFromOut 198-207 · forward 298-327 · CE class-weight 337+ · dzOut 423 · backprop 427-455 · Adam 458-474 · L2 chỉ W) · rl.ts:198 (reward exposure×ret − 0,001|Δexp| · α 0,1 · γ 0,95 · 300 episode · state 48 · action 3) · bandit Thompson 6 arm · DB (64 tin đúng bkd 16/13/13/12/10 · BanditEvent 0 · 6 arm Beta(1,1) pulls 0 · ml-gate KHÔNG tồn tại · dl-mlp v1–v4 archived valAcc 0,395 cùng windowHash 30f2d982fa · rl-q v3 serving · RetrievalLog 14) · engine (NEWS_MS 15 phút · SETTLE_AT 16:15 · ML_TRAIN_AT SUN:04:00) · MLP_ARCH_LIMITS 1..5 lớp × 2..96 nơ-rôn · MLP_TUNING_FIELDS 7 hyper. Phát hiện **10 vấn đề** — vá thẳng vào v1.1:
+
+| # | Mức | Phát hiện (đo được) | Vá trong v1.1 |
+|---|---|---|---|
+| **F1** | P1 | **Phương án (a) §3 không chạy được như mô tả**: `scripts/ml-evidence-gate.ts` thoát cứng khi (i) không có bản serving (`:216` "chưa có bản dl-mlp serving") và (ii) không tìm thấy bất kỳ bản lag-10 nào làm baseline (`:263` `process.exit(1)`). Từ B1 trở đi train route CHỈ sinh v2-lag16 — **không còn đường nào train lag-10**, DB hiện 0 bản lag-10. | (a) nâng cấp thành **gate tự lành**: script tự train twin lag-10 khi thiếu baseline (chi tiết §3-mới) — đúng gu "tự động" của trader. |
+| **F2** | P1 | §4.3 nói "mỗi ứng viên chạy đúng đường `trainDlMlp` hiện tại" nhưng hàm này nằm **bên trong** `api/ml/train/route.ts:343` — route khác không import được route của route. | Bóc `trainDlMlp` + `saveModel` + guard thành `src/lib/ml/train-mlp.ts` — train route và sweep route cùng dùng MỘT nguồn (chia sẻ mutex + đánh version). |
+| **F3** | P1 | §4.6 thiếu guard bắn chồng: engine tick 60s, sweep ~4 phút → không guard sẽ POST lại mỗi phút trong lúc sweep đang chạy (A4 có sẵn `mlTrainInFlight` + `lastMlTrainSunday` persisted P0-5 + timeout 280s + retry phút-sau — `market-engine/index.ts:825-861`). | Sweep clone đúng pattern A4/K1: `sweepInFlight` + `stats.lastMlSweepSunday` persisted + timeout 20 phút + retry phút sau + broadcast WS `"ml-sweep"` + env `ML_SWEEP_AT`/`ML_SWEEP_DISABLED`. |
+| **F4** | P2 | §4.4 điều kiện 3 (`paramCount ≤ 2× serving`) không xác định khi serving == null (DB sạch). | serving == null → cap mặc định `2 × MLP_ARCH_LIMITS.paramWarnThreshold` (10.000) · điều kiện 1 so baseline 1/3 + δ · điều kiện 2 so Brier uniform 0,667. Nhánh chỉ dành cho DB sạch — sau C0 serving luôn tồn tại. |
+| **F5** | P2 | Công thức score §4.3 phạt từ mốc 2.000 tham số — lệch hằng số nhà `paramWarnThreshold = 5.000` (`tuning.ts:127`). | Formula dùng `paramWarnThreshold` (một nguồn sự thật, khỏi lệch số). |
+| **F6** | P2 | `MlpMetrics` KHÔNG có Brier (`nn.ts:35-42` chỉ epochs/samples/trainAcc/valAcc/trainLoss/valLoss) — score §4.3 cần Brier từng ứng viên. | Evaluator tự tính Brier trên val block (cùng cut 80/20 thời gian như `fit()`) bằng `predictProba` — đúng method gate script `:343-358`. |
+| **F7** | P3 | SweepRun thiếu index cho UI lịch sử + thiếu field featureSet (tương lai C2 sweep trên v3-news22 phải migrate). | `@@index([startedAt(sort: Desc)])` + field `featureSet String @default("v2-lag16")`. |
+| **F8** | P3 | §4.4 điều kiện 4 chữ "Ban đầu khi" gây mập mờ (đọc như chỉ áp dụng khi khởi động). | Viết lại: skip-guard windowHash như A4 áp dụng LUÔN cho mọi đợt. |
+| **F9** | P3 | §4.5 UI thiếu chi tiết tích hợp thật (chỉ nói "tab mới trong module Học máy"). | Tab "Tự động tìm kiếm" = tab thứ 8 `SYNTHESIS_TABS` (`synthesis-workspace.tsx:161` — hiện 7 tab) · component `ml/sweep-tab.tsx` · dữ liệu `/api/ml/sweep` (GET cấu hình + lịch sử, POST chạy ngay) · WS `"ml-sweep"` · hook `use-ml-sweep.ts` theo pattern `use-ml.ts`. |
+| **F10** | P3 | Q3 bỏ ngỏ khiến không gian §4.2 (có nhắc lossWeights) mâu thuẫn câu hỏi §9. | Chốt §9: lossWeights tham gia sweep CHỈ ở refine (2 preset), coarse giữ lossWeights trader đang đặt trong ml-tuning (hiện [1,1,1] — đo 03:05 ICT). |
+
 ---
 
 ## §1. Phán quyết cấp độ & động lực leo cấp (tóm tắt audit #97)
@@ -134,28 +151,28 @@ Mới cho AutoML L1:
 
 ---
 
-## §3. Hạng mục C0 — MỞ KẸT ML-GATE COLD-START [AUD-97-F1] (TIỀN ĐỀ TUYỆT ĐỐI)
+## §3. Hạng mục C0 — MỞ KẸT ML-GATE COLD-START [AUD-97-F1] (TIỀN ĐỀ TUYỆT ĐỐI) — 🟢 ĐÃ DUYỆT (c)+(a) BẢN TỰ LÀNH
 
-**Vấn đề (đo #97):** DB hiện không có bản dl-mlp serving nào (v1–v4 toàn archived) → `mlForecastEnsemble` đang fallback linreg thuần (cử tri ml-forecast mất giọng MLP). Cơ chế kẹt 2 tầng:
+**Vấn đề (đo #97, tái khẳng định #99 — đọc trực tiếp `train/route.ts:439-457`):** DB hiện không có bản dl-mlp serving (v1–v4 toàn archived) → `mlForecastEnsemble` fallback linreg thuần. Cơ chế kẹt 2 tầng:
 
 ```text
 (1) AppSetting "ml-gate" không tồn tại (mất khi đổi DB) → gateVerdictOf() = null
 (2) Không có serving row → featureSetOf(null) = "v1-lag10" ≠ "v2-lag16" → sameSet = false
 → promoted = beatsValAcc && (sameSet || PASS) = false VĨNH VIỄN cho mọi bản lag16 mới
-→ scripts/ml-evidence-gate.ts cần baseline lag10 cùng windowHash — DB không còn bản lag10 nào
+   (trong khi doc comment `route.ts:59` lại hứa "Không có bản serving trước đó → promote")
 ```
 
-**Phương án (đề xuất hybrid — trader chọn ở §9 Q1):**
+**Phương án đã duyệt (c)+(a) một đợt — có vá F1 cho (a):**
 
-| Hướng | Việc | Ưu | Nhược |
-|---|---|---|---|
-| **(c) vá code** | Train route: khi `serving == null` → bỏ ràng buộc featureSet (đúng lại doc comment sẵn có *"Không có bản serving trước đó → promote"*) | Triệt để, tự chữa cho mọi DB sạch tương lai, 1 nhánh if | Chạm code đã qua fixbug |
-| **(a) re-baseline gate** | Train 1 bản lag10 twin trên windowHash hiện tại → chạy `ml-evidence-gate.ts` đo thật → ghi AppSetting ml-gate verdict | Đúng quy trình cổng nhất, có số liệu B2 mới cho lag16 trên cửa sổ hiện tại | +1 lần train lag10 chỉ để làm baseline |
-| **(b) admin promote** | Đưa thẳng v4 lên serving (valAcc 39,5% > baseline ngẫu nhiên 33% — nguyên tắc §1.5 thoả) | Nhanh nhất (1 câu SQL) | Bỏ qua cổng — mâu thuẫn văn hoá bằng chứng |
+| Bước | Việc | Chi tiết |
+|---|---|---|
+| **(c) vá code** | Train route: `servingRow == null` → thoả ràng buộc featureSet (đúng lại doc comment sẵn có) | 1 dòng: `const sameSet = servingRow == null || servingFeatureSet === ML_FEATURE_SET;` — chữa vĩnh viễn cho mọi DB sạch tương lai, bản ĐẦU TIÊN lên serving luôn. |
+| **(a) gate tự lành** | `scripts/ml-evidence-gate.ts`: khi thiếu baseline lag-10 → **tự train twin** rồi mới đo | Twin = MLP **10 chiều đầu** của CHÍNH tập `buildTrainingSet` vừa build ("10 chiều đầu giữ nguyên công thức" — đúng ngữ nghĩa `featureSetOf`), **cùng arch/activations/lossWeights/lr/batchSize/epochs/patience/l2/valFraction/seed** như bản ứng viên lag-16 (đọc từ `candidate.meta.tuning`) — so sánh apples-to-apples "cùng dữ liệu, khác bộ đặc trưng" · lưu `MlModel kind dl-mlp, status archived, meta {featureSet:"v1-lag10", windowHash, twin:true, twinOf:version}` · `predictProba` của bản 10 chiều đọc an toàn từ vector 16 chiều (nn.ts tự cắt — đã đối chiếu `applyNormInternal` + `forward` chỉ đọc `arch.in` chiều đầu). Chạy `bun run scripts/ml-evidence-gate.ts`. |
+| **kích hoạt** | Train 1 bản serving thật | `POST /api/ml/train {target:"dl-mlp", force:true}` → bản v5 promoted (sau bước c) → gate đo trên serving sống. |
 
-**Khuyến nghị của người soạn: (c) + (a) làm một đợt** — vá nhánh `serving==null` (chữa vĩnh viễn cold-start) rồi chạy lại gate có baseline mới để verdict ml-gate phản ánh đúng cửa sổ dữ liệu hiện tại. (b) chỉ dùng nếu trader muốn giọng MLP quay lại serving ngay trong hôm nay.
+(b) admin promote **BỎ** — mâu thuẫn văn hoá bằng chứng, và (c) làm được điều (b) hứa mà vẫn qua cổng.
 
-**Nghiệm thu C0:** (i) có ≥ 1 bản dl-mlp status=serving trên DB; (ii) `mlForecastEnsemble` trả `modelVersion ≠ null`; (iii) tái sinh kịch bản DB sạch (xoá MlModel + ml-gate) → train 1 lần → bản đầu TIÊN lên serving được (không kẹt); (iv) gate verdict mới có measuredAt; (v) chu kỳ agent + E2E 0 lỗi console.
+**Nghiệm thu C0 (định trước):** (i) có ≥ 1 bản dl-mlp status=serving trên DB; (ii) `mlForecastEnsemble` trả `modelVersion ≠ null`; (iii) tái sinh kịch bản DB sạch (xoá MlModel dl-mlp + ml-gate) → train 1 lần → bản đầu TIÊN lên serving được (không kẹt); (iv) AppSetting ml-gate TỒN TẠI kèm verdict + measuredAt + baseline twin (không còn exit(1) "không tìm thấy bản lag-10"); (v) chu kỳ agent + E2E 0 lỗi console.
 
 ---
 
@@ -178,36 +195,40 @@ Mới cho AutoML L1:
 
 Quy mô tổ hợp ~10⁵–10⁶ → controller KHÔNG dò toàn bộ; dùng **chiến lược 2 giai đoạn**:
 
-- **Giai đoạn coarse (12 ứng viên):** lưới thô tiêu biểu — arch hạt nhân {16-[24,12]-3, 16-[32,16]-3, 16-[48,24,12]-3, 16-[16]-3, 16-[64,32,16,8]-3, 16-[12,8]-3} × activation {relu, relu-tanh} + hyper mặc định. Mục đích: tìm *vùng topo* tốt.
-- **Giai đoạn refine (4 ứng viên):** quanh top-2 coarse — mở/rút 1 lớp ±8 nơ-rôn, thử lossWeights lệch (UP nặng hơn), lr ×0,5/×2.
+- **Giai đoạn coarse (12 ứng viên):** lưới thô tiêu biểu — arch hạt nhân {16-[24,12]-3, 16-[32,16]-3, 16-[48,24,12]-3, 16-[16]-3, 16-[64,32,16,8]-3, 16-[12,8]-3} × activation {relu, relu-tanh} + hyper mặc định. Mục đích: tìm *vùng topo* tốt. **lossWeights = bản trader đang đặt trong AppSetting ml-tuning** (đo 03:05 ICT: [1,1,1]) — "ý người" giữ ở coarse (Q3 §9).
+- **Giai đoạn refine (4 ứng viên):** quanh top-2 coarse — 2 biến thể kiến trúc (mở/rút 1 lớp ±8 nơ-rôn) + **1 preset lossWeights UP-heavy [1,1,2,5] (Q3)** + 1 biến thể lr ×0,5 hoặc ×2.
 
 Dãy ứng viên sinh bằng **quy tắc cố định từ seed** (mulberry32 — same seed ⇒ same dãy ⇒ same kết quả, nguyên tắc §2.9). Tổng ≤ 16 ứng viên × ~12s ≈ **~4 phút/đợt** + chi phí lưu hàng.
 
-### 4.3 Evaluator (tái sử dụng 100% hạ tầng có sẵn)
+### 4.3 Evaluator (tái sử dụng hạ tầng có sẵn — có bổ sung F2/F5/F6)
 
-Mỗi ứng viên chạy đúng đường `trainDlMlp` hiện tại (cut 80/20 theo thời gian, early-stop valLoss) rồi chấm:
+**F2:** bóc `trainDlMlp` + `saveModel` + guard khỏi `api/ml/train/route.ts` thành `src/lib/ml/train-mlp.ts` — train route (hiện hành) và sweep route cùng gọi MỘT hàm, chia sẻ mutex + đánh version (không 2 hàng trùng version khi sweep đang chạy mà trader bấm train tay).
+
+Mỗi ứng viên chạy đúng đường `trainDlMlp` (cut 80/20 theo thời gian, early-stop valLoss) rồi chấm:
 
 ```text
 score(ứng viên) = valAcc
-                  − 0,0002 × max(0, paramCount − 2.000)/100    (phạt quá tham số hoá)
-                  + 0,01 × I[Brier_val ≤ Brier_serving]         (kèm Brier — B8)
+                  − 0,0002 × max(0, paramCount − paramWarnThreshold)/100   (F5 — mốc 5.000 = MLP_ARCH_LIMITS.paramWarnThreshold, một nguồn)
+                  + 0,01 × I[Brier_val ≤ Brier_serving]                       (F6 — Brier tự tính trên val block bằng predictProba,
+                                                                                   đúng method gate script :343-358; Brier_serving lấy từ
+                                                                                   AppSetting ml-gate.deltaBrier.v2 nếu có, không có thì bỏ số hạng)
 ```
 
-- **Brier paired bootstrap** (tái sử dụng `ml-evidence-gate.ts`) giữa champion và serving trên cùng val block → CI 95% — dùng cho **cổng quyết định**, không cho xếp hạng.
+- **Brier paired bootstrap** (tái sử dụng method `ml-evidence-gate.ts`) giữa champion và serving trên cùng val block → CI 95% — dùng cho **cổng quyết định**, không cho xếp hạng.
 - Mọi ứng viên lưu `MlModel kind "dl-mlp", meta.sweepRunId, status "archived"` — **không đụng serving** trong lúc sweep.
 
-### 4.4 Cổng quyết định champion (nguyên tắc §1.5 mở rộng)
+### 4.4 Cổng quyết định champion (nguyên tắc §1.5 mở rộng — có bổ sung F4/F8)
 
 Champion của đợt chỉ được **đề xuất swap** khi thoả MỌI điều kiện:
 
-1. `valAcc_champion ≥ valAcc_serving + δ` với **δ = 0,01** (1 điểm % — vượt hẳn ngoài nhiễu 60k mẫu; kèm Wilson CI cho tỉ lệ — A2);
-2. ΔBrier CI 95% hoàn toàn < 0 (bootstrap 1.000× — cùng phương pháp cổng B2);
-3. `paramCount ≤ 2× paramCount_serving` (chống "thắng vì to");
-4. Ban đầu khi cùng windowHash với đợt trước: skip-guard như A4 (không sweep lại khi không có bar mới).
+1. `valAcc_champion ≥ valAcc_serving + δ` với **δ = 0,01** (1 điểm % — vượt hẳn ngoài nhiễu 60k mẫu; kèm Wilson CI cho tỉ lệ — A2). **F4:** serving == null (DB sạch) → baseline = 1/3 (ngẫu nhiên);
+2. ΔBrier CI 95% hoàn toàn < 0 (bootstrap 1.000× — cùng phương pháp cổng B2). **F4:** serving == null → Brier baseline uniform 0,667;
+3. `paramCount ≤ maxParamFactor × paramCount_serving` (chống "thắng vì to" — mặc định maxParamFactor = 2). **F4:** serving == null → cap `2 × paramWarnThreshold` = 10.000;
+4. **F8:** skip-guard windowHash như A4 áp dụng LUÔN cho mọi đợt — cùng windowHash với đợt trước ⇒ không sweep lại (không có bar mới = không có gì mới để tìm).
 
 Không thoả → champion nằm lại bảng với nhãn *"không đủ vượt cổng"* — trung thực, không ép.
 
-### 4.5 Lưu trữ & hiển thị (schema additive — 1 model + 1 AppSetting)
+### 4.5 Lưu trữ & hiển thị (schema additive — 1 model + 1 AppSetting; F7/F9)
 
 ```prisma
 model SweepRun {
@@ -215,21 +236,25 @@ model SweepRun {
   startedAt     DateTime  @default(now())
   finishedAt    DateTime?
   windowHash    String    // cùng chuẩn MlModel.meta
+  featureSet    String    @default("v2-lag16") // F7 — sẵn cho v3-news22 tương lai, khỏi migrate
   candidates    Int       // số ứng viên ngân sách
   evaluated     Int       // số ứng viên đã train xong
   seed          Int       // seed dãy ứng viên — deterministic
   status        String    // running | done | failed | skipped
   championJson  String?   // {arch, activations, lossWeights, hyper, valAcc, brier, paramCount, swapProposed, reason}
   logJson       String?   // [{i, arch, activations, valAcc, valLoss, brier, params, ms, error?}] toàn bộ ứng viên
+
+  @@index([startedAt(sort: Desc)]) // F7 — UI lịch sử
 }
 ```
 
 - `AppSetting "ml-sweep"`: `{enabled, budgetCandidates, seed, deltaSwap, maxParamFactor, lastRunAt}` — kill-switch từng đợt như mọi AppSetting khác (§1.6).
-- **UI:** tab mới **"Tự động tìm kiếm"** trong module Học máy (#89): champion board (bảng `logJson` — mọi ứng viên kèm valAcc/Brier/tham số/thời gian), cấu hình budget + công tắc, lịch sử các đợt (SweepRun), giải thích công khai công thức score + 4 điều kiện cổng. Không có nút "áp dụng ngay" vượt cổng.
+- **F9 UI:** tab **"Tự động tìm kiếm"** = tab thứ 8 của `SYNTHESIS_TABS` (`synthesis-workspace.tsx:161`) · component `src/components/dashboard/ml/sweep-tab.tsx` (champion board = bảng `logJson` mọi ứng viên kèm valAcc/Brier/tham số/thời gian · cấu hình budget + công tắc + seed + δ · lịch sử các đợt SweepRun · giải thích công khai công thức score + 4 điều kiện cổng · **nút "Chạy đợt ngay"** — deterministic nên không thể "câu" kết quả, mọi champion vẫn phải qua cổng) · dữ liệu `/api/ml/sweep` (GET cấu hình + lịch sử; POST chạy ngay, body `budget?` clamp 1..64 ghi rõ vào SweepRun) · WS `"ml-sweep"` Invalidate cache như `"ml-train"`. **Không có nút "áp dụng ngay" vượt cổng.**
 
-### 4.6 Lịch chạy & fail-soft
+### 4.6 Lịch chạy & fail-soft (có bổ sung F3)
 
-- Engine thêm lịch **`SWEEP_AT` = Chủ nhật 04:15 ICT** (sau A4 retrain 04:00 — sweep chỉ chạy khi có windowHash mới, skip-guard dùng chung).
+- Engine thêm lịch **`SWEEP_AT` = Chủ nhật 04:15 ICT** (env `ML_SWEEP_AT` mặc định `"SUN:04:15"` — sau A4 retrain 04:00; sweep chỉ chạy khi có windowHash mới, skip-guard dùng chung; `ML_SWEEP_DISABLED=1` tắt như A4).
+- **F3 — clone đúng pattern A4/K1:** guard `sweepInFlight` chặn tick 60s bắn chồng khi sweep đang chạy (4 phút++); `stats.lastMlSweepSunday` **persisted sống sót restart** (P0-5); timeout POST 20 phút; thất bại → KHÔNG đánh dấu Chủ nhật — phút sau thử lại; broadcast WS `"ml-sweep"` sau khi xong.
 - Budget trần thời gian: quá 20 phút giữa chừng → dừng an toàn, status "failed" + logJson giữ những ứng viên đã xong (không rollback gì).
 - Fail-soft tuyệt đối: sweep lỗi không chạm chu kỳ agent, không chạm serving, không chạm retrain A4.
 
@@ -240,6 +265,8 @@ model SweepRun {
 3. Cổng: cài kịch bản champion thua δ → KHÔNG swap, bản serving nguyên vẹn, UI nhãn đúng lý do.
 4. Bit-flip: tắt `ml-sweep.enabled` → toàn bộ nhánh sweep im, A4 + chu kỳ agent kết quả cũ 100%.
 5. Hermetic: script verify (pattern `ml-arch-verify.ts`) — sinh dãy ứng viên từ seed, kiểm guard phạm vi, kiểm score + 4 điều kiện cổng bằng số dựng sẵn; ≥ 12 test.
+6. **(F3)** route trả 429 khi sweep đang chạy (mutex); engine không bắn chồng đợt trong lúc in-flight.
+7. **(F2)** train tay khi sweep đang chạy → xếp hàng cùng mutex, KHÔNG sinh 2 hàng trùng (kind, version).
 
 ---
 
@@ -249,7 +276,7 @@ model SweepRun {
 
 ### 5.1 Rào chắn dữ liệu — nói thật trước khi thiết kế
 
-RSS chỉ thu **tức thời** (bắt đầu từ khi hệ thống chạy) — không có lịch sử backfill. Hiện chỉ 64 tin / 3 ngày. Muốn train đặc trưng tin tức cần **≥ 60 phiên giao dịch có tin tích luỹ** (~3 tháng chạy liên tục) — đó là cổng dữ liệu C2 (§7). Không mua dữ liệu, không bịa backfill (nguyên tắc §2.11). Trong thời gian chờ, pipeline có thể dựng + đo coverage lexicon trên 64 tin sẵn có (không train).
+RSS chỉ thu **tức thời** (bắt đầu từ khi hệ thống chạy) — không có lịch sử backfill. Hiện chỉ 64 tin / 3 ngày. Muốn train đặc trưng tin tức cần **≥ 60 phiên giao dịch có tin tích luỹ** (~3 tháng chạy liên tục) — đó là cổng dữ liệu C2 (§7). Không mua dữ liệu, không bịa backfill (nguyên tắc §2.11). **Q4 đã duyệt (§9): dựng pipeline đo coverage NGAY** — `scripts/ml-news-coverage.ts`: (i) đếm số phiên giao dịch có ≥ 1 tin (PIT ≤ 15:45 ICT mỗi phiên) + tiến độ /60; (ii) coverage lexicon — % tiêu đề có ≥ 1 hit trong từ điển ~75 thuật ngữ + phân bố hit theo nguồn; (iii) xem trước tương quan thô score-vs-không-gì (không kết luận, chỉ descriptive). Kết quả hiển thị block **"Cổng dữ liệu tin tức → đặc trưng"** trong tab Dữ liệu (data-tab) — **tự chín** theo crawler 15 phút (agent không phải bấm gì). Chỉ train khi cổng mở + gate-news PASS.
 
 ### 5.2 Thiết kế đặc trưng — bộ `v3-news22` (16 hiện có + 6 chiều mới)
 
@@ -291,27 +318,29 @@ LLM vote · lexicon evidence · RAG · bandit posterior giữ nguyên 100% (ch�
 
 | Hạng mục | Điều kiện mở | Ai quyết | Trạng thái |
 |---|---|---|---|
-| **C0 mở kẹt ml-gate** | Không cần cổng — tiền đề | Trader chọn a/b/c (§9 Q1) | 🔴 Chờ duyệt |
-| **C1 Sweep Controller** | C0 xong + trader duyệt budget + `ml-sweep.enabled` | Trader (§9 Q2) | 🔴 Blueprint chờ duyệt |
-| **C2 News features** | NewsItem tích luỹ ≥ 60 phiên có tin + coverage lexicon đo + gate-news | Tự chín theo dữ liệu | 🔴 Cổng dữ liệu ~3 tháng |
+| **C0 mở kẹt ml-gate** | Không cần cổng — tiền đề | **ĐÃ DUYỆT (c)+(a) tự lành — §9 Q1** | 🟢 Triển khai ngay #99 |
+| **C1 Sweep Controller** | C0 xong + budget + `ml-sweep.enabled` | **ĐÃ DUYỆT — Chủ nhật 04:15 ICT TỰ ĐỘNG sau A4 + nút chạy ngay — §9 Q2/Q5** | 🟢 Triển khai #99 (sau C0) |
+| **C2 pipeline đo coverage** | Không cần cổng — chỉ đo, không train | **ĐÃ DUYỆT — dựng ngay, tự chín — §9 Q4** | 🟢 Triển khai #99 (song song C1, file rời) |
+| **C2 train v3-news22** | NewsItem tích luỹ ≥ 60 phiên có tin + coverage lexicon đo + gate-news | Tự chín theo dữ liệu | 🔴 Cổng dữ liệu ~3 tháng |
 | **C3 Bandit loop** | Settle 10-13 tự chạy | Tự chín | 🟡 Cơ chế sống, chờ event đầu |
 | L2 One-Shot NAS | Dòng intraday 5-phút đủ nuôi supernet (đo lại autocorr) | Cổng §6 ML_OPS (tái đo) | ⛔ Không đề xuất giai đoạn này |
 | L3 HyperNAS | L2 có bằng chứng + surrogate có dữ liệu | Cổng xa | ⛔ Không đề xuất |
 
 ## §8. Giao thức triển khai & fixbug (kế thừa EXECUTION_OPS 3 vòng đối kháng)
 
-Mỗi hạng mục (C0 → C1 → C2-code) triển khai theo đúng giao thức nhà: **Vòng 1** code + verify hermetic (script tự dọn pattern `k3k4-verify.ts`) → **Vòng 2** review như-chưa-từng-fix + E2E agent-browser desktop/mobile 0 console error → **Vòng 3** docs sync (TECHNICAL/DB_SCHEMA/AUTONOMY + blueprint này lên version) + lint/tsc + commit/push. Thứ tự bắt buộc: **C0 trước C1** (sweep dựa vào serving-swap guard — guard phải sống đã). C2-code chỉ sau khi cổng dữ liệu chín.
+Mỗi hạng mục (C0 → C1 → C2-code) triển khai theo đúng giao thức nhà: **Vòng 1** code + verify hermetic (script tự dọn pattern `k3k4-verify.ts`) → **Vòng 2** review như-chưa-từng-fix + E2E agent-browser desktop/mobile 0 console error → **Vòng 3** docs sync (TECHNICAL/DB_SCHEMA/AUTONOMY + blueprint này lên version) + lint/tsc + commit/push. Thứ tự bắt buộc: **C0 trước C1** (sweep dựa vào serving-swap guard — guard phải sống đã). C2-pipeline (đo coverage) không đụng file C1 → chạy song song được.
 
-## §9. Câu hỏi mở chờ trader
+## §9. Quyết định đã chốt (trader phiên #99: *"các câu hỏi thì theo như khuyến nghị của bạn" + "tôi thích những gì có thể tự động"*)
 
-- **Q1 (C0):** Chọn hướng mở kẹt ml-gate — khuyến nghị **(c) vá nhánh `serving==null` + (a) re-baseline gate đo thật**; hay (b) promote nhanh v4 hôm nay?
-- **Q2 (C1):** Duyệt budget sweep mặc định **16 ứng viên ~4 phút/đợt, Chủ nhật 04:15 ICT tự động sau A4**? Muốn tay (nút bấm) hay lịch? δ swap = 0,01 valAcc có chấp nhận?
-- **Q3 (C1):** Có muốn sweep cũng dò `lossWeights` (đầu ra UP/DOWN) như không gian ở §4.2, hay giữ lossWeights ngoài sweep để "ý người" còn ở phần nào?
-- **Q4 (C2):** Duyệt nguyên tắc chờ **≥ 60 phiên tin tích luỹ** (không backfill) trước khi train `v3-news22`? Trong lúc chờ có muốn dựng sẵn pipeline đo coverage lexicon trên 64 tin hiện có?
-- **Q5 (tổ chức):** Sweep đặt ở engine (như A4) hay route API `/api/ml/sweep` gọi từ engine? (Người soạn đề xuất: route + engine bấm như A4 — một pattern, một fail-soft.)
+- **Q1 (C0) → (c) + (a) BẢN TỰ LÀNH:** vá nhánh `serving==null` trong train route (1 dòng — bản đầu tiên luôn lên serving) + nâng cấp `ml-evidence-gate.ts` tự train twin lag-10 khi thiếu baseline (F1). Hướng (b) admin-promote BỎ.
+- **Q2 (C1) → TỰ ĐỘNG:** lịch **Chủ nhật 04:15 ICT** chạy sau A4 04:00, KHÔNG cần bấm gì; budget mặc định **16 ứng viên ~4 phút/đợt**; δ swap = **0,01** valAcc. VẪN CÓ nút "Chạy đợt ngay" cho tiện — deterministic (cùng windowHash + cùng seed ⇒ cùng kết quả) nên không thể "câu" kết quả, mọi champion vẫn phải qua cổng 4 điều kiện.
+- **Q3 (C1) → lossWeights vào sweep Ở REFINE:** 2/4 ứng viên refine dùng preset (UP-heavy [1,1,2,5] · lr ×0,5/×2), coarse giữ nguyên lossWeights trader đang đặt trong ml-tuning — "ý người" còn ở enabled/budget/δ/seed + cổng 4 điều kiện.
+- **Q4 (C2) → DUYỆT CỔNG 60 PHIÊN + DỰNG PIPELINE ĐO NGAY:** không backfill, không bịa dữ liệu; `scripts/ml-news-coverage.ts` + block tiến độ trong UI chạy ngay hôm nay, tự chín theo crawler 15 phút.
+- **Q5 (tổ chức) → ROUTE + ENGINE BẮM NHƯ A4:** `/api/ml/sweep` (GET cấu hình + lịch sử · POST chạy ngay có mutex 429) + engine `SWEEP_AT SUN:04:15` bấm tự động — một pattern, một fail-soft, đúng gu tự động của trader.
 
 ## §10. Changelog
 
 | Version | Ngày | Nội dung |
 |---|---|---|
 | 1.0 | 2026-10-12 (#98) | Bản đầu: kiểm kê 6 câu hỏi trader (reward/loss/Keras/forward-backward/news 4 đường + gap đặc trưng) · phán quyết L0 audit #97 · nguyên tắc 9–11 · C0 mở kẹt ml-gate [AUD-97-F1] · C1 sweep controller deterministic 16 ứng viên + cổng 4 điều kiện + SweepRun schema additive + UI champion board · C2 news-to-feature v3-news22 PIT-strict + gate B2-style + cổng dữ liệu 60 phiên · C3 theo dõi vòng bandit · 5 câu hỏi mở. |
+| 1.1 | 2026-10-12 ~03:10 ICT (#99) | **Bản review do trader chỉ đạo** — đối soát toàn bộ claim (khớp 100%) + **10 vá**: §0.9 F1–F10 (gate tự lành twin lag-10 · extract train-mlp.ts · guard bắn chồng engine · serving==null defaults · mốc paramWarnThreshold · Brier tự tính · SweepRun index+featureSet · skip-guard viết lại · chi tiết UI tab 8 · chốt lossWeights refine) · §3 C0 duyệt (c)+(a) tự lành · §4 chốt automation-first · §5 C2 dựng pipeline đo ngay · §7 bảng cổng cập nhật · §9 chốt toàn bộ Q1–Q5 theo khuyến nghị (automation-first) · §8 cho phép C2-pipeline song song C1. |
