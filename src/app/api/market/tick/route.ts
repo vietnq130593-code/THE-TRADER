@@ -726,6 +726,13 @@ async function runTick(): Promise<NextResponse> {
     }
 
     // ── F-105: sang phiên mới → chốt lại equity của mọi tài khoản còn hoạt động ──
+    // K1 (#87 — P0 quarantine §5.1 REVIEW): findMany KHÔNG lọc accountType là
+    // ĐÚNG ý định — recomputeEquity chạy cho CẢ paper lẫn sandbox (mỗi tài khoản
+    // cập nhật equity riêng theo positions của chính nó). fillOrder dưới đây
+    // cũng account-agnostic (claim theo order.brokerAccountId) — lệnh sandbox
+    // khớp đúng trên tài khoản sandbox, tiền/vị thế không bao giờ chảy sang paper.
+    // 2 findUnique brokerAccount trong file này đều theo id tường minh — không
+    // có điểm nào mập mờ tài khoản.
     if (rolled > 0) {
       const accounts = await db.brokerAccount.findMany({
         where: { deletedAt: null },

@@ -67,7 +67,7 @@ export interface ExecutionPlan {
   slippageBudgetPct: number;
   deadlineTicks: number;
   orderType: string;
-  sizing: "nav5pct" | "budget50m";
+  sizing: "nav5pct" | "budget50m" | "sandbox"; // K1 #87: sizing sandbox (§5.3 — % NAV sandbox)
   humanNote: string;
   rationale: string;
   createdAt: string;
@@ -89,7 +89,7 @@ export function buildExecutionPlan(input: {
   orderId: string;
   quantity: number;
   price: number;
-  sizing: "nav5pct" | "budget50m";
+  sizing: "nav5pct" | "budget50m" | "sandbox"; // K1 #87: sizing sandbox (§5.3 — % NAV sandbox)
   humanNote: string;
   createdAt?: Date;
   singleReason?: SinglePlanReason;
@@ -132,7 +132,7 @@ export function buildTwapChildPlan(input: {
   quantity: number;
   price: number;
   afterTick: number;
-  sizing: "nav5pct" | "budget50m";
+  sizing: "nav5pct" | "budget50m" | "sandbox"; // K1 #87: sizing sandbox (§5.3 — % NAV sandbox)
   humanNote: string;
   twap: PlanTwapMeta;
   createdAt?: Date;

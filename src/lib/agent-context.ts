@@ -47,8 +47,11 @@ export interface MarketSnapshot {
 export async function buildMarketBlock(): Promise<MarketSnapshot> {
   // F-73R2-03 (fixbug #73): positions lọc theo tài khoản sống — không trộn vị
   // thế của tài khoản khác/đã soft-delete (account fetch trước để lọc where).
+  // K1 (#87 — P0 quarantine §5.1): đường paper loại trừ tài khoản sandbox
+  // (buildMarketBlock là bối cảnh chu kỳ agent PAPER — sandbox không được lọt
+  // vào prompt của 23 agents).
   const account = await db.brokerAccount.findFirst({
-    where: { deletedAt: null },
+    where: { deletedAt: null, accountType: { not: "sandbox" } },
     select: { id: true, cashBalance: true, equity: true, marginUsed: true },
   });
   const [instruments, positions, alerts] = await Promise.all([
@@ -538,8 +541,9 @@ export async function buildOpenSignalsBlock(): Promise<string> {
 export async function buildPortfolioWeightsBlock(): Promise<string> {
   // F-73A-08: lọc theo tài khoản sống — không trộn vị thế của tài khoản khác/
   // đã soft-delete (mọi consumer khác đều lọc brokerAccountId).
+  // K1 (#87 — P0 quarantine §5.1): đường paper loại trừ sandbox.
   const account = await db.brokerAccount.findFirst({
-    where: { deletedAt: null },
+    where: { deletedAt: null, accountType: { not: "sandbox" } },
     select: { id: true, cashBalance: true },
   });
   if (!account) {

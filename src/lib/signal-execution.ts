@@ -158,16 +158,34 @@ export type PaperOrderResult =
 // POSITION_SIZE_PCT (5% NAV) — nguồn đơn src/lib/exec/constants.ts (E-P0-4
 // cùng nguồn cho sizing thật lẫn ước tính committed view — fixbug #71 F-701-01).
 
+export interface CreatePaperOrderOpts {
+  sizing: "budget50m" | "nav5pct" | "sandbox";
+  /**
+   * K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.3): thế giới đích của lệnh.
+   *   - "paper" (mặc định): tài khoản giấy của trader — toàn bộ hành vi cũ
+   *     bảo toàn (claim Signal → ACTED, F-207 toàn sổ, audit ORDER_CREATED).
+   *   - "sandbox": tài khoản thử nghiệm K1 — KHÔNG đổi Signal.status (2 thế
+   *     giới độc lập §8-Q1), F-207 chỉ tính lệnh trên CHÍNH tài khoản sandbox,
+   *     kèm marker idempotent K1_SANDBOX_AUTO_ORDER trong cùng transaction.
+   */
+  world?: "paper" | "sandbox";
+  /** K1: % NAV mỗi lệnh của sandbox (PERCENT 1..100 — từ AppSetting k-sandbox.sizePct). */
+  sizePct?: number;
+}
+
 /**
  * Tạo lệnh giấy LIMIT PENDING từ tín hiệu BUY/SELL.
  *
  * opts.sizing:
  *  - "budget50m": BUY ~50tr VND / SELL nửa vị thế (hành vi convert route hiện tại);
- *  - "nav5pct"  : floor((equity×5%)/lastPrice) → lot 100 min 100 (hành vi run route).
+ *  - "nav5pct"  : floor((equity×5%)/lastPrice) → lot 100 min 100 (hành vi run route);
+ *  - "sandbox"  : K1 §5.3 — floor((equity sandbox×sizePct%)/lastPrice) → lot 100,
+ *     clamp dải + phí 0,15% + TWAP E-P1-2 như paper (không ưu đãi — học phải
+ *     gặp phí thật, §5.3 guard an toàn).
  */
 export async function createPaperOrderFromSignal(
   signalId: string,
-  opts: { sizing: "budget50m" | "nav5pct" }
+  opts: CreatePaperOrderOpts
 ): Promise<PaperOrderResult> {
   const signal = await db.signal.findUnique({
     where: { id: signalId },
@@ -198,7 +216,11 @@ export async function createPaperOrderFromSignal(
     signal.status = "EXPIRED";
   }
 
-  // Guard vòng đời (PHASE3 §4.1): chỉ tín hiệu ACTIVE mới được tạo lệnh
+  // Guard vòng đời (PHASE3 §4.1): chỉ tín hiệu ACTIVE mới được tạo lệnh.
+  // K1 sandbox: giữ nguyên guard ACTIVE (auto-convert chạy CUỐI chu kỳ — tín
+  // hiệu vừa sinh luôn ACTIVE; hiếm khi trader duyệt nhanh hơn 1 chu kỳ thì
+  // sandbox bỏ lượt đó — 2 thế giới độc lập nhưng tín hiệu đã duyệt paper
+  // không cần thêm lệnh sandbox trùng).
   if (signal.status !== "ACTIVE") {
     return {
       ok: false,
@@ -208,8 +230,10 @@ export async function createPaperOrderFromSignal(
         "Tín hiệu không ở trạng thái cho phép tạo lệnh.",
     };
   }
-  if (signal.actedAt) {
-    // Giữ guard cũ của convert (khi status thiếu nhưng actedAt đã set)
+  if (opts.world !== "sandbox" && signal.actedAt) {
+    // Giữ guard cũ của convert (khi status thiếu nhưng actedAt đã set).
+    // K1 sandbox KHÔNG bị guard này chặn: actedAt là dấu ấn của THẾ GIỚI PAPER
+    // (trader duyệt lệnh giấy) — không được cản đường sandbox (§5.3 2 thế giới).
     return {
       ok: false,
       status: 409,
@@ -236,9 +260,44 @@ export async function createPaperOrderFromSignal(
       };
     }
   }
-  // F-207 (audit 19-b): tín hiệu đã có lệnh trong sổ (dù actedAt thiếu) → chặn tạo trùng
+  // F-207 (audit 19-b): tín hiệu đã có lệnh trong sổ (dù actedAt thiếu) → chặn tạo trùng.
+  // K1 (#87 §5.3): thế giới sandbox chỉ bị chặn bởi lệnh TRÊN CHÍNH tài khoản
+  // sandbox — lệnh paper của trader từ cùng tín hiệu KHÔNG cản đường sandbox.
+  // Account fetch trước để có id scope (world-scoped — P0 quarantine §5.1:
+  // đường paper loại trừ sandbox, đường sandbox chỉ chọn sandbox).
+  const world: "paper" | "sandbox" = opts.world ?? "paper";
+  const [user, account] = await Promise.all([
+    db.user.findFirst({ where: { isActive: true }, select: { id: true } }),
+    db.brokerAccount.findFirst({
+      where:
+        world === "sandbox"
+          ? { accountType: "sandbox", deletedAt: null }
+          : { deletedAt: null, accountType: { not: "sandbox" } },
+      select: { id: true, cashBalance: true },
+    }),
+  ]);
+  if (!user) {
+    return {
+      ok: false,
+      status: 404,
+      error: "Không tìm thấy người dùng hoặc tài khoản môi giới.",
+    };
+  }
+  if (!account) {
+    return {
+      ok: false,
+      status: world === "sandbox" ? 409 : 404,
+      error:
+        world === "sandbox"
+          ? "Chưa kích hoạt tài khoản thử nghiệm (K1) — vào Cài đặt → Cơ chế thử nghiệm để kích hoạt."
+          : "Không tìm thấy tài khoản môi giới.",
+    };
+  }
   const existingOrder = await db.order.findFirst({
-    where: { signalId: signal.id },
+    where:
+      world === "sandbox"
+        ? { signalId: signal.id, brokerAccountId: account.id }
+        : { signalId: signal.id },
     select: { id: true, status: true },
   });
   if (existingOrder) {
@@ -287,21 +346,6 @@ export async function createPaperOrderFromSignal(
       ok: false,
       status: 501,
       error: "Gateway VNDIRECT chưa kết nối trong môi trường này — lệnh thật tạm bị chặn (audit đã ghi).",
-    };
-  }
-
-  const [user, account] = await Promise.all([
-    db.user.findFirst({ where: { isActive: true }, select: { id: true } }),
-    db.brokerAccount.findFirst({
-      where: { deletedAt: null },
-      select: { id: true, cashBalance: true },
-    }),
-  ]);
-  if (!user || !account) {
-    return {
-      ok: false,
-      status: 404,
-      error: "Không tìm thấy người dùng hoặc tài khoản môi giới.",
     };
   }
 
@@ -356,10 +400,19 @@ export async function createPaperOrderFromSignal(
       signal.agent ? ` (agent ${signal.agent.name})` : ""
     }`;
   } else {
-    // ── Sizing nav5pct (đúng run route): 5% NAV, lô 100, min 100 cp ──
+    // ── Sizing nav5pct (đúng run route) / sandbox (K1 §5.3 — % NAV sandbox) ──
+    // K1: sizeFraction lấy từ opts.sizePct (AppSetting k-sandbox.sizePct —
+    // caller truyền vào, không import k-sandbox để tránh vòng import);
+    // fallback 5% = cùng mặc định POSITION_SIZE_PCT (an toàn khi caller thiếu).
     if (lastPrice <= 0) {
       return { ok: false, status: 400, error: "Không xác định được giá đặt cho lệnh." };
     }
+    const sizeFraction =
+      opts.sizing === "sandbox"
+        ? (typeof opts.sizePct === "number" && opts.sizePct > 0 && opts.sizePct <= 100
+            ? opts.sizePct
+            : 5) / 100
+        : POSITION_SIZE_PCT;
     // F-102: equity = cash + Σ(qty × last) vị thế mở
     const positions = await db.position.findMany({
       where: { brokerAccountId: account.id, status: "OPEN" },
@@ -383,7 +436,7 @@ export async function createPaperOrderFromSignal(
         error: "Không xác định được giá trị tài sản để định cỡ lệnh.",
       };
     }
-    const rawQty = Math.floor((equity * POSITION_SIZE_PCT) / lastPrice);
+    const rawQty = Math.floor((equity * sizeFraction) / lastPrice);
     quantity = Math.max(100, Math.floor(rawQty / 100) * 100);
 
     // P3-fix (Task 27 E2E): SELL nav5pct phải có vị thế mở — nếu không,
@@ -420,9 +473,14 @@ export async function createPaperOrderFromSignal(
         : round100(lastPrice);
     price = Math.max(bandLow, Math.min(basePrice, bandHigh));
 
-    note = `Từ phê duyệt tín hiệu ${side === "BUY" ? "MUA" : "BÁN"} ${symbol}${
-      signal.agent ? ` (agent ${signal.agent.name})` : ""
-    }`;
+    note =
+      opts.sizing === "sandbox"
+        ? `K1 tự động thực thi từ tín hiệu ${side === "BUY" ? "MUA" : "BÁN"} ${symbol}${
+            signal.agent ? ` (agent ${signal.agent.name})` : ""
+          }`
+        : `Từ phê duyệt tín hiệu ${side === "BUY" ? "MUA" : "BÁN"} ${symbol}${
+            signal.agent ? ` (agent ${signal.agent.name})` : ""
+          }`;
   }
 
   // ── E-P1-2 (v1.2): quyết định tách TWAP cho lệnh lớn ────────────────────
@@ -475,21 +533,34 @@ export async function createPaperOrderFromSignal(
   let plans: (ExecutionPlan | null)[] = [];
   try {
     const txOut = await db.$transaction(async (tx) => {
-      // Claim duy quyền chuyển tín hiệu sang ACTED
-      const claimed = await tx.signal.updateMany({
-        where: { id: signal.id, status: "ACTIVE", actedAt: null },
-        data: { actedAt: new Date(), status: "ACTED" },
-      });
-      if (claimed.count === 0) {
-        throw new Error("SIGNAL_CLAIM_LOST");
-      }
-      // F-207: lệnh đã tồn tại trong sổ (kể cả khi actedAt bị thiếu) → chặn trùng
-      const existing = await tx.order.findFirst({
-        where: { signalId: signal.id },
-        select: { id: true },
-      });
-      if (existing) {
-        throw new Error("SIGNAL_HAS_ORDER");
+      if (world === "sandbox") {
+        // K1 (#87 §5.3): sandbox KHÔNG claim Signal (2 thế giới độc lập —
+        // Signal.status giữ "chờ trader duyệt paper" nguyên vẹn). Chống trùng
+        // bằng F-207 SCOPE CHÍNH tài khoản sandbox + marker audit trong tx.
+        const existingSandbox = await tx.order.findFirst({
+          where: { signalId: signal.id, brokerAccountId: account.id },
+          select: { id: true },
+        });
+        if (existingSandbox) {
+          throw new Error("SANDBOX_SIGNAL_HAS_ORDER");
+        }
+      } else {
+        // Claim duy quyền chuyển tín hiệu sang ACTED (paper — nguyên vẹn)
+        const claimed = await tx.signal.updateMany({
+          where: { id: signal.id, status: "ACTIVE", actedAt: null },
+          data: { actedAt: new Date(), status: "ACTED" },
+        });
+        if (claimed.count === 0) {
+          throw new Error("SIGNAL_CLAIM_LOST");
+        }
+        // F-207: lệnh đã tồn tại trong sổ (kể cả khi actedAt bị thiếu) → chặn trùng
+        const existing = await tx.order.findFirst({
+          where: { signalId: signal.id },
+          select: { id: true },
+        });
+        if (existing) {
+          throw new Error("SIGNAL_HAS_ORDER");
+        }
       }
       const rows: Awaited<ReturnType<typeof db.order.create>>[] = [];
       const txPlans: (ExecutionPlan | null)[] = [];
@@ -553,6 +624,32 @@ export async function createPaperOrderFromSignal(
         rows.push(child);
         txPlans.push(plan);
       }
+      // K1 (#87 §5.3): marker idempotent — 1 tín hiệu → tối đa 1 lần convert
+      // sandbox. Ghi TRONG cùng transaction (chống race 2 chu kỳ/2 request:
+      // audit-marker + order sinh nguyên tử; caller tra marker trước khi gọi
+      // chỉ là fast-path, đây mới là quyết định).
+      if (world === "sandbox") {
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: "K1_SANDBOX_AUTO_ORDER",
+            entity: "Signal",
+            entityId: signal.id,
+            after: JSON.stringify({
+              signalId: signal.id,
+              orderIds: rows.map((r) => r.id),
+              orderId: rows[0]?.id ?? null,
+              symbol,
+              side,
+              quantity,
+              price,
+              style: twapMeta != null ? "TWAP" : "SINGLE",
+              sizePct: opts.sizePct ?? null,
+              note: "tự động thực thi K1 — 2 thế giới độc lập với paper (§5.3)",
+            }),
+          },
+        });
+      }
       return { rows, txPlans };
     });
     createdOrders = txOut.rows;
@@ -564,6 +661,15 @@ export async function createPaperOrderFromSignal(
         ok: false,
         status: 409,
         error: "Tín hiệu này đã được chuyển thành lệnh trước đó (hoặc đang được xử lý đồng thời).",
+      };
+    }
+    if (msg === "SANDBOX_SIGNAL_HAS_ORDER") {
+      // K1: tín hiệu đã có lệnh TRÊN tài khoản sandbox (idempotent — chạy lại
+      // convert không sinh lệnh kép; §5.7-2)
+      return {
+        ok: false,
+        status: 409,
+        error: "Tín hiệu này đã được tự động thực thi trên tài khoản thử nghiệm trước đó.",
       };
     }
     throw txErr; // lỗi DB thật — để tầng trên xử lý 500
@@ -591,6 +697,9 @@ export async function createPaperOrderFromSignal(
         signalId: signal.id,
         mode: getTradingMode().mode,
         sizing: opts.sizing,
+        // K1 (#87): thế giới đích — paper (mặc định) | sandbox (tài khoản thử nghiệm)
+        world,
+        brokerAccountId: account.id,
         // E-P1-2: tóm tắt kế hoạch + danh sách Order con (TWAP) hoặc plan đơn.
         style: twapMeta != null ? "TWAP" : "SINGLE",
         children: createdOrders.map((o, i) => ({

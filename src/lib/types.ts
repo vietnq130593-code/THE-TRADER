@@ -403,6 +403,39 @@ export interface KRunState {
   nextCycleAt: string | null;
 }
 
+/** K1 — cơ chế thử nghiệm tiền ảo (AUTONOMY_BLUEPRINT v1.1 §5.6): GET/POST
+ *  /api/k/sandbox. `enabled=false` → chưa từng kích hoạt (mọi trường rỗng
+ *  trung thực). `paused=true` → auto-convert dừng lệnh mới, vị thế giữ. */
+export interface KSandboxState {
+  exists: boolean;
+  enabled: boolean;
+  paused: boolean;
+  activatedAt: string | null;
+  /** Tiền cấp lúc kích hoạt (VND) — mốc tính P&L "từ lúc kích hoạt". */
+  initialAmount: number;
+  /** % NAV sandbox mỗi lệnh auto (mặc định 5). */
+  sizePct: number;
+  maxOrdersPerCycle: number;
+  maxBudgetPctPerCycle: number;
+  account: {
+    accountNumber: string;
+    cash: number;
+    equity: number;
+    unrealisedPnl: number;
+    realisedPnlTotal: number;
+    openCount: number;
+  } | null;
+  pnlSinceActivation: number | null;
+  pnlPctSinceActivation: number | null;
+  /** Số phiên đã chạy = số dòng CashSnapshot k1-daily. */
+  sessionsRun: number;
+  /** Số tín hiệu đã auto-convert sang lệnh sandbox (audit marker). */
+  autoOrderCount: number;
+  lastSettleAt: string | null;
+  /** Chuỗi equity cũ → mới (tối đa 30 điểm) — đồ thị mini. */
+  snapshots: { cash: number; equity: number; createdAt: string }[];
+}
+
 export interface WatchlistResponse {
   watchlist: {
     id: string;

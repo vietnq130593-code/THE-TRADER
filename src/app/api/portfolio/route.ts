@@ -16,11 +16,22 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/portfolio
  * Broker account + open positions with live P&L and totals.
+ *
+ * K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6-Q3): query `?accountType=paper|sandbox`
+ * (mặc định paper — hành vi cũ bảo toàn). Bộ lọc tài khoản Giấy/Thử nghiệm trên
+ * workspace Danh mục gọi đúng tham số này. P0 quarantine §5.1: đường paper
+ * LUÔN loại trừ tài khoản sandbox (accountType not sandbox) — dù query thế nào
+ * cũng không bao giờ trộn 2 thế giới tiền.
  */
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const accountType = url.searchParams.get("accountType") === "sandbox" ? "sandbox" : "paper";
     const account = await db.brokerAccount.findFirst({
-      where: { deletedAt: null },
+      where:
+        accountType === "sandbox"
+          ? { accountType: "sandbox", deletedAt: null }
+          : { deletedAt: null, accountType: { not: "sandbox" } },
       orderBy: { createdAt: "asc" },
       include: {
         positions: {
@@ -38,7 +49,12 @@ export async function GET() {
 
     if (!account) {
       return NextResponse.json(
-        { error: "Không tìm thấy tài khoản môi giới." },
+        {
+          error:
+            accountType === "sandbox"
+              ? "Chưa kích hoạt tài khoản thử nghiệm (K1)."
+              : "Không tìm thấy tài khoản môi giới.",
+        },
         { status: 404 }
       );
     }

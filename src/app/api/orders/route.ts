@@ -6,16 +6,37 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/orders — recent 20 orders (+ trades for the "Giao dịch" tab).
+ *
+ * K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6-Q3): query `?accountType=paper|sandbox`
+ * (mặc định paper — hành vi cũ bảo toàn). Lọc theo brokerAccountId của đúng
+ * thế giới tiền — sổ lệnh sandbox do agents tự giữ hiển thị riêng tab Danh mục
+ * khi trader chọn "Thử nghiệm".
  */
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const accountType = url.searchParams.get("accountType") === "sandbox" ? "sandbox" : "paper";
+    const account = await db.brokerAccount.findFirst({
+      where:
+        accountType === "sandbox"
+          ? { accountType: "sandbox", deletedAt: null }
+          : { deletedAt: null, accountType: { not: "sandbox" } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    // Chưa kích hoạt sandbox → trả rỗng trung thực (không 404 — tab Danh mục
+    // hiển thị empty state đúng ngữ nghĩa "chưa có lệnh").
+    const accountFilter = account ? { brokerAccountId: account.id } : { brokerAccountId: "__none__" };
+
     const [orders, trades] = await Promise.all([
       db.order.findMany({
+        where: accountFilter,
         orderBy: { createdAt: "desc" },
         take: 20,
         include: { instrument: { select: { symbol: true, name: true } } },
       }),
       db.trade.findMany({
+        where: { order: accountFilter },
         orderBy: { executedAt: "desc" },
         take: 20,
         include: { instrument: { select: { symbol: true, name: true } } },

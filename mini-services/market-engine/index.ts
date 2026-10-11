@@ -110,6 +110,11 @@ const SETTLE_DISABLED = process.env.SETTLE_DISABLED === "1";
 /** A4 (#79) — lịch retrain ML hằng tuần "SUN:04:00" (cùng cửa sổ reprobe B14). */
 const ML_TRAIN_AT = process.env.ML_TRAIN_AT ?? "SUN:04:00";
 const ML_TRAIN_DISABLED = process.env.ML_TRAIN_DISABLED === "1";
+/** K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): giờ ICT kết toán sandbox hằng ngày
+ *  (16:30 — SAU settle bandit 16:15 đúng 15 phút để không tranh lock DB; job
+ *  4-việc: kênh-2 reward → CashSnapshot → telemetry → audit tổng kết). */
+const K1_EQUITY_AT = process.env.K1_EQUITY_AT ?? "16:30";
+const K1_EQUITY_DISABLED = process.env.K1_EQUITY_DISABLED === "1";
 
 /** "HH:MM" ICT → phút kể từ nửa đêm ICT (UTC+7). */
 function parseHhMm(s: string): number | null {
@@ -123,6 +128,7 @@ function parseHhMm(s: string): number | null {
 const EOD_SYNC_MINUTES = parseHhMm(EOD_SYNC_AT) ?? parseHhMm("15:45")!;
 const INTL_SYNC_MINUTES = parseHhMm(INTL_SYNC_AT) ?? parseHhMm("06:15")!;
 const SETTLE_MINUTES = parseHhMm(SETTLE_AT) ?? parseHhMm("16:15")!;
+const K1_EQUITY_MINUTES = parseHhMm(K1_EQUITY_AT) ?? parseHhMm("16:30")!;
 
 /** "SUN:HH:MM" (tên ngày 3 chữ) hoặc "0:HH:MM" (0=CN..6=T7) → { dow, minutes } — lịch hằng tuần. */
 const DOW_NAMES: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
@@ -191,6 +197,11 @@ const stats = {
   lastMlTrainSunday: null as string | null,
   lastMlTrainError: null as string | null,
   mlTrainRuns: 0,
+  // K1 (#87 — §5.4): lịch settle-equity sandbox 16:30 ICT (P0-5 sống sót restart)
+  lastK1EquityAt: null as string | null,
+  lastK1EquityDate: null as string | null,
+  lastK1EquityError: null as string | null,
+  k1EquityRuns: 0,
   lastCycleAt: null as string | null,
   cycles: 0,
   // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chế độ chạy liên tục
@@ -217,6 +228,7 @@ const http = createServer((req, res) => {
         reprobeAt: REPROBE_AT,
         settleAt: SETTLE_AT,
         mlTrainAt: ML_TRAIN_AT,
+        k1EquityAt: K1_EQUITY_AT,
         ...stats,
       })
     );
@@ -260,6 +272,9 @@ interface EngineState {
   lastSettleAt?: string | null;
   lastMlTrainSunday?: string | null;
   lastMlTrainAt?: string | null;
+  // K1 (#87) — ngày đã settle-equity sandbox + mốc gần nhất (P0-5)
+  lastK1EquityDate?: string | null;
+  lastK1EquityAt?: string | null;
 }
 
 /** Boot: đọc state từ DB → đổ vào stats + biến backoff (restart không quên). */
@@ -291,6 +306,11 @@ async function hydrateEngineState(): Promise<void> {
     if (typeof s.lastSettleAt === "string") stats.lastSettleAt = s.lastSettleAt;
     if (typeof s.lastMlTrainSunday === "string") stats.lastMlTrainSunday = s.lastMlTrainSunday;
     if (typeof s.lastMlTrainAt === "string") stats.lastMlTrainAt = s.lastMlTrainAt;
+    // K1 (#87) — phục hồi lịch settle sandbox (restart giữa chừng không double:
+    // route idempotent qua CashSnapshot 1-dòng/ngày + dedupe reward per position,
+    // nhưng tránh cả lần gọi thừa)
+    if (typeof s.lastK1EquityDate === "string") stats.lastK1EquityDate = s.lastK1EquityDate;
+    if (typeof s.lastK1EquityAt === "string") stats.lastK1EquityAt = s.lastK1EquityAt;
     if (typeof s.intlFailStreak === "number") intlFailStreak = s.intlFailStreak;
     if (typeof s.lastIntlFailAt === "number") lastIntlFailAt = s.lastIntlFailAt;
     log(
@@ -324,6 +344,8 @@ async function persistEngineState(): Promise<void> {
         lastSettleAt: stats.lastSettleAt,
         lastMlTrainSunday: stats.lastMlTrainSunday,
         lastMlTrainAt: stats.lastMlTrainAt,
+        lastK1EquityDate: stats.lastK1EquityDate,
+        lastK1EquityAt: stats.lastK1EquityAt,
       } satisfies EngineState),
       signal: AbortSignal.timeout(15_000),
     });
@@ -699,6 +721,43 @@ async function mlTrainAndBroadcast(): Promise<void> {
   }
 }
 
+/** K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4/§5.5): kết toán sandbox 16:30 ICT.
+ *  POST /api/k/sandbox/settle-equity → broadcast "k1-settle". Thuần thuật toán
+ *  0 LLM: kênh-2 reward (posterior Beta BanditArm — Q2 trộn) + CashSnapshot
+ *  + telemetry + audit. F-481-01 pattern: guard in-flight. Thất bại → KHÔNG
+ *  đánh dấu ngày — phút sau thử lại (không dồn cục). Route tự idempotent nên
+ *  chạy nhắc lại vô hại ($0). */
+let k1EquityInFlight = false;
+const K1_EQUITY_POST_TIMEOUT_MS = 60_000;
+async function k1EquityAndBroadcast(): Promise<void> {
+  k1EquityInFlight = true;
+  try {
+    const data = await postJson("/api/k/sandbox/settle-equity", undefined, {
+      timeoutMs: K1_EQUITY_POST_TIMEOUT_MS,
+    });
+    stats.lastK1EquityAt = new Date().toISOString();
+    stats.k1EquityRuns++;
+    stats.lastK1EquityError = null;
+    const ict = ictNow();
+    stats.lastK1EquityDate = ict.date;
+    io.emit("k1-settle", data);
+    const rewards = Array.isArray((data as { rewards?: unknown[] }).rewards)
+      ? (data as { rewards: unknown[] }).rewards.length
+      : 0;
+    log(
+      "k1",
+      `settle sandbox xong: ${data.skipped ?? ""} · reward ${rewards} position · equity ${(data as { equity?: number }).equity ?? "?"}`
+    );
+  } catch (err) {
+    stats.lastK1EquityError = err instanceof Error ? err.message : String(err);
+    log("k1", `LỖI (thử lại phút sau): ${stats.lastK1EquityError}`);
+  } finally {
+    k1EquityInFlight = false;
+    // P0-5 — ngày đã settle sandbox sống sót restart
+    void persistEngineState();
+  }
+}
+
 /** Kiểm tra hằng phút: đã qua 15:45 ICT hôm nay và chưa sync ngày này → sync.
  * F-481-01: sync cũ chưa xong (~40s) → không bắn thêm. */
 function eodSyncDue(): boolean {
@@ -767,6 +826,22 @@ function intlSyncDue(): boolean {
   return true;
 }
 
+/** K1 (#87) — đã qua 16:30 ICT · EOD hôm nay ĐÃ sync · chưa settle sandbox ngày
+ *  này → kết toán. T7/CN chặn như settle A1 (F-801-01 — không có EOD mới →
+ *  equity snapshot cuối tuần vô nghĩa; job Thứ 2 quét bù position đóng Thứ 6
+ *  lỡ hẹn vì window theo closedAt thực). */
+function k1EquityDue(): boolean {
+  if (K1_EQUITY_DISABLED) return false;
+  if (k1EquityInFlight) return false;
+  const ict = ictNow();
+  if (ict.dow === 0 || ict.dow === 6) return false; // CN=0 · T7=6
+  return (
+    ict.minutes >= K1_EQUITY_MINUTES &&
+    stats.lastEodSyncDate === ict.date &&
+    stats.lastK1EquityDate !== ict.date
+  );
+}
+
 /** B14 — Chủ nhật, đã qua 04:00 ICT, chưa chạy tuần này → re-probe.
  * F-481-01: probe cũ chưa xong → không bắn thêm. */
 function reprobeDue(): boolean {
@@ -784,7 +859,7 @@ http.listen(PORT, () => {
   log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL}`);
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run")`
   );
@@ -820,6 +895,9 @@ http.listen(PORT, () => {
       // (due-check mới nhất trong try/catch chung — lỗi 1 lịch không giết cả khối)
       if (settleDue()) void settleAndBroadcast();
       if (mlTrainDue()) void mlTrainAndBroadcast();
+      // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
+      // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
+      if (k1EquityDue()) void k1EquityAndBroadcast();
       // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chạy liên tục —
       // async + .catch bổ sung theo nguyên tắc vàng Fixbug #2 (timer callback
       // không được phép ném uncaught exception giết event loop).

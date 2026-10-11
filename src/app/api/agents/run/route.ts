@@ -7,6 +7,8 @@ import { reapStaleAgentRuns } from "@/lib/agent-ratelimit";
 import { expireDueSignals } from "@/lib/signal-execution";
 // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.1): ghi mốc chu kỳ cho due-check engine.
 import { markKRunCycle } from "@/lib/k-run";
+// K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.3): auto-convert tín hiệu chu kỳ sang sandbox.
+import { autoConvertSignalToSandbox } from "@/lib/k-sandbox";
 import {
   ROLE_PROMPTS,
   buildMarketBlock,
@@ -1247,6 +1249,19 @@ export async function POST() {
     // Settlement + Cash Management (service, song song)
     await Promise.all(WAVE_E_SERVICE_CODES.map((code) => runOneServiceAgent(code)));
 
+    // ── K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.3): auto-convert CUỐI CHU KỲ ──────
+    // Điểm ghép DUY NHẤT của sandbox: sau khi mọi tín hiệu đã lưu + mọi wave
+    // hoàn tất (chu kỳ kết thúc sạch). Tín hiệu của chu kỳ vừa sinh mà QUA CỔNG
+    // ĐỒNG THUẬN B9 → lệnh sandbox (agents tự giao dịch — Q1 §8). KHÔNG đổi
+    // Signal.status (2 thế giới độc lập) · idempotent qua marker audit · fail-soft
+    // tuyệt đối (lỗi K1 KHÔNG bao giờ làm hỏng chu kỳ 23 agents).
+    const k1Sandbox = createdSignal
+      ? await autoConvertSignalToSandbox(createdSignal.id).catch((k1err) => {
+          console.error("[api/agents/run:k1] auto-convert sandbox fail-soft:", k1err);
+          return { converted: 0, orders: [], skipped: [{ reason: "loi-noi-bo (fail-soft)" }] };
+        })
+      : null;
+
     // ── Cycle-level audit log ──────────────────────────────────────
     const cycleDurationMs = Date.now() - cycleStart;
     const ranCount = analyses.size + (strategist ? 1 : 0) + (executionRunId ? 1 : 0);
@@ -1260,9 +1275,23 @@ export async function POST() {
           messages: createdMessages.length,
           agentsRan: ranCount,
           signal: createdSignal?.symbol ?? null,
-          order: null, // §4.9 — chu kỳ không còn tự tạo lệnh
+          order: null, // §4.9 — chu kỳ không còn tự tạo lệnh (lệnh paper chỉ khi trader duyệt)
           durationMs: cycleDurationMs,
           failures,
+          // K1 (#87 §5.3): kết quả auto-convert sandbox của chu kỳ (null khi không
+          // có tín hiệu; converted=0 + lý do skip khi chưa kích hoạt/đình chỉ)
+          k1Sandbox: k1Sandbox
+            ? {
+                converted: k1Sandbox.converted,
+                orders: k1Sandbox.orders.map((o) => ({
+                  orderId: o.orderId,
+                  symbol: o.symbol,
+                  side: o.side,
+                  quantity: o.quantity,
+                })),
+                skipped: k1Sandbox.skipped.map((s) => s.reason),
+              }
+            : null,
           // Phiên #34 — tóm tắt Bộ tổng hợp Bayes của chu kỳ (null khi tổng hợp lỗi)
           assessment: assessmentSummary
             ? {
@@ -1298,7 +1327,10 @@ export async function POST() {
               },
             ]
           : [],
-        order: null, // giữ trường cho client cũ — lệnh chỉ tạo khi trader phê duyệt
+        order: null, // giữ trường cho client cũ — lệnh paper chỉ tạo khi trader phê duyệt
+        // K1 (#87): lệnh sandbox tự sinh từ tín hiệu chu kỳ này (world riêng —
+        // không phải "order" paper; client hiển thị qua khối K1/Thử nghiệm)
+        k1Sandbox,
         failures,
         durationMs: cycleDurationMs,
         // Mở rộng 23 agents — tổng kết các đợt đã chạy

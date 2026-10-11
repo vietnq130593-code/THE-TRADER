@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Wallet } from "lucide-react";
+import { FlaskConical, Wallet } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ import {
   formatVnd,
   formatVolume,
 } from "@/lib/format";
-import type { OrderRow, PortfolioResponse, TradeRow } from "@/lib/types";
+import type { KSandboxState, OrderRow, PortfolioResponse, TradeRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface OrdersResponse {
@@ -52,33 +52,105 @@ export function PortfolioSection() {
   const portfolioTab = useUiStore((s) => s.portfolioTab);
   const setPortfolioTab = useUiStore((s) => s.setPortfolioTab);
 
+  // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6-Q3): bộ lọc tài khoản Giấy/Thử nghiệm.
+  // Mặc định "paper" (hành vi cũ bảo toàn). Lựa chọn "sandbox" chỉ hiện khi
+  // cơ chế thử nghiệm đang bật (query k-sandbox đã có ở Settings/Header —
+  // dùng chung cache key nên không thêm tải). Query key gắn accountType →
+  // mọi world tự invalidate theo prefix ["portfolio"] như cũ.
+  const [accountType, setAccountType] = React.useState<"paper" | "sandbox">("paper");
+  const { data: kSandbox } = useQuery({
+    queryKey: ["k-sandbox"],
+    queryFn: () => apiGet<KSandboxState>("/api/k/sandbox"),
+    staleTime: 60_000,
+  });
+  const sandboxAvailable = kSandbox?.enabled === true;
+  // Sandbox bị tắt/đặt lại trong lúc đang xem → derive về Giấy (không setState
+  // trong effect — thuần dẫn xuất: hiện đúng ngay cả giữa transitions).
+  const viewAccountType: "paper" | "sandbox" =
+    accountType === "sandbox" && !sandboxAvailable ? "paper" : accountType;
+
   const portfolioQuery = useQuery({
-    queryKey: ["portfolio"],
-    queryFn: () => apiGet<PortfolioResponse>("/api/portfolio"),
+    queryKey: ["portfolio", viewAccountType],
+    queryFn: () =>
+      apiGet<PortfolioResponse>(
+        viewAccountType === "sandbox" ? "/api/portfolio?accountType=sandbox" : "/api/portfolio"
+      ),
     staleTime: 60_000,
   });
   const ordersQuery = useQuery({
-    queryKey: ["orders"],
-    queryFn: () => apiGet<OrdersResponse>("/api/orders"),
+    queryKey: ["orders", viewAccountType],
+    queryFn: () =>
+      apiGet<OrdersResponse>(
+        viewAccountType === "sandbox" ? "/api/orders?accountType=sandbox" : "/api/orders"
+      ),
     staleTime: 60_000,
   });
 
   const p = portfolioQuery.data;
   const loading = portfolioQuery.isLoading || ordersQuery.isLoading;
+  const isSandbox = viewAccountType === "sandbox";
 
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Wallet className="size-4 text-muted-foreground" aria-hidden="true" />
-          Danh mục đầu tư
+        <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
+          <span className="flex items-center gap-2">
+            <Wallet className="size-4 text-muted-foreground" aria-hidden="true" />
+            Danh mục đầu tư
+          </span>
+          {/* K1 (#87 §5.6-Q3): bộ lọc tài khoản Giấy/Thử nghiệm — segmented control */}
+          <div
+            className="flex items-center gap-1 rounded-lg border border-border/60 p-1"
+            role="group"
+            aria-label="Chọn thế giới tài khoản hiển thị"
+          >
+            <button
+              type="button"
+              onClick={() => setAccountType("paper")}
+              aria-pressed={viewAccountType === "paper"}
+              className={cn(
+                "rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40",
+                viewAccountType === "paper"
+                  ? "bg-secondary text-secondary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Giấy
+            </button>
+            <button
+              type="button"
+              onClick={() => sandboxAvailable && setAccountType("sandbox")}
+              disabled={!sandboxAvailable}
+              aria-pressed={viewAccountType === "sandbox"}
+              title={
+                sandboxAvailable
+                  ? "Tài khoản thử nghiệm — agents tự giao dịch (K1)"
+                  : "Chưa kích hoạt cơ chế thử nghiệm (Cài đặt → Cơ chế thử nghiệm)"
+              }
+              className={cn(
+                "flex min-h-8 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50",
+                viewAccountType === "sandbox"
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <FlaskConical className="size-3" aria-hidden="true" />
+              Thử nghiệm
+            </button>
+          </div>
         </CardTitle>
         <CardDescription>
           {p
-            ? `Tài khoản ${p.account.broker} · ${p.account.accountNumber} · ${
-                p.account.accountType === "margin" ? "Ký quỹ (margin)" : "Thường"
-              }`
-            : "Tài khoản VNDIRECT"}
+            ? `${
+                isSandbox
+                  ? "Tài khoản thử nghiệm K1 — agents tự giao dịch qua cổng đồng thuận"
+                  : `Tài khoản ${p.account.broker} · ${p.account.accountNumber} · ${
+                      p.account.accountType === "margin" ? "Ký quỹ (margin)" : "Thường"
+                    }`
+              }${isSandbox && kSandbox?.paused ? " · đang tạm dừng lệnh mới" : ""}`
+            : isSandbox
+              ? "Tài khoản thử nghiệm (K1)"
+              : "Tài khoản VNDIRECT"}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">

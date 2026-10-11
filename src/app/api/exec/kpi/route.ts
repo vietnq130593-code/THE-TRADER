@@ -51,8 +51,10 @@ export async function GET(request: Request) {
     try {
       // F-73R2-03: account fetch trước để lọc positions theo brokerAccountId
       // (không trộn vị thế tài khoản khác/soft-delete vào equity dự báo).
+      // K1 (#87 — P0 quarantine §5.1): KPI Điều hành là thế giới PAPER — loại
+      // trừ tài khoản sandbox.
       const account = await db.brokerAccount.findFirst({
-        where: { deletedAt: null },
+        where: { deletedAt: null, accountType: { not: "sandbox" } },
         select: { id: true, cashBalance: true, marginUsed: true },
       });
       const positions = await db.position.findMany({

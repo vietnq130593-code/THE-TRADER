@@ -152,8 +152,10 @@ async function portfolioSnapshot(): Promise<{
   sectorWeights: { sector: string; mv: number; pct: number }[];
 }> {
   const [account, positionsAll] = await Promise.all([
+    // K1 (#87 — P0 quarantine §5.1): A12 portfolioSnapshot là bối cảnh PAPER —
+    // loại trừ tài khoản sandbox khỏi NAV/KPI của chu kỳ agent giấy.
     db.brokerAccount.findFirst({
-      where: { deletedAt: null },
+      where: { deletedAt: null, accountType: { not: "sandbox" } },
       select: { id: true, cashBalance: true, equity: true, marginUsed: true },
     }),
     db.position.findMany({
@@ -826,8 +828,10 @@ async function runCashManagement(): Promise<ServiceRunResult> {
   const marginMin = cashCfg?.marginRoomMinVnd ?? 500_000_000;
 
   // Tài khoản sống (để gắn snapshot chuỗi cash đúng brokerAccountId).
+  // K1 (#87 — P0 quarantine §5.1): snapshot chuỗi cash E-P1-3 là của PAPER —
+  // loại trừ sandbox (sandbox có chuỗi snapshot riêng source "k1-daily" §5.4).
   const account = await db.brokerAccount.findFirst({
-    where: { deletedAt: null },
+    where: { deletedAt: null, accountType: { not: "sandbox" } },
     select: { id: true },
   });
 

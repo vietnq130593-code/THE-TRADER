@@ -46,6 +46,9 @@ import { cn } from "@/lib/utils";
 import { apiGet, apiPost } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import type { MarketDataMode, SettingsResponse } from "@/lib/types";
+// K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6): khối "Cơ chế thử nghiệm (tiền ảo)"
+// — query riêng /api/k/sandbox (không phụ thuộc useSettings nên luôn hiển thị).
+import { SandboxCard } from "@/components/dashboard/sandbox-card";
 
 /**
  * Phiên #34 — workspace "Cài đặt": kết nối VNDIRECT (credentials masked),
@@ -134,6 +137,8 @@ export function SettingsWorkspace() {
       ) : (
         <>
           <VndirectCard settings={data} />
+          {/* K1 (#87 §5.6): đặt sát kết nối VNDIRECT — 2 khối tài khoản/đồng tiền */}
+          <SandboxCard />
           <MarketDataCard settings={data} />
           <NotifyCard settings={data} />
           <CalendarCard settings={data} />

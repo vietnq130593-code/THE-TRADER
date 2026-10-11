@@ -98,8 +98,11 @@ interface CurrentLedgerState {
 
 async function loadCurrentLedger(): Promise<CurrentLedgerState> {
   const [account, positionsAll] = await Promise.all([
+    // K1 (#87 — P0 quarantine §5.1): ledger đối chiếu 5-phép E-P1 là thế giới
+    // PAPER — loại trừ tài khoản sandbox (sandbox có K1_SANDBOX_SETTLED riêng,
+    // không đối chiếu chéo 2 thế giới tiền).
     db.brokerAccount.findFirst({
-      where: { deletedAt: null },
+      where: { deletedAt: null, accountType: { not: "sandbox" } },
       select: { id: true, cashBalance: true },
     }),
     db.position.findMany({
