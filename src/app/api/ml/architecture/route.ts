@@ -1,0 +1,553 @@
+import { NextResponse } from "next/server";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { db } from "@/lib/db";
+import { parseMlpArch } from "@/lib/ml/nn";
+import { GRU_ARCH } from "@/lib/ml/gru";
+import { ENSEMBLE_WEIGHTS, ML_ENSEMBLE_DEADBAND } from "@/lib/ml/ensemble";
+import { FEATURE_NAMES } from "@/lib/ml/psi";
+import { ML_FEATURE_COUNT, ML_FEATURE_SET, ML_HORIZON_DAYS } from "@/lib/ml/features";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+/**
+ * GET /api/ml/architecture (phiên #89 — tab "Mạng thần kinh" + "Dữ liệu &
+ * kiến trúc" của module Học máy). MỘT endpoint bốn phần:
+ *
+ *   db       — parse prisma/schema.prisma lúc runtime (model + trường + quan
+ *              hệ + index) + đếm dòng CHÍNH XÁC mỗi bảng (một truy vấn UNION
+ *              ALL; fallback pg_stat_user_tables ≈; cùng fallback null) —
+ *              UI hiển thị kiến trúc database THẬT đang chạy, không copy tay.
+ *   mlp      — arch + trọng số THẬT của bản dl-mlp serving (parse weights
+ *              JSON — từJSON tương thích mọi arch "in-h1-h2-out").
+ *   gru      — arch tĩnh GRU-24 (GRU_ARCH) + bản dl-gru mới nhất (shadow).
+ *   ensemble — trọng số 2/3 giọng + deadband (ENSEMBLE_WEIGHTS — một nguồn).
+ *   pipeline — 8 chặng dòng chảy dữ liệu (nguồn → lưu trữ → đặc trưng → mô
+ *              hình → ensemble → bandit → tổng hợp → quyết định) kèm số
+ *              dòng sống lấy từ phần db.
+ *
+ * Cache in-memory 60s (parse schema + đếm dòng không cần mỗi request).
+ * Fail-soft từng phần: db lỗi → models rỗng + approximate:false; MLP không
+ * có bản serving → mlp:null (UI empty-state trung thực).
+ */
+
+/* ─────────────────── Nhóm model (phân loại hiển thị) ─────────────────── */
+
+const MODEL_GROUPS: { id: string; label: string; models: string[] }[] = [
+  {
+    id: "market",
+    label: "Dữ liệu thị trường",
+    models: [
+      "Instrument", "Quote", "Bar", "IntradayBar", "ForeignFlow",
+      "CorporateEvent", "FinancialFundamental", "NewsItem", "DataSourceStatus",
+    ],
+  },
+  {
+    id: "agents",
+    label: "Agent & chu kỳ",
+    models: ["Agent", "AgentRun", "AgentTask", "AgentMessage", "Watchlist", "WatchlistItem"],
+  },
+  {
+    id: "trading",
+    label: "Giao dịch",
+    models: ["Signal", "Order", "Position", "Trade", "BrokerAccount", "CashSnapshot", "RiskAlert"],
+  },
+  {
+    id: "ml",
+    label: "Học máy & tổng hợp",
+    models: [
+      "MlModel", "BanditArm", "BanditEvent", "RetrievalLog",
+      "MarketAssessment", "RiskQuantSnapshot", "FeatureValue",
+    ],
+  },
+  {
+    id: "ops",
+    label: "Hệ thống",
+    models: ["User", "AppSetting", "AuditLog", "DataQualityReport", "NotificationOutbox"],
+  },
+];
+
+function groupOfModel(name: string): string {
+  for (const g of MODEL_GROUPS) if (g.models.includes(name)) return g.id;
+  return "ops"; // model mới chưa phân nhóm → "Hệ thống"
+}
+
+/* ─────────────────── Parse prisma/schema.prisma ─────────────────── */
+
+interface ParsedField {
+  name: string;
+  type: string;
+  attrs: string;
+  relation: boolean;
+}
+interface ParsedModel {
+  name: string;
+  fields: ParsedField[];
+  relations: string[];
+  indexes: string[];
+}
+
+function parsePrismaSchema(raw: string): { models: ParsedModel[]; enumCount: number } {
+  const models: ParsedModel[] = [];
+  const modelRegex = /^model\s+(\w+)\s*\{([\s\S]*?)^\}/gm;
+  let m: RegExpExecArray | null;
+  const names = new Set<string>();
+  const rawModels: { name: string; body: string }[] = [];
+  while ((m = modelRegex.exec(raw)) !== null) {
+    rawModels.push({ name: m[1], body: m[2] });
+    names.add(m[1]);
+  }
+  for (const rm of rawModels) {
+    const fields: ParsedField[] = [];
+    const relations = new Set<string>();
+    const indexes: string[] = [];
+    for (const line of rm.body.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed === "" || trimmed.startsWith("//")) continue;
+      if (trimmed.startsWith("@@")) {
+        indexes.push(trimmed);
+        continue;
+      }
+      const fm = /^(\w+)\s+([\w\[\]?]+)(.*)$/.exec(trimmed);
+      if (!fm) continue;
+      const [, fname, ftype, rest] = fm;
+      const baseType = ftype.replace(/[\[\]?]/g, "");
+      const isRelation = names.has(baseType);
+      fields.push({ name: fname, type: ftype, attrs: rest.trim(), relation: isRelation });
+      if (isRelation) relations.add(baseType);
+    }
+    models.push({ name: rm.name, fields, relations: [...relations], indexes });
+  }
+  const enumCount = (raw.match(/^enum\s+\w+\s*\{/gm) ?? []).length;
+  return { models, enumCount };
+}
+
+/* ─────────────────── Đếm dòng (chính xác → ≈ → null) ─────────────────── */
+
+type RowCounts = Map<string, number>;
+
+async function countRowsExact(modelNames: string[]): Promise<RowCounts | null> {
+  if (modelNames.length === 0) return new Map();
+  try {
+    const selects = modelNames
+      .map((n) => `SELECT '${n.replace(/'/g, "''")}' AS name, COUNT(*)::int AS count FROM "${n.replace(/"/g, '""')}"`)
+      .join(" UNION ALL ");
+    const rows = (await db.$queryRawUnsafe(selects)) as { name: string; count: number }[];
+    return new Map(rows.map((r) => [r.name, Number(r.count)]));
+  } catch (err) {
+    console.error("[api/ml/architecture] countRowsExact lỗi, fallback pg_stat:", err);
+    return null;
+  }
+}
+
+async function countRowsApprox(): Promise<RowCounts | null> {
+  try {
+    const rows = (await db.$queryRawUnsafe(
+      "SELECT relname AS name, n_live_tup::int AS count FROM pg_stat_user_tables"
+    )) as { name: string; count: number }[];
+    return new Map(rows.map((r) => [r.name, Number(r.count)]));
+  } catch {
+    return null;
+  }
+}
+
+/* ─────────────────── Trọng số MLP serving (cho sơ đồ mạng) ─────────────────── */
+
+interface MlpWeightStats {
+  W1: number[];
+  b1: number[];
+  W2: number[];
+  b2: number[];
+  W3: number[];
+  b3: number[];
+}
+
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
+}
+
+async function buildMlpInfo(): Promise<{
+  version: number | null;
+  trainedAt: string | null;
+  featureSet: string;
+  archString: string;
+  arch: { in: number; h1: number; h2: number; out: number };
+  paramCount: number;
+  layers: { name: string; units: number; activation: string; params: number; note: string }[];
+  featureNames: string[];
+  outputLabels: string[];
+  weights: MlpWeightStats | null;
+} | null> {
+  let row: { version: number; trainedAt: Date; weights: string; meta: string | null } | null = null;
+  try {
+    row = await db.mlModel.findFirst({
+      where: { kind: "dl-mlp", status: "serving" },
+      orderBy: { version: "desc" },
+      select: { version: true, trainedAt: true, weights: true, meta: true },
+    });
+  } catch {
+    return null;
+  }
+  if (!row) return null;
+
+  let featureSet = "v1-lag10";
+  try {
+    const meta = row.meta ? (JSON.parse(row.meta) as { featureSet?: unknown }) : null;
+    if (meta && typeof meta.featureSet === "string") featureSet = meta.featureSet;
+  } catch {
+    // meta hỏng → mặc định trung thực
+  }
+
+  let arch = { in: 10, h1: 16, h2: 8, out: 3 };
+  let weights: MlpWeightStats | null = null;
+  try {
+    const w = JSON.parse(row.weights) as {
+      arch?: string;
+      W1?: number[];
+      b1?: number[];
+      W2?: number[];
+      b2?: number[];
+      W3?: number[];
+      b3?: number[];
+    };
+    if (w.arch) arch = parseMlpArch(w.arch);
+    weights = {
+      W1: (w.W1 ?? []).map(round3),
+      b1: (w.b1 ?? []).map(round3),
+      W2: (w.W2 ?? []).map(round3),
+      b2: (w.b2 ?? []).map(round3),
+      W3: (w.W3 ?? []).map(round3),
+      b3: (w.b3 ?? []).map(round3),
+    };
+  } catch {
+    weights = null; // weights hỏng → vẫn trả arch mặc định + null weights
+  }
+
+  const paramCount = arch.h1 * arch.in + arch.h1 + arch.h2 * arch.h1 + arch.h2 + arch.out * arch.h2 + arch.out;
+  return {
+    version: row.version,
+    trainedAt: row.trainedAt.toISOString(),
+    featureSet,
+    archString: `${arch.in}-${arch.h1}-${arch.h2}-${arch.out}`,
+    arch,
+    paramCount,
+    layers: [
+      {
+        name: "Lớp vào",
+        units: arch.in,
+        activation: "—",
+        params: 0,
+        note: `${arch.in} đặc trưng z-score (rổ top-20 thanh khoản)`,
+      },
+      {
+        name: "Lớp ẩn 1",
+        units: arch.h1,
+        activation: "ReLU",
+        params: arch.h1 * arch.in + arch.h1,
+        note: "He-normal init · W1·x + b1",
+      },
+      {
+        name: "Lớp ẩn 2",
+        units: arch.h2,
+        activation: "ReLU",
+        params: arch.h2 * arch.h1 + arch.h2,
+        note: "W2·h1 + b2",
+      },
+      {
+        name: "Lớp ra",
+        units: arch.out,
+        activation: "softmax",
+        params: arch.out * arch.h2 + arch.out,
+        note: "3 lớp: Giảm · Đi ngang · Tăng",
+      },
+    ],
+    featureNames: FEATURE_NAMES.slice(0, arch.in),
+    outputLabels: ["Giảm", "Đi ngang", "Tăng"],
+    weights,
+  };
+}
+
+async function buildGruInfo(): Promise<{
+  version: number | null;
+  trainedAt: string | null;
+  status: string | null;
+  valAcc: number | null;
+  arch: { in: number; h: number; d: number; out: number; window: number };
+  paramCount: number;
+  layers: { name: string; units: number; activation: string; params: number; note: string }[];
+  note: string;
+}> {
+  const { in: IN, h: H, d: D, out: OUT, window } = GRU_ARCH;
+  const gates = 3 * (H * IN + H * H + H);
+  const dense = D * H + D;
+  const outLayer = OUT * D + OUT;
+  let version: number | null = null;
+  let trainedAt: string | null = null;
+  let status: string | null = null;
+  let valAcc: number | null = null;
+  try {
+    const row = await db.mlModel.findFirst({
+      where: { kind: "dl-gru" },
+      orderBy: { version: "desc" },
+      select: { version: true, trainedAt: true, status: true, metrics: true },
+    });
+    if (row) {
+      version = row.version;
+      trainedAt = row.trainedAt.toISOString();
+      status = row.status;
+      try {
+        const m = JSON.parse(row.metrics) as { valAcc?: unknown };
+        if (typeof m.valAcc === "number") valAcc = m.valAcc;
+      } catch {
+        // metrics hỏng → null
+      }
+    }
+  } catch {
+    // DB lỗi → arch tĩnh vẫn trả
+  }
+  return {
+    version,
+    trainedAt,
+    status,
+    valAcc,
+    arch: GRU_ARCH,
+    paramCount: gates + dense + outLayer,
+    layers: [
+      {
+        name: "Chuỗi vào",
+        units: window * IN,
+        activation: "—",
+        params: 0,
+        note: `${window} phiên × ${IN} đặc trưng (z-score theo chiều đặc trưng)`,
+      },
+      {
+        name: "Tế bào GRU",
+        units: H,
+        activation: "sigmoid ×2 · tanh",
+        params: gates,
+        note: `3 cổng z/r/h — W[U·h + W·x] viết tay BPTT`,
+      },
+      {
+        name: "Dense",
+        units: D,
+        activation: "ReLU",
+        params: dense,
+        note: "Wd·h + bd",
+      },
+      {
+        name: "Lớp ra",
+        units: OUT,
+        activation: "softmax",
+        params: outLayer,
+        note: "3 lớp: Giảm · Đi ngang · Tăng",
+      },
+    ],
+    note:
+      version == null
+        ? "Chưa từng train — GRU bị khoá theo cổng bằng chứng B2 (ML_OPS_BLUEPRINT §4 B3)."
+        : "Shadow — chỉ lên giọng thứ ba khi đủ 60 phiên + Brier ≤ MLP (3 lớp bảo vệ trong ensemble.ts).",
+  };
+}
+
+/* ─────────────────── Cache + handler ─────────────────── */
+
+interface ArchCacheEntry {
+  at: number;
+  data: unknown;
+}
+let archCache: ArchCacheEntry | null = null;
+const ARCH_CACHE_MS = 60_000;
+
+async function buildArchitecture(): Promise<Record<string, unknown>> {
+  // 1) Parse schema + đếm dòng (2 bước fallback).
+  let models: ParsedModel[] = [];
+  let enumCount = 0;
+  try {
+    const raw = await fs.readFile(path.join(process.cwd(), "prisma", "schema.prisma"), "utf8");
+    const parsed = parsePrismaSchema(raw);
+    models = parsed.models;
+    enumCount = parsed.enumCount;
+  } catch (err) {
+    console.error("[api/ml/architecture] đọc schema.prisma lỗi:", err);
+  }
+  let exact = models.length > 0 ? await countRowsExact(models.map((m) => m.name)) : null;
+  let approximate = false;
+  if (exact == null) {
+    exact = await countRowsApprox();
+    approximate = exact != null;
+  }
+  const counts = exact ?? new Map<string, number>();
+  if (exact == null) approximate = false; // không có gì để hiển thị số dòng
+
+  const countOf = (name: string): number | null => (exact == null ? null : (counts.get(name) ?? 0));
+
+  const dbPart = {
+    totalModels: models.length,
+    totalEnums: enumCount,
+    approximate,
+    countedAt: new Date().toISOString(),
+    groups: MODEL_GROUPS,
+    models: models
+      .map((m) => ({
+        name: m.name,
+        group: groupOfModel(m.name),
+        fields: m.fields.map((f) => ({
+          name: f.name,
+          type: f.type,
+          relation: f.relation,
+          attrs: f.attrs,
+        })),
+        relations: m.relations,
+        indexes: m.indexes,
+        rowCount: countOf(m.name),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+
+  // 2) MLP + GRU + ensemble (song song, mỗi cái fail-soft riêng).
+  const [mlp, gru] = await Promise.all([buildMlpInfo().catch(() => null), buildGruInfo()]);
+
+  // 3) Pipeline 8 chặng — số dòng sống từ counts.
+  const nf = (v: number | null): string =>
+    v == null ? "—" : `${v.toLocaleString("vi-VN")} dòng`;
+  const latestOf = async (kind: string): Promise<{ version: number; status: string } | null> => {
+    try {
+      return await db.mlModel.findFirst({
+        where: { kind },
+        orderBy: { version: "desc" },
+        select: { version: true, status: true },
+      });
+    } catch {
+      return null;
+    }
+  };
+  const [dlMlp, dlGru, rlQ] = await Promise.all([
+    latestOf("dl-mlp"),
+    latestOf("dl-gru"),
+    latestOf("rl-q"),
+  ]);
+
+  const pipeline = [
+    {
+      id: "sources",
+      title: "1 · Nguồn dữ liệu",
+      items: [
+        { label: "VNDIRECT EOD", value: "REST · đồng bộ 15:45 ICT mỗi phiên" },
+        { label: "Tick giá 10s", value: "trong phiên — mô phỏng quanh ref EOD thật / realtime finmo" },
+        { label: "Tin tức RSS", value: "ingest 15 phút/lần" },
+        { label: "Chu kỳ agent", value: "23 agents · nhịp K2 (AppSetting k-run)" },
+      ],
+    },
+    {
+      id: "storage",
+      title: "2 · Kho lưu trữ (Supabase Postgres)",
+      items: [
+        { label: "Bar (EOD)", value: nf(countOf("Bar")) },
+        { label: "IntradayBar (5-phút)", value: nf(countOf("IntradayBar")) },
+        { label: "NewsItem", value: nf(countOf("NewsItem")) },
+        { label: "AgentMessage", value: nf(countOf("AgentMessage")) },
+      ],
+    },
+    {
+      id: "features",
+      title: "3 · Đặc trưng (features.ts)",
+      items: [
+        { label: `featureAt()`, value: `${ML_FEATURE_COUNT} chiều · ${ML_FEATURE_SET} · rổ top-20` },
+        { label: "standardize()", value: "z-score theo TRAIN split (chặn leakage tương lai)" },
+        { label: "trainingWindowDigest()", value: "windowHash SHA-256 PIT — skip-guard trùng cửa sổ" },
+      ],
+    },
+    {
+      id: "models",
+      title: "4 · Mô hình (MlModel)",
+      items: [
+        {
+          label: "dl-mlp (MLP)",
+          value: dlMlp ? `v${dlMlp.version} · ${dlMlp.status}` : "chưa train",
+        },
+        {
+          label: "dl-gru (GRU-24)",
+          value: dlGru ? `v${dlGru.version} · ${dlGru.status} (shadow)` : "chưa train — cổng B2",
+        },
+        { label: "rl-q (Q-learning)", value: rlQ ? `v${rlQ.version} · ${rlQ.status}` : "chưa train" },
+        { label: "linreg (hồi quy)", value: "tính tại chỗ trong ensemble — không lưu DB" },
+      ],
+    },
+    {
+      id: "forecast",
+      title: "5 · Dự báo ensemble",
+      items: [
+        {
+          label: "mlForecastEnsemble()",
+          value: `2 giọng: 0,7·MLP + 0,3·linreg · 3 giọng (khi GRU bật): 0,5/0,2/0,3`,
+        },
+        { label: "deadband", value: `|điểm| < ${ML_ENSEMBLE_DEADBAND.toString().replace(".", ",")} → Đi ngang` },
+        { label: "PSI drift", value: "so histogram đặc trưng 30 phiên — đề xuất train lại khi ≥ 0,25" },
+      ],
+    },
+    {
+      id: "weights",
+      title: "6 · Trọng số phiếu (Bandit)",
+      items: [
+        { label: "Thompson sampling", value: "6 arm Beta(α+1, β+1) — hậu nghiệm agent đúng hướng" },
+        { label: "settlePendingRewards()", value: "kết toán 5 phiên ± 0,5% rổ top-10" },
+        { label: "BanditEvent", value: nf(countOf("BanditEvent")) },
+      ],
+    },
+    {
+      id: "synthesis",
+      title: "7 · Tổng hợp Bayes",
+      items: [
+        { label: "MarketAssessment", value: nf(countOf("MarketAssessment")) },
+        { label: "prior → posterior", value: "CĐTT cập nhật theo bằng chứng mỗi chu kỳ" },
+        { label: "RAG L1 (RetrievalLog)", value: nf(countOf("RetrievalLog")) },
+      ],
+    },
+    {
+      id: "decision",
+      title: "8 · Quyết định & thực thi",
+      items: [
+        { label: "Signal", value: nf(countOf("Signal")) },
+        { label: "Order", value: nf(countOf("Order")) },
+        { label: "Trade", value: nf(countOf("Trade")) },
+        { label: "K1 sandbox", value: "tín hiệu CONSENSUS → lệnh thử nghiệm (tài khoản sandbox)" },
+      ],
+    },
+  ];
+
+  return {
+    db: dbPart,
+    mlp,
+    gru,
+    ensemble: {
+      deadband: ML_ENSEMBLE_DEADBAND,
+      twoVoice: ENSEMBLE_WEIGHTS.twoVoice,
+      threeVoice: ENSEMBLE_WEIGHTS.threeVoice,
+    },
+    pipeline,
+    features: {
+      setLabel: ML_FEATURE_SET,
+      count: ML_FEATURE_COUNT,
+      horizonDays: ML_HORIZON_DAYS,
+      names: FEATURE_NAMES,
+    },
+  };
+}
+
+export async function GET() {
+  if (archCache && Date.now() - archCache.at < ARCH_CACHE_MS) {
+    return NextResponse.json(archCache.data);
+  }
+  try {
+    const data = await buildArchitecture();
+    archCache = { at: Date.now(), data };
+    return NextResponse.json(data);
+  } catch (err) {
+    console.error("[api/ml/architecture] GET lỗi:", err);
+    return NextResponse.json(
+      { error: "Không dựng được kiến trúc hệ thống học máy." },
+      { status: 500 }
+    );
+  }
+}

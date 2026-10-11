@@ -47,6 +47,13 @@ const W_MLP_V3 = 0.5;
 const W_LINREG_V3 = 0.3;
 /** Trọng số GRU khi đã kích hoạt (giọng thứ ba). */
 const W_GRU = 0.2;
+
+/** #89 — công bố trọng số ensemble cho /api/ml/architecture (tab Mạng thần kinh).
+ *  Giá trị BẮT BUỘC khớp hằng số phía trên — object duy nhất, không copy số. */
+export const ENSEMBLE_WEIGHTS = {
+  twoVoice: { mlp: W_MLP, linreg: W_LINREG },
+  threeVoice: { mlp: W_MLP_V3, gru: W_GRU, linreg: W_LINREG_V3 },
+} as const;
 /** Cửa sổ trượt tính proj₅ (phiên). */
 const PROJ_WINDOW = 60;
 /** Số phiên tối thiểu chuỗi rổ để tính z-score có nghĩa. */
@@ -160,7 +167,8 @@ const GRU_SETTING_DEFAULT: GruSetting = {
   updatedAt: "",
 };
 
-async function readGruSetting(): Promise<GruSetting> {
+/** #89 — đọc trạng thái kill-switch/giọng-thứ-ba (tuning route dùng để toggle). */
+export async function readGruSetting(): Promise<GruSetting> {
   try {
     const row = await db.appSetting.findUnique({ where: { key: "ml-gru" } });
     if (!row) return { ...GRU_SETTING_DEFAULT };
@@ -183,7 +191,8 @@ async function readGruSetting(): Promise<GruSetting> {
   }
 }
 
-async function writeGruSetting(value: GruSetting): Promise<void> {
+/** #89 — ghi GruSetting (tuning route gọi; giữ nguyên semantics shadow/pending). */
+export async function writeGruSetting(value: GruSetting): Promise<void> {
   const json = JSON.stringify({
     ...value,
     shadow: { ...value.shadow, pending: value.shadow.pending.slice(-SHADOW_LOG_CAP) },

@@ -12,8 +12,9 @@ import {
   type TrainingSetWithSeries,
   type TrainingWindowMeta,
 } from "@/lib/ml/features";
-import { MLP } from "@/lib/ml/nn";
+import { MLP, type MlpArch } from "@/lib/ml/nn";
 import { GRU } from "@/lib/ml/gru";
+import { readEffectiveMlTuning } from "@/lib/ml/tuning";
 import { buildTrainingSequences, ML_GRU_WINDOW } from "@/lib/ml/features";
 import { buildBasket, policyStance, trainQTable } from "@/lib/ml/rl";
 import { settlePendingRewards } from "@/lib/ml/bandit";
@@ -93,6 +94,15 @@ interface MlModelMeta extends TrainingWindowMeta {
   gateVerdict?: "PASS" | "FAIL";
   /** B3 (#81) — độ dài cửa sổ chuỗi (chỉ kind dl-gru). */
   window?: number;
+  /** #89 — cấu hình tinh chỉnh THẬT đã train bản này (AppSetting ml-tuning
+   *  tại thời điểm train — truy vết mỗi bản dùng arch/hyper nào). */
+  tuning?: {
+    arch: string;
+    lr: number;
+    batchSize: number;
+    maxEpochs: number;
+    patience: number;
+  };
 }
 
 /** Quantile nội suy tuyến tính (type 7 — R default) trên mảng ĐÃ sort tăng dần. */
@@ -297,11 +307,22 @@ async function recentWindowHashesOf(
   };
 }
 
+/** #89 — hyper MLP THẬT SỰ áp dụng cho lần train này (từ AppSetting
+ *  ml-tuning, fail-soft → mặc định module). Trả ra response + meta để truy
+ *  vết mỗi bản được train với cấu hình nào. */
+interface AppliedMlpTuning {
+  arch: string;
+  lr: number;
+  batchSize: number;
+  maxEpochs: number;
+  patience: number;
+}
+
 /**
- * Train MLP v2-lag16 (16→24→12→3, 747 tham số) trên top-20 thanh khoản:
+ * Train MLP v2-lag16 (16→h1→h2→3, tham số tuỳ chọn #89) trên top-20 thanh khoản:
  * buildTrainingSet → cap 60k mẫu gần nhất → z-score → fit (Adam,
  * early-stop) → topSymbols theo độ tách pUp−pDown của mô hình trên từng mã
- * → lưu MlModel kind dl-mlp (meta ghi featureSet "v2-lag16" — B1 #81).
+ * → lưu MlModel kind dl-mlp (meta ghi featureSet "v2-lag16" + tuning #89).
  * A3 (#79): meta thêm featureHist (đặc trưng RAW TRAIN split — hợp đồng với
  * PSI). A4 (#79) + B1 (#81) serving-swap guard: valAcc ≥ bản serving VÀ
  * (cùng featureSet HOẶC cổng B2 PASS). `prebuilt` = tập đã build từ
@@ -309,7 +330,7 @@ async function recentWindowHashesOf(
  */
 async function trainDlMlp(
   prebuilt?: TrainingSetWithSeries
-): Promise<{ metrics: TrainedDlMlpMetrics; promotion: DlMlpPromotion }> {
+): Promise<{ metrics: TrainedDlMlpMetrics; promotion: DlMlpPromotion; appliedTuning: AppliedMlpTuning }> {
   const set = prebuilt ?? (await buildTrainingSet(20));
   if (set.X.length < 600) {
     throw new Error(`chỉ có ${set.X.length} mẫu huấn luyện (cần ≥ 600) — kiểm tra dữ liệu EOD`);
@@ -330,8 +351,31 @@ async function trainDlMlp(
   // A3 (#79) — histogram đặc trưng RAW của TRAIN split (đồng bộ meta PSI)
   const featureHist = computeFeatureHist(set.X);
   const { mean, std, Xstd } = standardize(set.X);
-  const mlp = new MLP();
-  const fit = mlp.fit(Xstd, set.y);
+  // #89 — arch + hyper từ AppSetting ml-tuning (fail-soft: không có key →
+  // đúng MLP_ARCH_V2 16-24-12-3 + lr 0,01/batch 32/60 epoch/patience 12 —
+  // hành vi trước #89 giữ nguyên từng số). Chiều in LUÔN = ML_FEATURE_COUNT
+  // (tuyến đặc trưng cố định — chỉ lớp ẩn/optimizer là tuỳ chỉnh được).
+  const tuning = await readEffectiveMlTuning();
+  const arch: MlpArch = {
+    in: ML_FEATURE_COUNT,
+    h1: tuning.mlp.h1,
+    h2: tuning.mlp.h2,
+    out: 3,
+  };
+  const appliedTuning: AppliedMlpTuning = {
+    arch: `${arch.in}-${arch.h1}-${arch.h2}-${arch.out}`,
+    lr: tuning.mlp.lr,
+    batchSize: tuning.mlp.batchSize,
+    maxEpochs: tuning.mlp.epochs,
+    patience: tuning.mlp.patience,
+  };
+  const mlp = new MLP(arch);
+  const fit = mlp.fit(Xstd, set.y, {
+    learningRate: tuning.mlp.lr,
+    batchSize: tuning.mlp.batchSize,
+    maxEpochs: tuning.mlp.epochs,
+    patience: tuning.mlp.patience,
+  });
   mlp.setNorm({ mean, std });
 
   // topSymbols: mã nào dự báo tách bạch nhất (mean |pUp − pDown| trên mẫu của mã)
@@ -399,12 +443,13 @@ async function trainDlMlp(
     mlp.toJSON(),
     JSON.stringify({ mean, std }),
     { ...metrics },
-    { ...windowMeta, featureHist, featureSet: ML_FEATURE_SET },
+    { ...windowMeta, featureHist, featureSet: ML_FEATURE_SET, tuning: appliedTuning },
     { promote: promoted }
   );
   return {
     metrics,
     promotion: { promoted, servingValAcc, newValAcc: fit.valAcc, reason },
+    appliedTuning,
   };
 }
 
@@ -603,6 +648,7 @@ export async function POST(req: Request) {
     let rlQ: TrainedRlQMetrics | null = null;
     let dlGru: TrainedGruMetrics | null = null;
     let dlPromotion: DlMlpPromotion | null = null;
+    let appliedTuning: AppliedMlpTuning | null = null;
 
     // A4 (#79) — skip-guard windowHash (force=false): build tập train TRƯỚC
     // khi train tốn kém, so hash với bản dl-mlp đang serving VÀ bản vừa train
@@ -643,9 +689,10 @@ export async function POST(req: Request) {
 
     if (target === "all" || target === "dl-mlp") {
       try {
-        const { metrics, promotion } = await trainDlMlp(prebuilt ?? undefined);
+        const { metrics, promotion, appliedTuning: at } = await trainDlMlp(prebuilt ?? undefined);
         dlMlp = metrics;
         dlPromotion = promotion;
+        appliedTuning = at;
         trained.push("dl-mlp");
       } catch (err) {
         console.error("[api/ml/train] trainDlMlp failed:", err);
@@ -694,6 +741,8 @@ export async function POST(req: Request) {
       payload.newValAcc = dlPromotion.newValAcc;
       if (dlPromotion.reason != null) payload.promotionReason = dlPromotion.reason;
     }
+    // #89 — cấu hình tinh chỉnh đã áp dụng cho bản MLP vừa train (truy vết).
+    if (appliedTuning) payload.appliedTuning = appliedTuning;
     if (errors.length > 0) payload.error = errors.join("; "); // 1 cái fail không chặn cái kia
     return NextResponse.json(payload);
   } catch (err) {

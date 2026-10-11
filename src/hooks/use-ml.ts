@@ -236,6 +236,269 @@ export function useMlStatus() {
   });
 }
 
+/* ─────────────────── #89 — Kiến trúc (GET /api/ml/architecture) ─────────────────── */
+
+export const ML_ARCHITECTURE_QUERY_KEY = ["ml-architecture"] as const;
+
+export interface MlDbFieldInfo {
+  name: string;
+  type: string;
+  relation: boolean;
+  attrs: string;
+}
+
+export interface MlDbModelInfo {
+  name: string;
+  group: string;
+  fields: MlDbFieldInfo[];
+  relations: string[];
+  indexes: string[];
+  rowCount: number | null;
+}
+
+export interface MlDbArchitecture {
+  totalModels: number;
+  totalEnums: number;
+  approximate: boolean;
+  countedAt: string;
+  groups: { id: string; label: string; models: string[] }[];
+  models: MlDbModelInfo[];
+}
+
+export interface MlLayerSpec {
+  name: string;
+  units: number;
+  activation: string;
+  params: number;
+  note: string;
+}
+
+export interface MlMlpArchInfo {
+  version: number | null;
+  trainedAt: string | null;
+  featureSet: string;
+  archString: string;
+  arch: { in: number; h1: number; h2: number; out: number };
+  paramCount: number;
+  layers: MlLayerSpec[];
+  featureNames: string[];
+  outputLabels: string[];
+  weights: {
+    W1: number[];
+    b1: number[];
+    W2: number[];
+    b2: number[];
+    W3: number[];
+    b3: number[];
+  } | null;
+}
+
+export interface MlGruArchInfo {
+  version: number | null;
+  trainedAt: string | null;
+  status: string | null;
+  valAcc: number | null;
+  arch: { in: number; h: number; d: number; out: number; window: number };
+  paramCount: number;
+  layers: MlLayerSpec[];
+  note: string;
+}
+
+export interface MlEnsembleInfo {
+  deadband: number;
+  twoVoice: { mlp: number; linreg: number };
+  threeVoice: { mlp: number; gru: number; linreg: number };
+}
+
+export interface MlPipelineItem {
+  label: string;
+  value: string;
+}
+
+export interface MlPipelineStage {
+  id: string;
+  title: string;
+  items: MlPipelineItem[];
+}
+
+export interface MlArchitectureResponse {
+  db: MlDbArchitecture;
+  mlp: MlMlpArchInfo | null;
+  gru: MlGruArchInfo;
+  ensemble: MlEnsembleInfo;
+  pipeline: MlPipelineStage[];
+  features: { setLabel: string; count: number; horizonDays: number; names: string[] };
+}
+
+async function fetchMlArchitecture(): Promise<MlArchitectureResponse> {
+  const res = await fetch("/api/ml/architecture", { cache: "no-store" });
+  if (!res.ok) {
+    throw new MlApiError(
+      `Không tải được kiến trúc học máy (${res.status})`,
+      res.status
+    );
+  }
+  return (await res.json()) as MlArchitectureResponse;
+}
+
+export function useMlArchitecture() {
+  return useQuery({
+    queryKey: ML_ARCHITECTURE_QUERY_KEY,
+    queryFn: fetchMlArchitecture,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    retry: (failureCount) => failureCount < 2,
+  });
+}
+
+/* ─────────────────── #89 — Tinh chỉnh (GET/POST /api/ml/tuning) ─────────────────── */
+
+export const ML_TUNING_QUERY_KEY = ["ml-tuning"] as const;
+
+export interface MlTuningMlp {
+  h1: number;
+  h2: number;
+  epochs: number;
+  patience: number;
+  batchSize: number;
+  lr: number;
+}
+
+export interface MlTuningRag {
+  topK: number;
+  k1: number;
+  b: number;
+  wRecency: number;
+}
+
+export interface MlTuningFieldSpec {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  integer: boolean;
+  unit?: string;
+  hint: string;
+}
+
+export interface MlTuningResponse {
+  saved: {
+    mlp?: Partial<MlTuningMlp>;
+    rag?: Partial<MlTuningRag>;
+    updatedAt?: string;
+  };
+  effective: { mlp: MlTuningMlp; rag: MlTuningRag };
+  defaults: { mlp: MlTuningMlp; rag: MlTuningRag };
+  ranges: { mlp: MlTuningFieldSpec[]; rag: MlTuningFieldSpec[] };
+  updatedAt: string | null;
+}
+
+export interface MlTuningSaveResponse extends MlTuningResponse {
+  ok: boolean;
+  applied: string[];
+  error?: string;
+  fields?: string[];
+}
+
+export interface MlTuningSaveInput {
+  mlp?: Partial<MlTuningMlp>;
+  rag?: Partial<MlTuningRag>;
+  resetMlp?: boolean;
+  resetRag?: boolean;
+  gruEnabled?: boolean;
+  resetBandit?: boolean;
+}
+
+async function fetchMlTuning(): Promise<MlTuningResponse> {
+  const res = await fetch("/api/ml/tuning", { cache: "no-store" });
+  if (!res.ok) {
+    throw new MlApiError(`Không tải được cấu hình tinh chỉnh (${res.status})`, res.status);
+  }
+  return (await res.json()) as MlTuningResponse;
+}
+
+export function useMlTuning() {
+  return useQuery({
+    queryKey: ML_TUNING_QUERY_KEY,
+    queryFn: fetchMlTuning,
+    staleTime: 30_000,
+    retry: (failureCount) => failureCount < 2,
+  });
+}
+
+export function useSaveMlTuning() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: MlTuningSaveInput): Promise<MlTuningSaveResponse> => {
+      const res = await fetch("/api/ml/tuning", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = (await res.json().catch(() => null)) as MlTuningSaveResponse | null;
+      if (!res.ok || data == null || data.ok !== true) {
+        const fieldList = data?.fields?.length ? ` (${data.fields.join("; ")})` : "";
+        throw new MlApiError(
+          (data?.error ?? `Không lưu được cấu hình tinh chỉnh (${res.status})`) + fieldList,
+          res.status
+        );
+      }
+      return data;
+    },
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ML_TUNING_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: ML_STATUS_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: ML_ARCHITECTURE_QUERY_KEY });
+      toast.success("Đã lưu cấu hình tinh chỉnh", {
+        description: res.applied.length > 0 ? `Áp dụng: ${res.applied.join(" · ")}` : undefined,
+      });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Không lưu được cấu hình tinh chỉnh.");
+    },
+  });
+}
+
+/* ─────────────────── #89 — Kết toán reward ngay (POST /api/ml/settle) ─────────────────── */
+
+export function useSettleMl() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (): Promise<{ settled: number; votes: number; durationMs: number }> => {
+      const res = await fetch("/api/ml/settle", { method: "POST" });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; settled?: number; votes?: number; durationMs?: number; error?: string }
+        | null;
+      if (!res.ok || data == null || data.ok !== true) {
+        throw new MlApiError(data?.error ?? `Kết toán thất bại (${res.status})`, res.status);
+      }
+      return {
+        settled: data.settled ?? 0,
+        votes: data.votes ?? 0,
+        durationMs: data.durationMs ?? 0,
+      };
+    },
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ML_STATUS_QUERY_KEY });
+      toast.success(
+        `Kết toán reward: ${res.settled} assessment · ${res.votes} phiếu`,
+        {
+          description:
+            res.durationMs > 0
+              ? `Hoàn tất trong ${nf1.format(res.durationMs / 1000)}s — phiếu đủ 5 phiên được tích lũy vào posterior Beta.`
+              : "Phiếu đủ 5 phiên được tích lũy vào posterior Beta.",
+        }
+      );
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Không kết toán được reward.");
+    },
+  });
+}
+
 /* ─────────────────── Mutation ─────────────────── */
 
 export function useTrainMl() {

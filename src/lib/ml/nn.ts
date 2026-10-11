@@ -74,6 +74,24 @@ const PATIENCE = 12;
 const VAL_FRACTION = 0.2;
 const RNG_SEED = 42;
 
+/** Tuỳ chọn huấn luyện MLP (#89 — tinh chỉnh từ tab "Tinh chỉnh").
+ *  Mặc định từng trường = hằng số phía trên — không truyền thì hành vi
+ *  GIỮ NGUYÊN như trước #89 (deterministic, seed 42). */
+export interface MlpFitOptions {
+  learningRate?: number;
+  batchSize?: number;
+  maxEpochs?: number;
+  patience?: number;
+}
+
+/** Mặc định fit — nguồn sự thật duy nhất cho ml/tuning.ts (không copy số). */
+export const MLP_FIT_DEFAULTS: Readonly<Required<MlpFitOptions>> = {
+  learningRate: LEARNING_RATE,
+  batchSize: BATCH_SIZE,
+  maxEpochs: MAX_EPOCHS,
+  patience: PATIENCE,
+};
+
 /** RNG mulberry32 — deterministic, đủ tốt cho init/shuffle/ε-greedy. */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -179,8 +197,9 @@ export class MLP {
    * Cross-entropy có class-weight w_c = (N/3)/N_c (1/tần suất, chuẩn hoá
    * mean 1) — val loss KHÔNG weighting để so sánh epoch ↔ epoch công bằng.
    * Xếp độ dài theo cột arch.in (bản lag16 16 chiều — caller cùng featureSet).
+   * #89: opts override lr/batch/epochs/patience (mặc định = hằng số module).
    */
-  fit(X: number[][], y: number[]): MlpMetrics {
+  fit(X: number[][], y: number[], opts: MlpFitOptions = {}): MlpMetrics {
     const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
     const n = X.length;
     if (n < OUT * 10) throw new Error(`MLP fit cần ≥ ${OUT * 10} mẫu, nhận ${n}`);
@@ -190,6 +209,11 @@ export class MLP {
       }
     }
     const rng = mulberry32(RNG_SEED + 7);
+    // #89 — hyper do caller truyền (tab Tinh chỉnh) hoặc mặc định module.
+    const lr = opts.learningRate ?? LEARNING_RATE;
+    const batchSize = Math.max(1, Math.round(opts.batchSize ?? BATCH_SIZE));
+    const maxEpochs = Math.max(1, Math.round(opts.maxEpochs ?? MAX_EPOCHS));
+    const patience = Math.max(1, Math.round(opts.patience ?? PATIENCE));
 
     // Class-weight 1/freq (mất class → weight 1)
     const counts = [0, 0, 0];
@@ -222,7 +246,7 @@ export class MLP {
     let stale = 0;
     let epochsRan = 0;
 
-    for (let epoch = 1; epoch <= MAX_EPOCHS; epoch++) {
+    for (let epoch = 1; epoch <= maxEpochs; epoch++) {
       epochsRan = epoch;
       // Shuffle CHỈ trong train split (Fisher-Yates)
       for (let i = trainIdx.length - 1; i > 0; i--) {
@@ -230,8 +254,8 @@ export class MLP {
         [trainIdx[i], trainIdx[j]] = [trainIdx[j], trainIdx[i]];
       }
 
-      for (let start = 0; start < trainIdx.length; start += BATCH_SIZE) {
-        const end = Math.min(trainIdx.length, start + BATCH_SIZE);
+      for (let start = 0; start < trainIdx.length; start += batchSize) {
+        const end = Math.min(trainIdx.length, start + batchSize);
         const bs = end - start;
         for (const g of grads) g.fill(0);
 
@@ -291,7 +315,7 @@ export class MLP {
         // Cập nhật Adam trên mọi khối tham số
         adamStep++;
         const lrT =
-          LEARNING_RATE * Math.sqrt(1 - Math.pow(ADAM_B2, adamStep)) / (1 - Math.pow(ADAM_B1, adamStep));
+          lr * Math.sqrt(1 - Math.pow(ADAM_B2, adamStep)) / (1 - Math.pow(ADAM_B1, adamStep));
         for (let pi = 0; pi < params.length; pi++) {
           const p = params[pi];
           const g = grads[pi];
@@ -318,7 +342,7 @@ export class MLP {
         stale = 0;
       } else {
         stale++;
-        if (stale >= PATIENCE) break; // early-stop theo valLoss
+        if (stale >= patience) break; // early-stop theo valLoss
       }
     }
 

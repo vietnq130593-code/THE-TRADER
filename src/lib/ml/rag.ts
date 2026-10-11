@@ -24,6 +24,7 @@
  */
 
 import { db } from "@/lib/db";
+import { RAG_TUNING_DEFAULT, readMlTuning, type RagTuning } from "@/lib/ml/tuning";
 
 // ─────────────────────────── Hằng số (blueprint §2 L1) ───────────────────────────
 
@@ -31,14 +32,12 @@ import { db } from "@/lib/db";
 const CORPUS_MESSAGES = 500;
 /** 200 tin tức gần nhất — cùng nhịp ingest RSS 15 phút. */
 const CORPUS_NEWS = 200;
-/** Top-K tiêm prompt — khớp config A13 retrievalTopK: 8. */
-export const RAG_TOP_K = 8;
-/** BM25: k₁ = 1,5 · b = 0,75 (chuẩn Robertsen). */
-const BM25_K1 = 1.5;
-const BM25_B = 0.75;
-/** Trọng số hybrid: 0,7·BM25 + 0,3·recency. */
-const W_BM25 = 0.7;
-const W_RECENCY = 0.3;
+/** Top-K mặc định — nguồn sự thật: RAG_TUNING_DEFAULT (ml/tuning.ts #89). */
+export const RAG_TOP_K = RAG_TUNING_DEFAULT.topK;
+/** BM25 k₁ · b mặc định (Robertsen) — tinh chỉnh được qua AppSetting ml-tuning (#89). */
+const BM25_K1 = RAG_TUNING_DEFAULT.k1;
+const BM25_B = RAG_TUNING_DEFAULT.b;
+const W_RECENCY = RAG_TUNING_DEFAULT.wRecency;
 /** Nửa đời recency 72h — tin càng cũ điểm càng thấp. */
 const RECENCY_HALF_LIFE_H = 72;
 /** Cap ký tự khối RAG ≈ 1.200 token (tiếng Việt ~2,5 ký tự/token — cap nghiêm
@@ -223,19 +222,27 @@ export async function loadRagCorpus(): Promise<RagIndex> {
  * BM25 thuần của 1 doc (Float64-compatible, viết tay — §1.1):
  *   Σ_t IDF(t) · f(t,d)·(k₁+1) / (f(t,d) + k₁·(1 − b + b·|d|/avgdl))
  *   IDF(t) = ln(1 + (N − df(t) + 0,5)/(df(t) + 0,5))
+ * #89: opts override k₁/b từ AppSetting ml-tuning (mặc định = hằng số module).
  */
-export function bm25Score(index: RagIndex, doc: RagDoc, queryTokens: string[]): number {
+export function bm25Score(
+  index: RagIndex,
+  doc: RagDoc,
+  queryTokens: string[],
+  opts: { k1?: number; b?: number } = {}
+): number {
+  const k1 = opts.k1 ?? BM25_K1;
+  const b = opts.b ?? BM25_B;
   const N = index.docs.length;
   if (N === 0 || index.avgdl === 0) return 0;
   const dl = doc.tokens.length;
-  const lenNorm = BM25_K1 * (1 - BM25_B + BM25_B * (dl / index.avgdl));
+  const lenNorm = k1 * (1 - b + b * (dl / index.avgdl));
   let sum = 0;
   for (const t of queryTokens) {
     const f = doc.tf.get(t);
     if (!f) continue;
     const df = index.df.get(t) ?? 0;
     const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
-    sum += idf * ((f * (BM25_K1 + 1)) / (f + lenNorm));
+    sum += idf * ((f * (k1 + 1)) / (f + lenNorm));
   }
   return sum;
 }
@@ -246,15 +253,31 @@ export function recencyScore(datedAt: Date, now = Date.now()): number {
   return Math.exp(-ageH / RECENCY_HALF_LIFE_H);
 }
 
-/** Xếp hạng hybrid: 0,7·BM25 + 0,3·recency — top-K điểm cao nhất. */
-export function rankRag(index: RagIndex, queryTokens: string[], topK = RAG_TOP_K): RagHit[] {
+/** Tuỳ chọn xếp hạng #89 — đọc từ AppSetting ml-tuning tại retrieveForCycle. */
+export interface RagRankOptions {
+  topK?: number;
+  k1?: number;
+  b?: number;
+  wRecency?: number;
+}
+
+/** Xếp hạng hybrid: (1−w)·BM25 + w·recency — top-K điểm cao nhất.
+ *  #89: mặc định từng tham số = hằng số module (hành vi trước #89 giữ nguyên). */
+export function rankRag(
+  index: RagIndex,
+  queryTokens: string[],
+  opts: RagRankOptions = {}
+): RagHit[] {
+  const topK = opts.topK ?? RAG_TOP_K;
+  const wRecency = opts.wRecency ?? W_RECENCY;
+  const wBm25 = 1 - wRecency;
   if (index.docs.length === 0 || queryTokens.length === 0) return [];
   const now = Date.now();
   const hits: RagHit[] = [];
   for (const doc of index.docs) {
-    const bm25 = bm25Score(index, doc, queryTokens);
+    const bm25 = bm25Score(index, doc, queryTokens, { k1: opts.k1, b: opts.b });
     const rec = recencyScore(doc.datedAt, now);
-    const score = W_BM25 * bm25 + W_RECENCY * rec;
+    const score = wBm25 * bm25 + wRecency * rec;
     if (bm25 <= 0) continue; // không khớp token nào → không vào top (chống
     //   "top-8 toàn recency" khi query lạc đề — chỉ hiện cái LIÊN QUAN)
     hits.push({
@@ -388,14 +411,22 @@ export async function retrieveForCycle(
 ): Promise<RagRetrieval> {
   const index = await loadRagCorpus();
   const queryTokens = await buildCycleQueryTokens();
-  const hits = rankRag(index, queryTokens);
+  // #89 — tham số RAG từ AppSetting ml-tuning (fail-soft → mặc định module).
+  const tuning = await readMlTuning();
+  const ragTuning = tuning.rag as Partial<RagTuning> | undefined;
+  const hits = rankRag(index, queryTokens, {
+    topK: ragTuning?.topK,
+    k1: ragTuning?.k1,
+    b: ragTuning?.b,
+    wRecency: ragTuning?.wRecency,
+  });
   const block = formatRagBlock(hits);
   let logId: string | null = null;
   try {
     const row = await db.retrievalLog.create({
       data: {
         query: queryTokens,
-        topK: RAG_TOP_K,
+        topK: ragTuning?.topK ?? RAG_TOP_K,
         results: hits.map((h) => ({
           refTable: h.refTable,
           refId: h.refId,
