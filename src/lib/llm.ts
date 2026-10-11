@@ -1,31 +1,52 @@
 /**
  * src/lib/llm.ts — LỚP PROVIDER DUY NHẤT cho mọi cuộc gọi LLM của đội agent.
  *
- * Hai provider, chọn qua env `LLM_PROVIDER` (mặc định `auto`):
+ * Ba provider, chọn qua env `LLM_PROVIDER` (mặc định `auto`):
  *
- *  1. `opencode-zen` — Opencode Zen gateway (https://opencode.ai/zen/v1),
- *     OpenAI-compatible REST, model mặc định `space-bunny-free` (miễn phí,
- *     zero-retention). CHẠY ĐƯỢC CẢ NGOÀI SANDBOX — chỉ cần
- *     `OPENCODE_ZEN_API_KEY` (lấy tại opencode.ai/zen → sign in → API key).
- *     Đây là provider dành cho môi trường local của trader.
+ *  1. `opencode-cli` — Opencode CLI (`opencode run --format json`), model
+ *     mặc định `space-bunny-free`. LÀ CON ĐƯỜNG DUY NHẤT chạy được model
+ *     FREE của Opencode Zen: thực đo 2026-10-12 REST API trả 403
+ *     FreeTierError "free tier can only be used from within OpenCode" với
+ *     MỌI client ngoài (kể cả key oc_sk_ hợp lệ), trong khi CLI với đúng
+ *     key đó (qua biến môi trường OPENCODE_API_KEY) trả lời bình thường,
+ *     cost 0 — KHÔNG cần đăng nhập OAuth tài khoản OpenCode (sửa kết luận
+ *     #91). App tự map OPENCODE_ZEN_API_KEY → OPENCODE_API_KEY cho tiến
+ *     trình con. Yêu cầu duy nhất: lệnh `opencode` trong PATH (cài:
+ *     `bun add -g opencode-ai` hoặc `npm i -g opencode-ai`); ghi đè đường
+ *     dẫn qua OPENCODE_CLI_BIN. 9 model free đo được (đổi qua
+ *     OPENCODE_ZEN_MODEL): space-bunny-free · ling-3.1-flash-free ·
+ *     mimo-v2.6-flash-free · muse-spark-1.2-contributor-free ·
+ *     muse-spark-1.3-contributor-free · nemotron-3.5-lightning-free ·
+ *     jev-1.13-free · step-5-preview-free · longcat-2.5-preview-free.
+ *
+ *  2. `opencode-zen` — Opencode Zen REST gateway (https://opencode.ai/zen/v1),
+ *     OpenAI-compatible, cùng key OPENCODE_ZEN_API_KEY. Qua gateway này
+ *     CHỈ dùng được model TRẢ PHÍ (free bị chặn — xem trên).
  *     ⚠️ AUTH: gateway xác thực key `oc_sk_…` qua header `x-api-key` —
  *     `Authorization: Bearer` bị gateway coi là credential upstream
  *     passthrough → 401 "Invalid credential" (thực đo 2026-10-09:
  *     Bearer 401 · x-api-key 200 · GET /models chấp nhận cả hai).
  *
- *  2. `zai` — z-ai-web-dev-sdk (gateway nội bộ sandbox Z.ai), model GLM-4.6.
+ *  3. `zai` — z-ai-web-dev-sdk (gateway nội bộ sandbox Z.ai), model GLM-4.6.
  *     CHỈ chạy bên trong sandbox (đọc config /etc/.z-ai-config). Dùng để
- *     phát triển/kiểm thử trong sandbox khi chưa có key Opencode Zen.
+ *     phát triển/kiểm thử trong sandbox khi chưa có key Opencode.
  *
- * `auto` (mặc định): có OPENCODE_ZEN_API_KEY → opencode-zen, ngược lại → zai.
- * Nhờ vậy cùng một codebase chạy ở cả 2 môi trường mà không cần sửa code.
+ * `auto` (mặc định): có key + có lệnh `opencode` → opencode-cli; có key
+ * không có lệnh → opencode-zen (lúc đó phải tự đặt model trả phí qua
+ * OPENCODE_ZEN_MODEL); không key → zai. Nhờ vậy cùng một codebase chạy ở
+ * cả sandbox lẫn máy local của trader mà không cần sửa code.
  *
  * Chi phí (costUsd) theo provider: GLM-4.6 = $0.6/MTok vào + $2.2/MTok ra;
- * model free-tier của Zen (đuôi `-free`) = $0. Có thể override bằng
+ * model Zen đuôi `-free` (qua CLI) = $0. Có thể override bằng
  * `LLM_PRICE_IN_MTOK` / `LLM_PRICE_OUT_MTOK`.
  */
 
-export type LlmProviderId = "zai" | "opencode-zen";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+
+export type LlmProviderId = "zai" | "opencode-zen" | "opencode-cli";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant";
@@ -46,37 +67,62 @@ const ZEN_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1";
 const ZEN_DEFAULT_MODEL = "space-bunny-free";
 const ZAI_MODEL_ID = "glm-4.6";
 
+/** Tìm lệnh `opencode` trong PATH — một lần khi nạp module (sync, không exec). */
+const OPENCODE_BIN: string | null = (() => {
+  const override = env("OPENCODE_CLI_BIN");
+  if (override) return override;
+  const names = ["opencode", "opencode.exe", "opencode.cmd", "opencode.bat"];
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    for (const name of names) {
+      try {
+        if (existsSync(join(dir, name))) return name;
+      } catch {
+        /* thư mục không đọc được — bỏ qua */
+      }
+    }
+  }
+  return null;
+})();
+
 function resolveProvider(): LlmProviderId {
   const wanted = env("LLM_PROVIDER").toLowerCase();
+  if (wanted === "opencode-cli" || wanted === "opencode") return "opencode-cli";
   if (wanted === "opencode-zen" || wanted === "zen") return "opencode-zen";
   if (wanted === "zai") return "zai";
-  // auto: ưu tiên Opencode Zen khi trader đã đặt key (chạy được cả ngoài sandbox)
-  return env("OPENCODE_ZEN_API_KEY") ? "opencode-zen" : "zai";
+  // auto: model free chỉ chạy "from within OpenCode" → ưu tiên CLI khi đủ cả 2 điều kiện
+  if (env("OPENCODE_ZEN_API_KEY") && OPENCODE_BIN) return "opencode-cli";
+  if (env("OPENCODE_ZEN_API_KEY")) return "opencode-zen";
+  return "zai";
 }
 
 export const LLM_PROVIDER_ID: LlmProviderId = resolveProvider();
 
 export const LLM_MODEL_ID: string =
-  LLM_PROVIDER_ID === "opencode-zen"
-    ? env("OPENCODE_ZEN_MODEL") || ZEN_DEFAULT_MODEL
-    : ZAI_MODEL_ID;
+  LLM_PROVIDER_ID === "zai"
+    ? ZAI_MODEL_ID
+    : env("OPENCODE_CLI_MODEL") || env("OPENCODE_ZEN_MODEL") || ZEN_DEFAULT_MODEL;
 
 /** Nhãn hiển thị trên UI (tooltip/chip). */
 export const LLM_MODEL_LABEL: string =
-  LLM_PROVIDER_ID === "opencode-zen"
-    ? `${LLM_MODEL_ID} · Opencode Zen${LLM_MODEL_ID.endsWith("-free") ? " (free)" : ""}`
-    : `${ZAI_MODEL_ID} · Z.ai sandbox`;
+  LLM_PROVIDER_ID === "opencode-cli"
+    ? `${LLM_MODEL_ID} · Opencode CLI${LLM_MODEL_ID.endsWith("-free") ? " (free)" : ""}`
+    : LLM_PROVIDER_ID === "opencode-zen"
+      ? `${LLM_MODEL_ID} · Opencode Zen${LLM_MODEL_ID.endsWith("-free") ? " (free)" : ""}`
+      : `${ZAI_MODEL_ID} · Z.ai sandbox`;
+
+const MODEL_IS_FREE = LLM_PROVIDER_ID !== "zai" && LLM_MODEL_ID.endsWith("-free");
 
 const PRICE_IN_MTOK =
   env("LLM_PRICE_IN_MTOK") !== ""
     ? Number(env("LLM_PRICE_IN_MTOK"))
-    : LLM_PROVIDER_ID === "opencode-zen" && LLM_MODEL_ID.endsWith("-free")
+    : MODEL_IS_FREE
       ? 0
       : 0.6;
 const PRICE_OUT_MTOK =
   env("LLM_PRICE_OUT_MTOK") !== ""
     ? Number(env("LLM_PRICE_OUT_MTOK"))
-    : LLM_PROVIDER_ID === "opencode-zen" && LLM_MODEL_ID.endsWith("-free")
+    : MODEL_IS_FREE
       ? 0
       : 2.2;
 
@@ -97,7 +143,7 @@ export function llmStatus(): {
     free: PRICE_IN_MTOK === 0 && PRICE_OUT_MTOK === 0,
     priceInMtOk: PRICE_IN_MTOK,
     priceOutMtOk: PRICE_OUT_MTOK,
-    runsOutsideSandbox: LLM_PROVIDER_ID === "opencode-zen",
+    runsOutsideSandbox: LLM_PROVIDER_ID !== "zai",
   };
 }
 
@@ -215,6 +261,171 @@ async function zenChatCompletions(
   }
 }
 
+/* ──────────────────────── Provider: Opencode CLI ──────────────────────── */
+
+/*
+ * Mỗi cuộc gọi = một tiến trình `opencode run` (non-interactive,
+ * --format json). Thực đo 2026-10-12 (sandbox): tổng ~8-11s/lệnh gọi
+ * (boot CLI ~4-8s + model space-bunny-free ~1-4s) — chu kỳ 23 agents có
+ * 6 LLM tuần tự → ~60s/chu kỳ, nằm an toàn trong maxDuration 300s.
+ * Tokens/chi phí đọc từ event step_finish của CLI (cost 0 với model free).
+ * Timeout mặc định 120s (đo thật: agent nặng nhất portfolio-strategist 27s,
+ * một lần nghẽn tạm đã vượt 60s) — override qua OPENCODE_CLI_TIMEOUT_MS.
+ */
+const CLI_TIMEOUT_MS =
+  Number(env("OPENCODE_CLI_TIMEOUT_MS")) > 0
+    ? Number(env("OPENCODE_CLI_TIMEOUT_MS"))
+    : 120_000;
+
+/** Linux cắt mỗi tham số argv tại ~128KB — chặn sớm với thông điệp rõ ràng. */
+const CLI_MAX_PROMPT_CHARS = 100_000;
+
+interface CliJsonEvent {
+  type?: string;
+  part?: {
+    type?: string;
+    text?: string;
+    tokens?: { input?: number; output?: number; reasoning?: number };
+  };
+  error?: unknown;
+}
+
+/** Đọc dòng JSONL của `opencode run --format json` → văn bản + tokens. */
+function parseCliEvents(stdout: string): {
+  raw: string;
+  tokensIn: number | null;
+  tokensOut: number | null;
+} {
+  let raw = "";
+  let tokensIn: number | null = null;
+  let tokensOut: number | null = null;
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    let ev: CliJsonEvent;
+    try {
+      ev = JSON.parse(trimmed) as CliJsonEvent;
+    } catch {
+      continue;
+    }
+    if (ev.type === "text" && typeof ev.part?.text === "string") {
+      raw += ev.part.text;
+    } else if (ev.type === "step_finish" && ev.part?.tokens) {
+      const t = ev.part.tokens;
+      tokensIn = t.input ?? tokensIn;
+      const out = (t.output ?? 0) + (t.reasoning ?? 0);
+      if (out > 0) tokensOut = out;
+    } else if (ev.type === "error") {
+      throw new Error(
+        `Opencode CLI trả lỗi: ${JSON.stringify(ev.error ?? ev.part).slice(0, 300)}`
+      );
+    }
+  }
+  return { raw, tokensIn, tokensOut };
+}
+
+function opencodeCliComplete(
+  messages: LlmMessage[]
+): Promise<{ raw: string; tokensIn: number | null; tokensOut: number | null }> {
+  const apiKey = env("OPENCODE_ZEN_API_KEY");
+  if (!apiKey) {
+    throw new Error(
+      "OPENCODE_ZEN_API_KEY chưa đặt — lấy key tại opencode.ai/zen (sign in → API key) rồi đặt vào .env để chạy model Opencode."
+    );
+  }
+  if (!OPENCODE_BIN) {
+    throw new Error(
+      "Không tìm thấy lệnh `opencode` trong PATH — cài đặt CLI: `bun add -g opencode-ai` (hoặc `npm i -g opencode-ai`) rồi khởi động lại app; ghi đè đường dẫn qua OPENCODE_CLI_BIN nếu cài chỗ khác."
+    );
+  }
+  const message = messages.map((m) => m.content).join("\n\n---\n\n");
+  if (message.length > CLI_MAX_PROMPT_CHARS) {
+    throw new Error(
+      `Prompt quá dài cho Opencode CLI (${message.length} ký tự > giới hạn ${CLI_MAX_PROMPT_CHARS}).`
+    );
+  }
+  const args = [
+    "run",
+    message,
+    "--model",
+    `opencode/${LLM_MODEL_ID}`,
+    "--format",
+    "json",
+    "--pure",
+    "--title",
+    "the-trader",
+  ];
+  // Reasoning effort cho model reasoning (vd space-bunny): mặc định CLI đã
+  // nhanh (~40 reasoning tokens); truyền --variant nếu trader muốn tinh chỉnh.
+  const variant = env("OPENCODE_CLI_VARIANT");
+  if (variant) args.push("--variant", variant);
+
+  return new Promise((resolve, reject) => {
+    // cwd = thư mục tạm: giữ CLI là "đường ống LLM thuần", không đọc repo
+    const child = spawn(OPENCODE_BIN, args, {
+      cwd: tmpdir(),
+      env: { ...process.env, OPENCODE_API_KEY: apiKey },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (
+      err: Error | null,
+      out?: { raw: string; tokensIn: number | null; tokensOut: number | null }
+    ) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(out!);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* tiến trình đã thoát */
+      }
+      finish(
+        new Error(
+          `Opencode CLI quá ${CLI_TIMEOUT_MS}ms không phản hồi — tăng OPENCODE_CLI_TIMEOUT_MS hoặc đổi model nhẹ hơn (OPENCODE_ZEN_MODEL).`
+        )
+      );
+    }, CLI_TIMEOUT_MS);
+    child.stdout?.on("data", (d: Buffer) => {
+      if (stdout.length < 20 * 1024 * 1024) stdout += d.toString("utf8");
+    });
+    child.stderr?.on("data", (d: Buffer) => {
+      if (stderr.length < 64 * 1024) stderr += d.toString("utf8");
+    });
+    child.on("error", (err: Error) =>
+      finish(
+        new Error(
+          `Không khởi động được Opencode CLI (${OPENCODE_BIN}): ${err.message}. Kiểm tra OPENCODE_CLI_BIN.`
+        )
+      )
+    );
+    child.on("close", (code: number | null) => {
+      if (code !== 0) {
+        finish(
+          new Error(
+            `Opencode CLI thoát với mã ${code ?? "?"}: ${((stderr || stdout).trim() || "không có log").slice(-400)}`
+          )
+        );
+        return;
+      }
+      try {
+        const parsed = parseCliEvents(stdout);
+        if (!parsed.raw) throw new Error("Phản hồi trống từ mô hình AI.");
+        finish(null, parsed);
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  });
+}
+
 /* ──────────────────────────── Provider: zai ──────────────────────────── */
 
 type ZaiInstance = Awaited<ReturnType<(typeof import("z-ai-web-dev-sdk"))["default"]["create"]>>;
@@ -259,9 +470,11 @@ async function zaiChatCompletions(
 
 async function complete(messages: LlmMessage[]): Promise<LlmCallResult> {
   const { raw, tokensIn, tokensOut } =
-    LLM_PROVIDER_ID === "opencode-zen"
-      ? await zenChatCompletions(messages)
-      : await zaiChatCompletions(messages);
+    LLM_PROVIDER_ID === "opencode-cli"
+      ? await opencodeCliComplete(messages)
+      : LLM_PROVIDER_ID === "opencode-zen"
+        ? await zenChatCompletions(messages)
+        : await zaiChatCompletions(messages);
   const promptText = messages.map((m) => m.content).join("\n");
   return {
     raw,

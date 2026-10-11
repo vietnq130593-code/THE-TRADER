@@ -199,7 +199,7 @@ export interface AgentsTotals {
 
 /** Provider LLM đang chạy — nguồn duy nhất cho chip/tooltip model trên UI. */
 export interface LlmInfo {
-  provider: "zai" | "opencode-zen";
+  provider: "zai" | "opencode-zen" | "opencode-cli";
   model: string;
   modelLabel: string;
   free: boolean;

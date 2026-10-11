@@ -2,7 +2,7 @@
 
 > **Dashboard multi-agent paper-trading cho VNDIRECT** — đội **23 agent AI chia 5 nhóm** (Nghiên cứu · Kiểm soát VETO · Điều hành · Nền tảng dữ liệu · Học máy) chạy **chu kỳ 6 đợt A→F** (Đợt D = **Bộ tổng hợp Bayes nhân quả** — log-odds 4 bậc trên dữ liệu thật, 0 LLM) phân tích realtime trên **dữ liệu giá EOD THẬT đa sàn** (phiên #38 — 90 instrument active HOSE/HNX/UPCOM + ETF/index, 215K bar 2013→nay qua dchart public API; quốc tế US/HK qua Yahoo Finance — chờ nguồn hồi 429), bảng giá group theo sàn, tin tức RSS thật, tín hiệu giao dịch + lệnh giấy, kèm audit trail đầy đủ. **Phòng Học máy chạy 3 thuật toán RL/DL THẬT** (phiên #35): MLP backprop+Adam · Q-learning tabular · Thompson sampling. **Cổng đồng thuận 80%** (6 cử tri — shadow-mode) + bảng điểm scorecard + ma trận độ phủ 15 ô (phiên #38).
 
-**Next.js 16** · **TypeScript** · **Prisma + Supabase Postgres** · **shadcn/ui** · **Space Bunny Free** (Opencode Zen, free-tier $0 — ⚠️ 2026-10-11 nhà cung cấp chặn ngoài IDE OpenCode, sandbox tạm dùng GLM-4.6) / fallback **GLM-4.6** (trong sandbox Z.ai) · **socket.io** · **giá EOD thật đa sàn** (dchart VNDIRECT — 215.327 bar 2013→nay · Yahoo Finance cho US/HK) · **7 workspace** (Tổng quan · Thị trường · Danh mục · Tín hiệu · Đội Agent · Tổng hợp · Cài đặt) · **Bộ tổng hợp Bayes nhân quả** (Đợt D của chu kỳ — `src/lib/quant` + `src/lib/bayes`: OLS · Holt · lexicon NLP tiếng Việt · regime, 0 LLM) · **học máy RL/DL thật** (`src/lib/ml`: MLP dự báo 5 phiên · Q-learning 48 trạng thái · Thompson sampling Beta-Bernoulli — thuần TypeScript, 0 deps mới) · **K2 chế độ chạy liên tục** (#86 — toggle "Liên tục" Header {60·120·240·480}ph, AppSetting `k-run` thắng env) · **K1 cơ chế thử nghiệm tiền ảo** (#87 — tài khoản `SANDBOX-K1` riêng: nhập vốn ảo trong Cài đặt → agents tự giao dịch mọi tín hiệu qua cổng đồng thuận → đường cong equity theo ngày = "quá trình học"; P&L thực thi trộn posterior Beta bandit "thắng thật/thua thật" — xem `docs/AUTONOMY_BLUEPRINT.md` §5)
+**Next.js 16** · **TypeScript** · **Prisma + Supabase Postgres** · **shadcn/ui** · **Space Bunny Free** qua **Opencode CLI** (free $0 — #92: model free bị chặn qua REST API, chạy được qua CLI với key `oc_sk_`, không cần OAuth) / fallback **GLM-4.6** (trong sandbox Z.ai) · **socket.io** · **giá EOD thật đa sàn** (dchart VNDIRECT — 215.327 bar 2013→nay · Yahoo Finance cho US/HK) · **7 workspace** (Tổng quan · Thị trường · Danh mục · Tín hiệu · Đội Agent · Tổng hợp · Cài đặt) · **Bộ tổng hợp Bayes nhân quả** (Đợt D của chu kỳ — `src/lib/quant` + `src/lib/bayes`: OLS · Holt · lexicon NLP tiếng Việt · regime, 0 LLM) · **học máy RL/DL thật** (`src/lib/ml`: MLP dự báo 5 phiên · Q-learning 48 trạng thái · Thompson sampling Beta-Bernoulli — thuần TypeScript, 0 deps mới) · **K2 chế độ chạy liên tục** (#86 — toggle "Liên tục" Header {60·120·240·480}ph, AppSetting `k-run` thắng env) · **K1 cơ chế thử nghiệm tiền ảo** (#87 — tài khoản `SANDBOX-K1` riêng: nhập vốn ảo trong Cài đặt → agents tự giao dịch mọi tín hiệu qua cổng đồng thuận → đường cong equity theo ngày = "quá trình học"; P&L thực thi trộn posterior Beta bandit "thắng thật/thua thật" — xem `docs/AUTONOMY_BLUEPRINT.md` §5)
 
 > **Miễn trừ trách nhiệm:** đây là dự án minh họa (demo). **Lịch sử giá EOD 2013→nay là dữ liệu THẬT** từ VNDIRECT dchart (đã adjust — 215.327 bar đa sàn: HOSE/HNX/UPCOM · ETF · index VN, 90 instrument active); giá intraday trong phiên vẫn **mô phỏng** quanh mức tham chiếu thật (random-walk + mean-reversion, gắn nhãn `simulated`; INDEX/quốc tế neo EOD thật) — trừ khi bật chế độ `realtime-vndirect` qua module Cài đặt (phiên #34, cần máy chủ có egress tới VNDIRECT): khi đó tick trong phiên lấy giá cuối thật finfo, lỗi mạng thì tự fallback quanh ref EOD thật + gắn nhãn `fallback`; dòng khối ngoại mô phỏng deterministic (khai báo rõ); EOD quốc tế US/HK chờ Yahoo Finance hồi phục rate-limit (job 06:15 ICT tự đổ); dữ liệu cơ bản finfo pending-egress; toàn bộ lệnh là **paper trading** — lệnh giấy nội bộ, không gửi ra môi giới; tin tức RSS là dữ liệu thật nhưng chỉ làm ngữ cảnh phân tích. Dự án **không** dùng để giao dịch tiền thật.
 
@@ -51,7 +51,7 @@ flowchart TB
 
     subgraph App["Next.js — cổng 3000"]
         API["Route Handlers /api/*\nquotes · news · flows · tick · eod-sync\nagents/run (chu kỳ 23 agents — 6 đợt A→F)\nassessment · settings · ml/status · ml/train\nsignals · portfolio · system/status…"]
-        LLM["src/lib/llm.ts — provider abstraction:\nSpace Bunny Free — Opencode Zen (free-tier $0,\ncó key, chạy được ngoài sandbox, reasoning_effort low)\nhoặc z-ai-web-dev-sdk GLM-4.6 (sandbox) —\n6 agent LLM · 17 agent deterministic (0 LLM)"]
+        LLM["src/lib/llm.ts — provider abstraction (#92):\nOpencode CLI space-bunny-free (free $0,\ncó key oc_sk_ + lệnh opencode trong PATH)\n· Zen REST (model trả phí) · z-ai GLM-4.6 (sandbox) —\n6 agent LLM · 17 agent deterministic (0 LLM)"]
         BAYES["src/lib/bayes + src/lib/quant —\nBộ tổng hợp Bayes (Đợt D của chu kỳ):\nlog-odds 4 bậc nhân quả · 0 LLM"]
         ML["src/lib/ml — Phòng Học máy thật (phiên #35):\nMLP backprop+Adam · Q-learning tabular\n· Thompson sampling Beta-Bernoulli\n(thuần TypeScript — 0 deps mới)"]
     end
@@ -142,19 +142,22 @@ Mini-service lắng nghe **cổng 3003** và gọi thẳng app Next.js (server-t
 
 ### Chạy trên máy local (ngoài sandbox Z.ai)
 
-Sandbox dùng GLM-4.6 qua `z-ai-web-dev-sdk` (gateway nội bộ, không có ở ngoài). Trên máy local, đặt **API key Opencode Zen** để toàn đội 23 agent (6 agent gọi LLM) chạy model **`space-bunny-free`** (free-tier, zero-retention):
+Từ phiên #92, **model FREE của Opencode Zen chỉ chạy được qua Opencode CLI** (nhà cung cấp chặn mọi client REST ngoài với lỗi 403 *"free tier can only be used from within OpenCode"*). Tích hợp `opencode-cli` đã nằm sẵn trong codebase (`src/lib/llm.ts`) — **code push lên GitHub rồi tải về chạy local thì tích hợp vẫn nguyên vẹn**. Trên máy local cần 2 điều kiện:
 
-1. Lấy key: mở **https://opencode.ai/zen** → đăng nhập → copy **API key** (mục Developers/API keys).
-2. Đặt vào `.env`:
+1. Lấy key: mở **https://opencode.ai/zen** → đăng nhập → copy **API key** (dạng `oc_sk_…`) — **không cần đăng nhập OAuth** gì thêm (thực đo #92).
+2. Cài Opencode CLI + đặt key vào `.env`:
 
    ```bash
-   LLM_PROVIDER=auto                      # có key → tự dùng Opencode Zen
-   OPENCODE_ZEN_API_KEY=<api-key-cua-ban> # dạng oc_sk_… — đã cấu hình sẵn trong .env của repo này
+   bun add -g opencode-ai        # hoặc: npm install -g opencode-ai
+   # kiểm tra:  opencode --version
    ```
 
-   > Repo này đã có sẵn key (dạng `oc_sk_…`) trong `.env` local — không commit key thật lên git; nếu clone về máy khác thì tự điền key của bạn vào placeholder.
+   ```bash
+   LLM_PROVIDER=auto                      # có key + có lệnh opencode → tự dùng opencode-cli
+   OPENCODE_ZEN_API_KEY=<api-key-cua-ban> # dạng oc_sk_… — KHÔNG commit key thật lên git
+   ```
 
-3. `bun run dev` — mọi cuộc gọi LLM (chu kỳ đầy đủ, chạy riêng, chat 1-1) tự chuyển qua `https://opencode.ai/zen/v1/chat/completions` với model `space-bunny-free`; chi phí phát sinh **$0** (model free-tier). Model họ space-bunny là model reasoning — `src/lib/llm.ts` mặc định gửi `reasoning_effort: low` (đo thực tế ~3.7s/call thay vì ~19s, nhanh ~5×; tùy chỉnh qua `OPENCODE_ZEN_REASONING_EFFORT`). Model đang chạy hiển thị ngay trên UI (workspace Đội Agent + tooltip chip AI ở footer). KHÔNG cần cài Opencode CLI — app gọi thẳng gateway bằng REST OpenAI-compatible.
+3. `bun run dev` — mọi cuộc gọi LLM (chu kỳ đầy đủ, chạy riêng, chat 1-1) đi qua `opencode run --format json` với model `space-bunny-free`; chi phí phát sinh **$0** (model free). Đổi sang 1 trong 9 model free khác qua `OPENCODE_ZEN_MODEL` (ling-3.1-flash-free · mimo-v2.6-flash-free · nemotron-3.5-lightning-free · jev-1.13-free · step-5-preview-free · longcat-2.5-preview-free · muse-spark-1.2/1.3-contributor-free) — cùng một key, đều $0. Model đang chạy hiển thị ngay trên UI (Cài đặt → "Mô hình AI & đội agent" + workspace Đội Agent). Không muốn cài CLI → đặt `OPENCODE_ZEN_MODEL` thành model **trả phí** (điện toán qua REST vẫn hoạt động).
 
 ---
 
@@ -179,8 +182,8 @@ Sandbox dùng GLM-4.6 qua `z-ai-web-dev-sdk` (gateway nội bộ, không có ở
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `DATABASE_URL` | `postgresql://postgres.<ref>:<pwd>@aws-0-<region>.pooler.supabase.com:5432/postgres?schema=trader` | Kho dữ liệu chính — Supabase Postgres qua Prisma (bền vững qua reset sandbox) |
-| `LLM_PROVIDER` | `auto` | Provider LLM cho 6 agent chạy LLM trong chu kỳ (`src/lib/llm.ts`): `auto` = có `OPENCODE_ZEN_API_KEY` → Opencode Zen, ngược lại → z-ai GLM-4.6 (sandbox). **⚠️ 2026-10-11: Opencode Zen chặn free-tier ngoài IDE OpenCode (403) → sandbox hiện đặt `zai` (GLM-4.6)** — máy local đổi lại `auto` khi nhà cung cấp chấp nhận key của bạn |
-| `OPENCODE_ZEN_API_KEY` | — | API key từ **opencode.ai/zen** (sign in → copy, dạng `oc_sk_…`). Đặt biến này là toàn đội 23 agent chuyển sang `space-bunny-free` (free-tier, zero-retention) — **chạy được trên máy local ngoài sandbox** |
+| `LLM_PROVIDER` | `auto` | Provider LLM cho 6 agent chạy LLM trong chu kỳ (`src/lib/llm.ts`): `auto` = có key + có lệnh `opencode` → **opencode-cli** (model free $0 — con đường duy nhất từ #92); có key không có lệnh → opencode-zen REST (chỉ model trả phí); ngược lại → z-ai GLM-4.6 (sandbox). Chọn tường minh: `opencode-cli` \| `opencode-zen` \| `zai` |
+| `OPENCODE_ZEN_API_KEY` | — | API key từ **opencode.ai/zen** (sign in → copy, dạng `oc_sk_…`) — dùng cho cả provider `opencode-cli` (model free, app tự map sang `OPENCODE_API_KEY` cho tiến trình CLI) lẫn `opencode-zen` REST (model trả phí). **Chạy được trên máy local ngoài sandbox** |
 | `OPENCODE_ZEN_BASE_URL` | `https://opencode.ai/zen/v1` | Gateway OpenAI-compatible của Opencode Zen |
 | `OPENCODE_ZEN_MODEL` | `space-bunny-free` | Model id (cùng bảng model của opencode.ai/zen/docs) |
 | `OPENCODE_ZEN_REASONING_EFFORT` | `low` | `low` \| `medium` \| `high` \| `none` — reasoning effort cho model họ space-bunny (model reasoning): `low` ≈ ~40 reasoning tokens ≈ 3.7s/call; không set mặc định gửi `low` cho space-bunny, `none` = không gửi (~19s/call) |
