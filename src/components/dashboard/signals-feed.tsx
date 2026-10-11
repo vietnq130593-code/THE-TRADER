@@ -6,6 +6,7 @@ import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
   ArrowRight,
+  FlaskConical,
   Loader2,
   Minus,
   Radar,
@@ -145,6 +146,16 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
                       <span className="tabular-nums text-xs text-muted-foreground">
                         {s.score.toFixed(0)}/100
                       </span>
+                      {s.sandboxExecuted && (
+                        <Badge
+                          variant="outline"
+                          className="gap-1 border-primary/40 text-[10px] text-primary"
+                          title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1)"
+                        >
+                          <FlaskConical className="size-3" aria-hidden="true" />
+                          Thực thi
+                        </Badge>
+                      )}
                       {s.actedAt && (
                         <Badge variant="secondary" className="ml-auto text-[10px]">
                           Đã chuyển lệnh
@@ -190,6 +201,19 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
                     {s.actedAt && (
                       <Badge variant="secondary" className="ml-auto text-[10px]">
                         Đã chuyển lệnh
+                      </Badge>
+                    )}
+                    {s.sandboxExecuted && (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "gap-1 border-primary/40 text-[10px] text-primary",
+                          !s.actedAt && "ml-auto"
+                        )}
+                        title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1) — xem lệnh ở Danh mục → Thử nghiệm"
+                      >
+                        <FlaskConical className="size-3" aria-hidden="true" />
+                        Đã thực thi · thử nghiệm
                       </Badge>
                     )}
                   </div>

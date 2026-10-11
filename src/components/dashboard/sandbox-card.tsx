@@ -3,7 +3,17 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FlaskConical, Loader2, Pause, Play, Plus, RotateCcw, Wallet } from "lucide-react";
+import {
+  ArrowRight,
+  FlaskConical,
+  Loader2,
+  Pause,
+  Play,
+  Plus,
+  Radar,
+  RotateCcw,
+  Wallet,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPostJson } from "@/lib/api";
+import { useUiStore } from "@/lib/store";
 import { changeColor, formatDateTime, formatPct, formatSigned, formatVnd } from "@/lib/format";
 import type { KSandboxState } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -121,6 +132,8 @@ function Tile({
 
 export function SandboxCard() {
   const queryClient = useQueryClient();
+  const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
+  const setPortfolioWorld = useUiStore((s) => s.setPortfolioWorld);
   const [activateRaw, setActivateRaw] = React.useState("");
   const [topupRaw, setTopupRaw] = React.useState("");
   const [resetArmed, setResetArmed] = React.useState(false);
@@ -150,8 +163,9 @@ export function SandboxCard() {
         setTopupRaw("");
         toast.success(`Đã nạp thêm ${formatVnd(vars.amount ?? 0)} tiền ảo`);
       } else if (vars.action === "reset") {
-        toast.success("Đã đặt lại tài khoản thử nghiệm", {
-          description: "Xoá toàn bộ lệnh/vị thế/đường cong — tổng kết đã ghi vào audit.",
+        toast.success("Đã đặt lại về 0 — thử nghiệm mới hoàn toàn", {
+          description:
+            "Toàn bộ lệnh · vị thế · đường cong đã xoá sạch. Nhập số vốn mới ngay bên dưới để bắt đầu vòng thử nghiệm kế tiếp.",
         });
       } else if (vars.action === "pause") {
         toast.success("Đã tạm dừng tự động thực thi", {
@@ -239,7 +253,8 @@ export function SandboxCard() {
           /* ── Chưa kích hoạt: nhập tiền + nút Kích hoạt (§8-Q8 tự nhập) ── */
           <div className="flex flex-col gap-3 sm:max-w-md">
             <p className="text-sm text-muted-foreground">
-              Nhập số tiền ảo cấp cho agents (tối thiểu {formatVnd(MIN_ACTIVATE)}, bội số{" "}
+              <span className="font-medium text-foreground">Bạn quyết định số vốn</span> — nhập
+              số tiền ảo cấp cho agents (tối thiểu {formatVnd(MIN_ACTIVATE)}, bội số{" "}
               {formatVnd(STEP)}):
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -273,14 +288,15 @@ export function SandboxCard() {
             {activateRaw && !activateValid && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 {activateAmount < MIN_ACTIVATE
-                  ? `Tối thiểu ${formatVnd(MIN_ACTIVATE)} ₫.`
-                  : `Phải là bội số của ${formatVnd(STEP)} ₫.`}
+                  ? `Tối thiểu ${formatVnd(MIN_ACTIVATE)}.`
+                  : `Phải là bội số của ${formatVnd(STEP)}.`}
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              Gợi ý: {formatVnd(100_000_000)} ₫. Mỗi lệnh auto ~{data?.sizePct ?? 5}% NAV, tối đa{" "}
+              Gợi ý: {formatVnd(100_000_000)}. Mỗi lệnh auto ~{data?.sizePct ?? 5}% NAV, tối đa{" "}
               {data?.maxBudgetPctPerCycle ?? 10}% NAV mỗi chu kỳ. Kết toán equity 16:30 ICT hằng
-              ngày.
+              ngày. Đặt lại bất cứ lúc nào ở dưới — vòng thử nghiệm mới bắt đầu từ 0 sạch sẽ
+              với số vốn bạn chọn.
             </p>
           </div>
         ) : (
@@ -307,7 +323,11 @@ export function SandboxCard() {
                     </span>
                   </span>
                 }
-                hint={`Vốn ban đầu ${formatVnd(data?.initialAmount ?? 0)}`}
+                hint={
+                  (data?.topupTotal ?? 0) > 0
+                    ? `Vốn ${formatVnd(data?.initialAmount ?? 0)} + nạp ${formatVnd(data?.topupTotal ?? 0)} (đã trừ nạp)`
+                    : `Vốn ban đầu ${formatVnd(data?.initialAmount ?? 0)}`
+                }
               />
               <Tile
                 label="LN chưa thực hiện"
@@ -407,8 +427,13 @@ export function SandboxCard() {
                   onClick={armReset}
                   aria-label={
                     resetArmed
-                      ? "Xác nhận xoá toàn bộ lệnh, vị thế và đường cong tài khoản thử nghiệm"
-                      : "Đặt lại tài khoản thử nghiệm"
+                      ? "Xác nhận đặt lại về 0: xoá toàn bộ lệnh, vị thế, giao dịch và đường cong tài khoản thử nghiệm"
+                      : "Đặt lại tài khoản thử nghiệm về 0"
+                  }
+                  title={
+                    resetArmed
+                      ? undefined
+                      : "Về 0 từ đầu: xoá toàn bộ lệnh · vị thế · giao dịch · đường cong, tiền về 0 — sau đó bạn tự nhập số vốn mới"
                   }
                 >
                   {mutation.isPending && mutation.variables?.action === "reset" ? (
@@ -416,7 +441,7 @@ export function SandboxCard() {
                   ) : (
                     <RotateCcw className="size-4" aria-hidden="true" />
                   )}
-                  {resetArmed ? "Bấm lần nữa để xoá" : "Đặt lại"}
+                  {resetArmed ? "Bấm lần nữa để xoá" : "Đặt lại về 0"}
                 </Button>
               </div>
             </div>
@@ -426,10 +451,59 @@ export function SandboxCard() {
                 cũ vẫn giữ và vẫn kết toán equity hằng ngày.
               </p>
             )}
+
+            {/* #88 — điều hướng chéo: tiền ở đây, lệnh/giao dịch ở Danh mục,
+                quyết định (tín hiệu) ở tab Tín hiệu — trader hỏi "thể hiện ở
+                module nào, tab nào" → nút nhảy thẳng thay vì chỉ lời khuyên. */}
+            <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                Thông tin đầy đủ của thử nghiệm nằm ở 3 nơi:
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-9 gap-1.5 text-xs"
+                  onClick={() => {
+                    setPortfolioWorld("sandbox");
+                    setActiveWorkspace("portfolio");
+                  }}
+                >
+                  <FlaskConical className="size-3.5" aria-hidden="true" />
+                  Lệnh &amp; giao dịch
+                  <ArrowRight className="size-3" aria-hidden="true" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-9 gap-1.5 text-xs"
+                  onClick={() => setActiveWorkspace("signals")}
+                >
+                  <Radar className="size-3.5" aria-hidden="true" />
+                  Quyết định (tín hiệu)
+                  <ArrowRight className="size-3" aria-hidden="true" />
+                </Button>
+              </div>
+            </div>
+            <ul className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 shrink-0 font-semibold text-foreground">Tiền:</span>
+                Cài đặt (ở đây) — số dư, P&amp;L, đường cong equity, nạp/tạm dừng/đặt lại.
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 shrink-0 font-semibold text-foreground">Lượt giao dịch:</span>
+                Danh mục → Thử nghiệm → tab Lệnh / Giao dịch (vị thế cũng ở đó).
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="mt-0.5 shrink-0 font-semibold text-foreground">Quyết định:</span>
+                Tín hiệu — tín hiệu được agents tự thực thi có badge “Đã thực thi · thử nghiệm”.
+              </li>
+            </ul>
             <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
               <Wallet className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
               Khoản tiền ảo chỉ dùng nội bộ — không chạm tài khoản giấy VNDIRECT của bạn. Kết thúc
-              thử nghiệm: bấm Đặt lại (tổng kết lãi/lỗ được lưu vào audit trước khi xoá).
+              thử nghiệm: bấm Đặt lại (tổng kết lãi/lỗ được lưu vào audit trước khi xoá) rồi nhập
+              số vốn mới nếu muốn chạy vòng khác.
             </p>
           </>
         )}

@@ -57,7 +57,11 @@ export function PortfolioSection() {
   // cơ chế thử nghiệm đang bật (query k-sandbox đã có ở Settings/Header —
   // dùng chung cache key nên không thêm tải). Query key gắn accountType →
   // mọi world tự invalidate theo prefix ["portfolio"] như cũ.
-  const [accountType, setAccountType] = React.useState<"paper" | "sandbox">("paper");
+  // #88 — đưa state lên store (portfolioWorld) để nút trong khối Settings
+  // "Cơ chế thử nghiệm" nhảy thẳng tới đây ở đúng thế giới Thử nghiệm.
+  const accountType = useUiStore((s) => s.portfolioWorld);
+  const setAccountType = useUiStore((s) => s.setPortfolioWorld);
+  const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
   const { data: kSandbox } = useQuery({
     queryKey: ["k-sandbox"],
     queryFn: () => apiGet<KSandboxState>("/api/k/sandbox"),
@@ -151,6 +155,15 @@ export function PortfolioSection() {
             : isSandbox
               ? "Tài khoản thử nghiệm (K1)"
               : "Tài khoản VNDIRECT"}
+          {isSandbox && (
+            <button
+              type="button"
+              onClick={() => setActiveWorkspace("settings")}
+              className="ml-2 inline-flex min-h-6 items-center gap-1 rounded text-xs font-medium text-primary underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              quản lý vốn &amp; đặt lại: Cài đặt → Cơ chế thử nghiệm
+            </button>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">

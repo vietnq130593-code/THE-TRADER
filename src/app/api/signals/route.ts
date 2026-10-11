@@ -24,9 +24,25 @@ export async function GET() {
       },
     });
 
+    // K1 #88 — cờ "agents đã tự thực thi trong tài khoản thử nghiệm": Order
+    // của thế giới sandbox (accountType "sandbox") neo signalId. Truy vết
+    // NGUỒN SỰ THẬT là Order sống (reset xoá sạch → badge biến theo) chứ
+    // không phải audit marker một-đời (marker cũ vòng trước reset không lọt).
+    const ids = signals.map((s) => s.id);
+    const executedRows = ids.length
+      ? await db.order.findMany({
+          where: { signalId: { in: ids }, brokerAccount: { accountType: "sandbox" } },
+          select: { signalId: true },
+        })
+      : [];
+    const executedSet = new Set(executedRows.map((o) => o.signalId));
+
     return NextResponse.json(
       toPlain({
-        signals: signals.map(mapSignalRow),
+        signals: signals.map((s) => ({
+          ...mapSignalRow(s),
+          sandboxExecuted: executedSet.has(s.id),
+        })),
       })
     );
   } catch (err) {

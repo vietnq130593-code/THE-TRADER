@@ -427,9 +427,11 @@ export interface KSandboxState {
   } | null;
   pnlSinceActivation: number | null;
   pnlPctSinceActivation: number | null;
+  /** #88 — tổng tiền nạp thêm từ lúc kích hoạt (VND) — P&L đã trừ phần này. */
+  topupTotal: number;
   /** Số phiên đã chạy = số dòng CashSnapshot k1-daily. */
   sessionsRun: number;
-  /** Số tín hiệu đã auto-convert sang lệnh sandbox (audit marker). */
+  /** #88 — số lệnh tự động ĐANG SỐNG (reset xoá sạch → về 0 đúng nghĩa). */
   autoOrderCount: number;
   lastSettleAt: string | null;
   /** Chuỗi equity cũ → mới (tối đa 30 điểm) — đồ thị mini. */
@@ -466,6 +468,10 @@ export interface SignalRow {
   status: string;
   rejectedAt: string | null;
   rejectNote: string | null;
+  /** #88 (K1): true khi tín hiệu này đã được agents auto-thực thi trong tài
+   *  khoản thử nghiệm (Order sandbox neo signalId) — badge "Đã thực thi" ở
+   *  feed. Optional: các nguồn mapSignalRow cũ không trả field này. */
+  sandboxExecuted?: boolean;
 }
 
 export interface RiskAlertRow {

@@ -1,8 +1,8 @@
 # AUTONOMY BLUEPRINT — 4 KẾ HOẠCH K1–K4: TIỀN ẢO THỬ NGHIỆM · CHẾ ĐỘ CHẠY LIÊN TỤC · NHIỆM VỤ ĐỊNH KỲ · BAN ĐIỀU HÀNH GIAO VIỆC
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/AUTONOMY_BLUEPRINT.md` · **Version:** 1.2 · **Created:** 2026-10-11 (phiên #85) · **Updated:** 2026-10-11 (phiên #87 — **K1 TRIỂN KHAI XONG** theo hiệu lệnh trader đổi ưu tiên K1 trước: "Sau đó tiến hành triển khai K1" + quyết định **GIỮ nút 'Chạy agent'** kèm giải thích vai trò — xem §4.4a)
-> **Status:** **K2 ✅ xong #86 · K1 ✅ xong #87 — K3 là bậc kế tiếp** · K3/K4 xếp hàng theo thứ tự đã duyệt §3
+> **Document:** `docs/AUTONOMY_BLUEPRINT.md` · **Version:** 1.3 · **Created:** 2026-10-11 (phiên #85) · **Updated:** 2026-10-11 (phiên #88 — **bản đồ hiển thị K1 + 3 sửa số học "về 0 từ đầu"** theo 2 yêu cầu trader: reset-toàn-bộ/vốn-tự-quyết-định + "thông tin ở module/tab nào" — xem §5.6a/§5.6b)
+> **Status:** **K2 ✅ xong #86 · K1 ✅ xong #87 (+ củng cố #88) — K3 là bậc kế tiếp** · K3/K4 xếp hàng theo thứ tự đã duyệt §3
 > **Nguồn gốc:** trader tiết lộ 4 kế hoạch tương lai tại §8 [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) v1.1 (phiên #79) kèm ghi chú kiến trúc; hiệu lệnh soạn blueprint này: *"Trước hết viết Blueprint triển khai K1-K4 cho tôi"* (phiên #85).
 > **Cross-refs:** [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) (§8 — 5/5 DUYỆT nền tảng) · [ML_LEARNING_BLUEPRINT.md](./ML_LEARNING_BLUEPRINT.md) (cổng L1–L5 — K1 cấp dữ liệu cho L5/GRU) · [EXECUTION_OPS_BLUEPRINT.md](./EXECUTION_OPS_BLUEPRINT.md) (TWAP E-P1-2 · ExecutionPlan · committed view) · [PHASE3_BLUEPRINT.md](./PHASE3_BLUEPRINT.md) (§4.5/§4.9 — chu kỳ KHÔNG tự tạo lệnh) · [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) · [DB_SCHEMA.md](./DB_SCHEMA.md) · [Fixbug.md](../Fixbug.md)
 
@@ -240,6 +240,32 @@ mỗi tick 60s:
 - **Portfolio workspace — bộ lọc tài khoản**: dropdown "Tài khoản: Giấy (paper) / Thử nghiệm (sandbox)" → `portfolio` route nhận query `accountType` (mặc định paper — hành vi cũ bảo toàn); tab Danh mục hiển thị đúng vị thế sandbox do agents tự giữ.
 - Header/Overview: không đổi (giữ tập trung — K1 chỉ sống ở Settings + Danh mục).
 
+#### 5.6a Bản đồ hiển thị K1 — "thông tin nằm ở module nào, tab nào" (phiên #88)
+
+> Trader hỏi: *"thông tin sử dụng số tiền này, các lượt giao dịch, quyết định được thể hiện ở
+> module nào, tab nào… hay chỉ hiển thị ngắn gọn trong tab Cài đặt?"* — câu trả lời được
+> khắc cứng vào UI (khối "3 nơi" trong Settings) thay vì chỉ lời giải thích:
+
+| Thông tin | Nơi hiển thị | Chi tiết |
+|---|---|---|
+| **Tiền** (số dư, equity, P&L, đường cong, nạp/tạm dừng/đặt lại) | **Cài đặt → Cơ chế thử nghiệm** | 6 ô số liệu + đồ thị equity mini + vòng đời tiền (Nạp thêm/Tạm dừng/Đặt lại về 0) |
+| **Lượt giao dịch** (lệnh, khớp lệnh, vị thế) | **Danh mục → Thử nghiệm** | Bộ lọc Giấy/Thử nghiệm → 3 tab con Vị thế / Lệnh / Giao dịch |
+| **Quyết định** (tín hiệu agents) | **Tín hiệu** | Feed tín hiệu — tín hiệu được agents tự thực thi có badge **"Đã thực thi · thử nghiệm"** (`sandboxExecuted`) |
+
+- **Điều hướng chéo #88**: Settings có 2 nút nhảy thẳng ("Lệnh & giao dịch" → Danh mục ở sẵn thế giới Thử nghiệm qua store `portfolioWorld`; "Quyết định (tín hiệu)" → workspace Tín hiệu); ngược lại Danh mục (đang xem Thử nghiệm) có link "quản lý vốn & đặt lại: Cài đặt → Cơ chế thử nghiệm".
+
+#### 5.6b Ba sửa số học "về 0 từ đầu" (phiên #88 — trader: "phải có khả năng setup tất cả về 0 lại từ đầu")
+
+1. **`autoOrderCount` đếm Order SỐNG** (`db.order.count` theo tài khoản sandbox) — trước đây đếm audit marker `K1_SANDBOX_AUTO_ORDER` mọi thời đại → sau Đặt lại vẫn hiển thị số lệnh vòng cũ (đo thật: hiển thị 1 khi 0 lệnh).
+2. **`lastSettleAt` scoped `createdAt ≥ activatedAt`** — mốc settle của vòng hiện tại; marker settle vòng trước reset không lọt vào.
+3. **P&L trừ tiền nạp**: `pnlSinceActivation = equity − (initialAmount + topupTotal)` — nạp thêm là TIỀN VÀO không phải lãi (trước đây equity 105tr − vốn 100tr = +5tr "lãi" giả từ chính khoản nạp test; `topupTotal` = tổng `K1_SANDBOX_TOPUP` từ activatedAt, expose ra state cho UI hint "Vốn X + nạp Y").
+
+> Ngữ nghĩa reset giữ nguyên thiết kế §5.2 đã duyệt: xoá sạch Order/Trade/Position/CashSnapshot +
+> cash về 0 + `enabled:false`; **AuditLog K1_\* giữ vĩnh viễn** (truy vết — tổng kết vòng cũ được
+> lưu TRƯỚC khi xoá) và **posterior BanditArm KHÔNG hoàn tác** (thắng/thua thật đã trộn vào vòng
+> học theo Q2 — kinh nghiệm là của agents, tiền mới về 0 chứ trí nhớ không). Muốn xoá cả vòng học
+> thì dùng nút Bandit riêng trong Cài đặt ML.
+
 ### 5.7 Nghiệm thu K1
 
 1. Kích hoạt 100.000.000 ₫ → sandbox account xuất hiện đúng `accountType` + cash + AuditLog; **portfolio paper KHÔNG đổi một đồng** (số dư/equity/vị thế so ảnh chụp trước — bằng chứng tách bạch P0).
@@ -417,6 +443,7 @@ Kill-switch nhiệm vụ: `failStreak ≥ 5` → route tự `paused = true` + Ri
 
 | Version | Ngày | Thay đổi |
 |---|---|---|
+| 1.3 | 2026-10-11 (phiên #88) | **#88 — 2 yêu cầu trader**: (1) *"setup tất cả về 0 lại từ đầu + tôi quyết định số tiền"* → xác nhận cơ chế sẵn có (Đặt lại 2 bước xoá sạch + kích hoạt vốn tuỳ ý ≥10tr bội 100k) + **3 sửa số học** §5.6b (autoOrderCount đếm Order sống · lastSettleAt scoped activatedAt · P&L trừ topupTotal — cả 3 lỗi đo thật trên dữ liệu sống) + copy UI "Đặt lại về 0"/"Bạn quyết định số vốn" rõ nghĩa; (2) *"thông tin ở module/tab nào?"* → §5.6a bản đồ hiển thị 3 nơi + điều hướng chéo 2 chiều (nút Settings→Danh mục/Thử nghiệm qua store portfolioWorld, link Danh mục→Cài đặt) + badge **"Đã thực thi · thử nghiệm"** trên tín hiệu (`sandboxExecuted` từ Order sandbox neo signalId — nguồn sự thật là lệnh sống nên reset xoá badge theo). E2E: API (reset→50tr→nạp 2tr P&L vẫn 0→reset→kích hoạt) + browser desktop/mobile 390px + mock-render badge (route browser-only) + 0 console error. Bàn giao: sandbox BẬT 120tr (vốn do UI nhập trong nghiệm thu — trader đổi bất cứ lúc nào). |
 | 1.2 | 2026-10-11 (phiên #87) | **K1 TRIỂN KHAI XONG** theo hiệu lệnh trader đổi ưu tiên (K1 triển khai ngay sau câu hỏi nút "Chạy agent" — không đợi thứ tự §3 cũ): §4.4a mới ghi quyết định **GIỮ nút "Chạy agent"** (4 vai trò: chạy-ngay không đợi nhịp · nguồn duy nhất khi K2 tắt · kích hoạt vòng học K1 tức thì · kiểm chứng sau thay đổi); §3/§0 cập nhật trạng thái K1 ✅ #87; nghiệm thu §5.7 đạt 28/28 phép hermetic (`scripts/k1-verify.ts` — gồm fix F-871-02 marker idempotent kênh-2 reward + F-871-03 hermetic BanditArm restore); chu kỳ thật qua route 23/23 COMPLETED với hook auto-convert chạy đúng (audit `AGENT_RUN_COMPLETED.k1Sandbox`). Lộ trình còn: K3 → K4. |
 | 1.1 | 2026-10-11 (phiên #86) | Trader trả lời §8 **8/8 DUYỆT**: Q2 **CÓ TRỘN** → §5.5 thiết kế lại hoàn toàn (2 kênh reward cộng dồn cùng posterior Beta — kênh thực thi nhị phân hoá realisedPnl ròng, quy agent tạo tín hiệu, idempotent AuditLog, calibration tách kênh dự đoán, job 16:30 gộp 4 việc); Q7 chốt thứ tự K2→K1→K3→K4 — triển khai Bậc 1 (K2) ngay phiên #86; §4.2 tinh chỉnh API (GET riêng `/api/k/run`, bỏ `cycle-now` thừa — nút "Chạy agent" sẵn là 1 nguồn); §4.3 bổ sung cơ chế nhường quyền env→AppSetting qua flag + race-window ≤60s được cooldown route chặn. |
 | 1.0 | 2026-10-11 (phiên #85) | Soạn bản đầu — hoá 4 kế hoạch tương lai trader mô tả tại §8 ML_OPS_BLUEPRINT v1.1 thành lộ trình 4 bậc K2→K1→K3→K4 (đề xuất, §8-Q7): K1 tài khoản sandbox 0-migrate (BrokerAccount.accountType String) + faucet + auto-convert một-nguồn + settle-equity 16:30 + vòng học ranh giới rõ; K2 k-run AppSetting + due-check engine + toggle Header; K3 AgentTask schedule (grammar parseHhMm/parseWeekly tái dùng) + AgentRun.taskId + kill-switch failStreak; K4 Chủ tịch xuất JSON giao việc + validate fail-soft + 2 cấp đồ thị nhiệm vụ. Kèm hiện trạng nền đo trực tiếp §0.5 (7 file query brokerAccount cần quarantine) · 8 câu hỏi mở §8 chờ trader duyệt. |

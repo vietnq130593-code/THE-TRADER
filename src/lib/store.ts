@@ -41,6 +41,13 @@ interface UiState {
   portfolioTab: string;
   setPortfolioTab: (tab: string) => void;
 
+  /** Phiên #88 (K1) — thế giới tài khoản đang xem trong Danh mục:
+   *  "paper" (tài khoản Giữ của trader) | "sandbox" (tài khoản Thử nghiệm
+   *  K1 — agents tự giao dịch). Đưa vào store để nút trong khối Settings
+   *  "Cơ chế thử nghiệm" nhảy thẳng sang Danh mục → Thử nghiệm. */
+  portfolioWorld: "paper" | "sandbox";
+  setPortfolioWorld: (world: "paper" | "sandbox") => void;
+
   /** Quotes table mode: watchlist-only vs full VN30 board. */
   watchlistOnly: boolean;
   setWatchlistOnly: (value: boolean) => void;
@@ -79,6 +86,9 @@ export const useUiStore = create<UiState>()((set) => ({
 
   portfolioTab: "positions",
   setPortfolioTab: (tab) => set({ portfolioTab: tab }),
+
+  portfolioWorld: "paper",
+  setPortfolioWorld: (world) => set({ portfolioWorld: world }),
 
   watchlistOnly: false,
   setWatchlistOnly: (value) => set({ watchlistOnly: value }),

@@ -23,6 +23,16 @@ export const dynamic = "force-dynamic";
  *      CashSnapshot (đồ thị equity mini) + đếm lệnh auto + mốc settle gần nhất.
  *      Sandbox chưa kích hoạt → mọi trường rỗng trung thực (enabled:false).
  *
+ *      Phiên #88 — 3 sửa số học "về 0 từ đầu" (trader: "phải có khả năng setup
+ *      tất cả về 0 lại từ đầu"):
+ *        - autoOrderCount đếm Order SỐNG của tài khoản (reset xoá sạch → 0
+ *          đúng nghĩa; trước đây đếm audit marker mọi thời đại → hụt reset).
+ *        - lastSettleAt scoped createdAt ≥ activatedAt (mốc settle của VÒNG
+ *          hiện tại — marker vòng cũ không lọt vào).
+ *        - pnlSinceActivation = equity − (initialAmount + topupTotal) — nạp
+ *          thêm là TIỀN VÀO chứ không phải lãi (topupTotal tổng K1_SANDBOX_TOPUP
+ *          từ activatedAt).
+ *
  * POST body {action, amount?}:
  *   - "activate" {amount ≥ 10tr, bội 100k} → tạo/tái bật + K1_SANDBOX_FUNDED
  *   - "topup"   {amount ≥ 1tr}             → + K1_SANDBOX_TOPUP
@@ -51,6 +61,8 @@ async function buildState() {
   let autoOrderCount = 0;
   let lastSettleAt: string | null = null;
   let snapshots: { cash: number; equity: number; createdAt: string }[] = [];
+  /** #88 — tổng tiền NẠP THÊM từ lúc kích hoạt (P&L phải trừ phần này). */
+  let topupTotal = 0;
 
   if (account) {
     const eq = await computeSandboxEquity(account.id);
@@ -68,9 +80,33 @@ async function buildState() {
       realisedPnlTotal: Number(closedAgg?._sum.realizedPnl ?? 0),
       openCount: eq?.openCount ?? 0,
     };
-    if (s.initialAmount > 0) {
-      pnlSinceActivation = accountView.equity - s.initialAmount;
-      pnlPctSinceActivation = (pnlSinceActivation / s.initialAmount) * 100;
+    // #88 — mốc bắt đầu VÒNG HIỆN TẠI: mọi phép đếm tổng hợp scoped từ đây
+    // (audit marker của vòng trước reset không lọt vào số liệu mới).
+    const since = s.activatedAt ? new Date(s.activatedAt) : null;
+    // Tổng nạp thêm vòng hiện tại: K1_SANDBOX_TOPUP {amount} từ activatedAt.
+    const topupAudits = await db.auditLog
+      .findMany({
+        where: {
+          action: "K1_SANDBOX_TOPUP",
+          entity: "BrokerAccount",
+          entityId: account.id,
+          ...(since ? { createdAt: { gte: since } } : {}),
+        },
+        select: { after: true },
+      })
+      .catch(() => [] as { after: string | null }[]);
+    for (const a of topupAudits) {
+      try {
+        topupTotal += Number((JSON.parse(a.after ?? "{}") as { amount?: unknown }).amount) || 0;
+      } catch {
+        // malformed audit — bỏ qua (fail-soft)
+      }
+    }
+    // #88 — P&L đúng số học: nạp thêm là tiền VÀO, không phải lãi.
+    const netInvested = s.initialAmount + topupTotal;
+    if (netInvested > 0) {
+      pnlSinceActivation = accountView.equity - netInvested;
+      pnlPctSinceActivation = (pnlSinceActivation / netInvested) * 100;
     }
     // Chuỗi equity (30 điểm gần nhất — đồ thị mini §5.6) + số phiên đã chạy.
     const snaps = await db.cashSnapshot.findMany({
@@ -89,11 +125,15 @@ async function buildState() {
         createdAt: x.createdAt.toISOString(),
       }))
       .reverse(); // cũ → mới cho đường cong
-    autoOrderCount = await db.auditLog.count({
-      where: { action: "K1_SANDBOX_AUTO_ORDER", entity: "Signal" },
-    });
+    // #88 — đếm Order SỐNG (mọi lệnh sandbox đều do agents tự tạo; reset xoá
+    // sạch → đếm về 0 đúng nghĩa "về 0 từ đầu"; trước đây đếm audit marker
+    // K1_SANDBOX_AUTO_ORDER mọi thời đại → sau reset vẫn hiển thị số cũ).
+    autoOrderCount = await db.order.count({ where: { brokerAccountId: account.id } });
     const lastSettle = await db.auditLog.findFirst({
-      where: { action: "K1_SANDBOX_SETTLED" },
+      where: {
+        action: "K1_SANDBOX_SETTLED",
+        ...(since ? { createdAt: { gte: since } } : {}),
+      },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     });
@@ -112,6 +152,8 @@ async function buildState() {
     account: accountView,
     pnlSinceActivation,
     pnlPctSinceActivation,
+    /** #88 — tổng tiền nạp thêm từ lúc kích hoạt (VND). */
+    topupTotal,
     sessionsRun,
     autoOrderCount,
     lastSettleAt,
