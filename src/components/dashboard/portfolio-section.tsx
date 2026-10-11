@@ -45,6 +45,24 @@ import { cn } from "@/lib/utils";
 interface OrdersResponse {
   orders: OrderRow[];
   trades: TradeRow[];
+  /** #96 — bối cảnh phiên (server tính): hint "lệnh đang chờ gì". */
+  session?: OrdersSessionContext;
+}
+
+/** #96 — /api/orders kèm bối cảnh phiên giao dịch để giải thích lệnh chờ. */
+interface OrdersSessionContext {
+  /** MARKET_STRICT_SESSION=true → matching nghỉ ngoài phiên. */
+  strictSession: boolean;
+  /** Đang trong phiên liên tục HOSE? */
+  inSession: boolean;
+  /** Phase hiện tại (pre-open/morning/lunch/afternoon/atc/closed). */
+  phase?: string;
+  /** Nhãn tiếng Việt của phase — vd "Ngoài phiên". */
+  phaseLabel?: string;
+  /** ISO của thời điểm mở phiên kế. */
+  nextOpenAt?: string;
+  /** Nhãn hiển thị — vd "Thứ Hai 12/10 · 09:15 ICT". */
+  nextOpenLabel?: string;
 }
 
 const ORDER_STATUS: Record<string, { label: string; className: string }> = {
@@ -415,7 +433,7 @@ export function PortfolioSection() {
                   </TableHeader>
                   <TableBody>
                     {ordersQuery.data.orders.map((o) => (
-                      <OrderRowView key={o.id} order={o} />
+                      <OrderRowView key={o.id} order={o} session={ordersQuery.data.session} />
                     ))}
                   </TableBody>
                 </Table>
@@ -473,9 +491,23 @@ export function PortfolioSection() {
                 </Table>
               </div>
             ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Chưa có giao dịch khớp nào.
-              </p>
+              <div className="py-6 text-center">
+                <p className="text-sm text-muted-foreground">Chưa có giao dịch khớp nào.</p>
+                {/* #96 — ngoài phiên + strictSession → nói rõ vì sao chưa có gì khớp */}
+                {(() => {
+                  const sess = ordersQuery.data?.session;
+                  if (!sess || sess.inSession || !sess.strictSession) return null;
+                  return (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Ngoài phiên giao dịch — lệnh đang chờ sẽ được xét khớp khi mở phiên{" "}
+                      <span className="font-medium text-amber-600 dark:text-amber-400">
+                        {sess.nextOpenLabel ?? "kế tiếp"}
+                      </span>
+                      .
+                    </p>
+                  );
+                })()}
+              </div>
             )}
           </TabsContent>
         </Tabs>
@@ -587,7 +619,7 @@ function parsePlanNote(note: string | null): {
   }
 }
 
-function OrderRowView({ order }: { order: OrderRow }) {
+function OrderRowView({ order, session }: { order: OrderRow; session?: OrdersSessionContext }) {
   const status = ORDER_STATUS[order.status] ?? {
     label: order.status,
     className: "border-border bg-muted text-muted-foreground",
@@ -596,6 +628,22 @@ function OrderRowView({ order }: { order: OrderRow }) {
 
   // F-206 (audit): hủy lệnh đang chờ khớp (phần chưa khớp) — POST /api/orders/[id]/cancel
   const cancelable = order.status === "PENDING" || order.status === "PARTIALLY_FILLED";
+
+  // #96 — hint "lệnh đang chờ gì": giải thích TẠI SAO lệnh chưa khớp để trader
+  // không tưởng hệ thống đứng yên (trường hợp thực: cuối tuần MARKET_STRICT_SESSION
+  // → matching nghỉ, lệnh chờ mở phiên Thứ Hai). Trong phiên → nói điều kiện giá.
+  const waitingHint = (() => {
+    if (!cancelable || !session) return null;
+    if (session.inSession) {
+      return order.side === "BUY"
+        ? `Đang chờ giá ≤ ${formatPrice(order.price)} trong phiên`
+        : `Đang chờ giá ≥ ${formatPrice(order.price)} trong phiên`;
+    }
+    if (session.strictSession) {
+      return `Ngoài phiên giao dịch — sẽ được xét khớp khi mở phiên ${session.nextOpenLabel ?? "kế tiếp"}`;
+    }
+    return "Ngoài phiên — simulator khớp lệnh 24/7 theo tick giá mô phỏng";
+  })();
   const cancelMutation = useMutation({
     mutationFn: () =>
       apiPost<{ order: { id: string; status: string } }>(
@@ -688,6 +736,12 @@ function OrderRowView({ order }: { order: OrderRow }) {
             </Button>
           ) : null}
         </div>
+        {/* #96 — dòng giải thích "đang chờ gì" dưới badge trạng thái */}
+        {waitingHint ? (
+          <p className="mt-1 max-w-[260px] text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+            {waitingHint}
+          </p>
+        ) : null}
       </TableCell>
     </TableRow>
   );

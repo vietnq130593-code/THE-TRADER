@@ -141,3 +141,87 @@ export function shouldGenerateTicks(): boolean {
   }
   return true;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// #96 — hint "lệnh đang chờ gì": phiên giao dịch KẾ TIẾP sẽ mở lúc nào.
+// Nhu cầu gốc: trader thấy lệnh "Chờ khớp" đứng yên cả cuối tuần mà không
+// biết hệ thống đang chờ mở phiên (matching engine chỉ chạy trong tick, tick
+// chỉ chạy trong phiên khi MARKET_STRICT_SESSION=true) → tưởng đứt. Helper
+// client-safe thuần — server dùng cho /api/orders, client hiển thị hint.
+// ─────────────────────────────────────────────────────────────────
+
+/** Nhãn thứ tiếng Việt (index = getUTCDay() của vnShift: 0 = CN). */
+const DOW_VN = [
+  "Chủ nhật",
+  "Thứ Hai",
+  "Thứ Ba",
+  "Thứ Tư",
+  "Thứ Năm",
+  "Thứ Sáu",
+  "Thứ Bảy",
+];
+
+export interface NextSessionOpen {
+  /** Epoch UTC THẬT của thời điểm mở phiên (formatDateTime hiển thị đúng ICT). */
+  at: Date;
+  /** Nhãn hiển thị — vd "Thứ Hai 12/10 · 09:15 ICT". */
+  whenLabel: string;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** Dựng {at, whenLabel} cho một giờ mở (giây kể từ 00:00 ICT) của ngày ICT cho trước. */
+function sessionOpenAt(vIct: Date, seconds: number): NextSessionOpen {
+  const hh = Math.floor(seconds / 3_600);
+  const mm = Math.round((seconds % 3_600) / 60);
+  // Date.UTC theo trường ICT → epoch "như-UTC" — trừ 7h ra epoch UTC thật
+  // (giữ invariant: formatDateTime(at) tại Asia/Ho_Chi_Minh hiển thị đúng giờ).
+  const at = new Date(
+    Date.UTC(
+      vIct.getUTCFullYear(),
+      vIct.getUTCMonth(),
+      vIct.getUTCDate(),
+      hh,
+      mm,
+      0
+    ) - 7 * 3_600_000
+  );
+  return {
+    at,
+    whenLabel: `${DOW_VN[vIct.getUTCDay()]} ${pad2(vIct.getUTCDate())}/${pad2(
+      vIct.getUTCMonth() + 1
+    )} · ${pad2(hh)}:${pad2(mm)} ICT`,
+  };
+}
+
+/**
+ * Phiên giao dịch kế tiếp sẽ MỞ lúc nào?
+ * - Đang trong phiên liên tục → trả chính thời điểm vào (whenLabel "đang trong phiên").
+ * - Ngày giao dịch hôm nay chưa mở sáng → 09:15 hôm nay.
+ * - Đang nghỉ trưa (11:30–13:00, vẫn ngày giao dịch) → 13:00 hôm nay.
+ * - Sau ATC / cuối tuần / lễ → 09:15 NGÀY GIAO DỊCH KẾ (quét tối đa 16 ngày
+ *   chống Tết nghỉ 5–9 phiên liền).
+ */
+export function nextTradingSessionOpen(date: Date = new Date()): NextSessionOpen {
+  const phase = sessionPhase(date);
+  if (phase === "morning" || phase === "afternoon") {
+    return { at: date, whenLabel: "đang trong phiên" };
+  }
+  for (let i = 0; i < 16; i++) {
+    const day = new Date(date.getTime() + i * 86_400_000);
+    if (!isTradingDay(day)) continue;
+    const v = vnShift(day);
+    if (i === 0) {
+      const t = vnSeconds(day);
+      if (t < SEC_MORNING_OPEN) return sessionOpenAt(v, SEC_MORNING_OPEN);
+      if (t >= SEC_MORNING_CLOSE && t < SEC_PM_OPEN) return sessionOpenAt(v, SEC_PM_OPEN);
+      // t ≥ 14:45 (atc/closed) → đã qua mọi cửa mở hôm nay → quét ngày kế
+      continue;
+    }
+    return sessionOpenAt(v, SEC_MORNING_OPEN);
+  }
+  // Lịch lễ dài bất thường — trung thực trả về thời điểm vào thay vì bịa.
+  return { at: date, whenLabel: "—" };
+}

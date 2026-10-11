@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
+// #96 — hint "lệnh đang chờ gì": matching engine chỉ chạy trong tick, tick
+// chỉ chạy trong phiên khi MARKET_STRICT_SESSION=true → lệnh PENDING cuối
+// tuần "đứng yên" là ĐÚNG — nhưng trader cần BIẾT nó đang chờ mở phiên nào.
+import {
+  isTradingSession,
+  sessionPhase,
+  SESSION_PHASE_LABEL,
+  nextTradingSessionOpen,
+} from "@/lib/market-session";
 
 export const dynamic = "force-dynamic";
 
@@ -43,8 +52,23 @@ export async function GET(req: Request) {
       }),
     ]);
 
+    // #96 — bối cảnh phiên cho hint lệnh chờ (server tính một nguồn, client hiển thị):
+    // strictSession=true → matching nghỉ ngoài phiên (hint "xét khớp khi mở phiên …");
+    // simulator 24/7 → hint nói đúng "khớp theo tick mô phỏng".
+    const now = new Date();
+    const nextOpen = nextTradingSessionOpen(now);
+    const session = {
+      strictSession: process.env.MARKET_STRICT_SESSION === "true",
+      inSession: isTradingSession(now),
+      phase: sessionPhase(now),
+      phaseLabel: SESSION_PHASE_LABEL[sessionPhase(now)],
+      nextOpenAt: nextOpen.at.toISOString(),
+      nextOpenLabel: nextOpen.whenLabel,
+    };
+
     return NextResponse.json(
       toPlain({
+        session,
         orders: orders.map((o) => ({
           id: o.id,
           symbol: o.instrument.symbol,
