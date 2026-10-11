@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
 import { ROLE_LABELS, GROUP_LABELS, type AgentGroup } from "@/lib/agent-roster";
 import { mapSignalRow } from "@/lib/signal-execution";
-import { LLM_MODEL_ID } from "@/lib/llm";
+import { currentModelId } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -134,7 +134,7 @@ export async function GET(
           group: agent.group,
           groupLabel: GROUP_LABELS[agent.group as AgentGroup] ?? agent.group,
           description: agent.description,
-          model: LLM_MODEL_ID, // model runtime (provider đang chạy) — DB chỉ lưu mặc định
+          model: await currentModelId(), // model runtime động (#93 — chọn từ UI Đội Agent)
           status: agent.status,
           healthScore: agent.healthScore,
           lastRunAt: agent.lastRunAt,

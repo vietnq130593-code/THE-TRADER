@@ -1208,7 +1208,7 @@ async function runRlTrainer(): Promise<ServiceRunResult> {
 
 /** A19 Model Registry — sổ đăng ký ĐỘNG (đúng version/status/trainedAt thật). */
 async function runModelRegistry(): Promise<ServiceRunResult> {
-  const llm = llmStatus();
+  const llm = await llmStatus();
   const serving = await db.mlModel.findMany({
     where: { status: "serving" },
     orderBy: { kind: "asc" },

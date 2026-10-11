@@ -53,6 +53,8 @@ import {
 import { apiGet } from "@/lib/api";
 import { formatVolume } from "@/lib/format";
 import { useSingleAgentRun, RateLimitError } from "@/hooks/use-agent-actions";
+// #93 — nút "Model AI": chọn model cho toàn đội agent + kiểm tra sức khoẻ.
+import { LlmModelPicker } from "@/components/dashboard/llm-model-picker";
 import { AgentRosterCard } from "@/components/dashboard/agent-roster-card";
 import { AgentDetailPanel } from "@/components/dashboard/agent-detail-panel";
 import { CoverageMatrix } from "@/components/dashboard/coverage-matrix";
@@ -261,6 +263,11 @@ export function AgentsWorkspace() {
                 ? ` · $${totals.totalCostUsd.toFixed(2)} chi phí AI lũy kế · ${formatVolume(totalTokens ?? 0)} tokens`
                 : ""}
             </p>
+
+            {/* Phiên #93 — nút "Model AI": bấm mở danh sách model, chọn
+                model nào thì TOÀN ĐỘI agent dùng model đó từ lượt gọi tiếp
+                theo; kèm kiểm tra sức khoẻ model (đo thật). */}
+            <LlmModelPicker />
 
             {/* Phiên #47 — MỘT nút mở dropdown tick đa chọn nhóm hiển thị,
                 thay hàng pill 6 nút bày sẵn của phiên #45 (user: kém thẩm mỹ). */}

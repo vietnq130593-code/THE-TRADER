@@ -157,7 +157,7 @@ Từ phiên #92, **model FREE của Opencode Zen chỉ chạy được qua Openc
    OPENCODE_ZEN_API_KEY=<api-key-cua-ban> # dạng oc_sk_… — KHÔNG commit key thật lên git
    ```
 
-3. `bun run dev` — mọi cuộc gọi LLM (chu kỳ đầy đủ, chạy riêng, chat 1-1) đi qua `opencode run --format json` với model `space-bunny-free`; chi phí phát sinh **$0** (model free). Đổi sang 1 trong 9 model free khác qua `OPENCODE_ZEN_MODEL` (ling-3.1-flash-free · mimo-v2.6-flash-free · nemotron-3.5-lightning-free · jev-1.13-free · step-5-preview-free · longcat-2.5-preview-free · muse-spark-1.2/1.3-contributor-free) — cùng một key, đều $0. Model đang chạy hiển thị ngay trên UI (Cài đặt → "Mô hình AI & đội agent" + workspace Đội Agent). Không muốn cài CLI → đặt `OPENCODE_ZEN_MODEL` thành model **trả phí** (điện toán qua REST vẫn hoạt động).
+3. `bun run dev` — mọi cuộc gọi LLM (chu kỳ đầy đủ, chạy riêng, chat 1-1) đi qua `opencode run --format json` với model `space-bunny-free`; chi phí phát sinh **$0** (model free). Đổi model ngay trên UI: workspace **Đội Agent → nút "Model AI"** — danh sách live từ Opencode Zen (87 model, 12 model free đều $0), bấm chọn model nào thì toàn 23 agent chuyển từ lượt gọi tiếp theo (lưu DB, không cần restart); kèm nút **"Kiểm tra model"** gọi thử thật để biết model còn sống hay quá tải (đo độ trễ + tokens + chi phí). `OPENCODE_ZEN_MODEL` trong .env chỉ còn là mặc định khởi tạo. Không muốn cài CLI → chọn model **trả phí** trên cùng nút (điện toán qua REST vẫn hoạt động).
 
 ---
 
@@ -185,7 +185,7 @@ Từ phiên #92, **model FREE của Opencode Zen chỉ chạy được qua Openc
 | `LLM_PROVIDER` | `auto` | Provider LLM cho 6 agent chạy LLM trong chu kỳ (`src/lib/llm.ts`): `auto` = có key + có lệnh `opencode` → **opencode-cli** (model free $0 — con đường duy nhất từ #92); có key không có lệnh → opencode-zen REST (chỉ model trả phí); ngược lại → z-ai GLM-4.6 (sandbox). Chọn tường minh: `opencode-cli` \| `opencode-zen` \| `zai` |
 | `OPENCODE_ZEN_API_KEY` | — | API key từ **opencode.ai/zen** (sign in → copy, dạng `oc_sk_…`) — dùng cho cả provider `opencode-cli` (model free, app tự map sang `OPENCODE_API_KEY` cho tiến trình CLI) lẫn `opencode-zen` REST (model trả phí). **Chạy được trên máy local ngoài sandbox** |
 | `OPENCODE_ZEN_BASE_URL` | `https://opencode.ai/zen/v1` | Gateway OpenAI-compatible của Opencode Zen |
-| `OPENCODE_ZEN_MODEL` | `space-bunny-free` | Model id (cùng bảng model của opencode.ai/zen/docs) |
+| `OPENCODE_ZEN_MODEL` | `space-bunny-free` | Mặc định khởi tạo — sau đó đổi model qua nút **"Model AI"** trong workspace Đội Agent (#93: AppSetting `llm-model`, 87 model live/12 free, kèm kiểm tra sức khoẻ) |
 | `OPENCODE_ZEN_REASONING_EFFORT` | `low` | `low` \| `medium` \| `high` \| `none` — reasoning effort cho model họ space-bunny (model reasoning): `low` ≈ ~40 reasoning tokens ≈ 3.7s/call; không set mặc định gửi `low` cho space-bunny, `none` = không gửi (~19s/call) |
 | `LLM_PRICE_IN_MTOK` / `LLM_PRICE_OUT_MTOK` | theo model | Ghi đè bảng giá USD/1M token khi đổi model trả phí (model `-free` mặc định $0) |
 | `ZEN_TIMEOUT_MS` | `45000` | Timeout mỗi cuộc gọi Opencode Zen (ms) — đủ cho `reasoning_effort: low` (~4s/call), chống treo chu kỳ (`POST /api/agents/run` đặt `maxDuration` 300s) |

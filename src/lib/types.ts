@@ -217,6 +217,53 @@ export interface AgentsResponse {
   llm: LlmInfo;
 }
 
+/* ── Phiên #93 — chọn model cho toàn đội agent (nút "Model AI" trong Đội Agent) ── */
+
+/** Một lựa chọn model trong danh sách GET /api/llm/models. */
+export interface LlmModelOption {
+  id: string;
+  /** true = đuôi -free, chạy $0 qua Opencode CLI. */
+  free: boolean;
+}
+
+/** GET /api/llm/models — danh sách model + trạng thái hiện tại + guard 429. */
+export interface LlmModelsResponse {
+  provider: LlmInfo["provider"];
+  /** Model toàn đội đang dùng (AppSetting "llm-model" → env → mặc định). */
+  current: string;
+  /** Model mặc định theo env (không tính AppSetting). */
+  defaultModel: string;
+  /** false khi provider zai (GLM-4.6 cố định — không đổi được). */
+  canChoose: boolean;
+  /** Có chạy được "Kiểm tra" (gọi thử model) không. */
+  canTest: boolean;
+  models: LlmModelOption[];
+  /** live = từ GET /zen/v1/models; fallback = danh sách 12 model free đo #93. */
+  source: "live" | "fallback";
+  /** Cấu hình chống 429 đang hiệu lực (throttle + backoff). */
+  guard: {
+    minSpacingMs: number;
+    maxConcurrent: number;
+    retryBackoffMs: number[];
+  };
+}
+
+/** POST /api/llm/models { model } — kết quả chuyển model. */
+export interface LlmModelSetResponse {
+  ok: boolean;
+  llm: LlmInfo;
+}
+
+/** POST /api/llm/models { action: "test", model? } — kết quả kiểm tra sức khoẻ. */
+export interface LlmModelTestResponse {
+  ok: true;
+  model: string;
+  latencyMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
 export interface AgentMessageRow {
   id: string;
   fromAgent: { code: string; name: string; role: string } | null;

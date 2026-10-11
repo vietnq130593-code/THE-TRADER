@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
-import { LLM_MODEL_ID, llmStatus } from "@/lib/llm";
+import { currentModelId, llmStatus } from "@/lib/llm";
 import { ROLE_LABELS, GROUP_LABELS, type AgentGroup } from "@/lib/agent-roster";
 
 export const dynamic = "force-dynamic";
@@ -112,6 +112,8 @@ export async function GET() {
       if (!lastErrorByAgent.has(r.agentId) && r.error) lastErrorByAgent.set(r.agentId, r.error);
     }
 
+    // #93 — model động (chọn từ UI Đội Agent): đọc 1 lần trước map
+    const runtimeModel = await currentModelId();
     const agentsPayload = agents.map((a) => {
       let config: Record<string, unknown> | null = null;
       try {
@@ -130,7 +132,7 @@ export async function GET() {
         group: a.group,
         groupLabel: groupLabelOf(a.group),
         description: a.description,
-        model: LLM_MODEL_ID, // model runtime (provider đang chạy) — DB chỉ lưu mặc định
+        model: runtimeModel, // model runtime (provider đang chạy) — DB chỉ lưu mặc định
         status: a.status,
         healthScore: a.healthScore,
         lastRunAt: a.lastRunAt,
@@ -186,7 +188,7 @@ export async function GET() {
         totals,
         // Provider LLM đang chạy (auto: Opencode Zen space-bunny-free khi có key,
         // GLM-4.6 trong sandbox) — UI chip/tooltip dùng nguồn duy nhất này
-        llm: llmStatus(),
+        llm: await llmStatus(),
       })
     );
   } catch (err) {

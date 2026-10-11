@@ -99,7 +99,7 @@ async function buildSettingsResponse(): Promise<SettingsResponse> {
       remove: vnOverlay.remove,
       upcoming: vnUpcoming,
     },
-    llm: llmStatus(),
+    llm: await llmStatus(),
     risk: {
       maxSectorWeightPct: num(
         riskManager.maxSectorWeightPct ?? exposure.maxSectorWeightPct,
