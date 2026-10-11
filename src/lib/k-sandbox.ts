@@ -350,6 +350,100 @@ export async function topupSandbox(
   }
 }
 
+/**
+ * PHIÊN #90 — ĐẶT TIỀN MẶT TRỰC TIẾP (hiệu lệnh trader: "Tiền mặt với Tổng
+ * tài sản không có chỗ nào để chỉnh sửa, bấm đặt lại về 0 nó cũng chẳng về 0
+ * để còn chỉnh lại").
+ *
+ * setSandboxCash(amount): ghi đè số dư tiền ảo của vòng hiện tại KHÔNG cần
+ * đặt lại toàn bộ (reset xoá sạch lệnh/giao dịch/đường cong — ceremony nặng).
+ * Ngữ nghĩa "tái cơ sở vòng":
+ *   - cashBalance := amount · equity := amount · marginUsed := 0
+ *   - initialAmount := amount · activatedAt := now → P&L "từ lúc kích hoạt"
+ *     tính lại từ đúng số mới (nạp cũ không lọt vào scope — cùng phép #88).
+ *   - Giữ nguyên: lệnh · giao dịch đã khớp · đường cong CashSnapshot (đường
+ *     cong nhảy bước tại điểm đặt lại — trung thực lịch sử) · paused.
+ *
+ * Điều kiện (bảo toàn số học):
+ *   - sandbox đang bật + tài khoản sống;
+ *   - KHÔNG có vị thế OPEN (nếu không equity jump sai sự thật — yêu cầu đóng
+ *     vị thế hoặc Đặt lại về 0 trước);
+ *   - amount ≥ SANDBOX_MIN_ACTIVATE và bội SANDBOX_STEP (trader tự quyết vốn).
+ *
+ * Audit K1_SANDBOX_CASH_SET {before, after} — truy vết đủ vòng đời tiền.
+ */
+export async function setSandboxCash(
+  amount: number
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const s = await getKSandbox();
+  if (!s.enabled) {
+    return { ok: false, status: 409, error: "Tài khoản thử nghiệm chưa được kích hoạt." };
+  }
+  if (!Number.isFinite(amount) || amount < SANDBOX_MIN_ACTIVATE) {
+    return {
+      ok: false,
+      status: 422,
+      error: `Tiền mặt tối thiểu ${SANDBOX_MIN_ACTIVATE.toLocaleString("vi-VN")} ₫.`,
+    };
+  }
+  if (amount % SANDBOX_STEP !== 0) {
+    return {
+      ok: false,
+      status: 422,
+      error: `Số tiền phải là bội số của ${SANDBOX_STEP.toLocaleString("vi-VN")} ₫.`,
+    };
+  }
+  const userId = await getActiveUserId();
+  const account = await getSandboxAccount();
+  if (!account || !userId) {
+    return { ok: false, status: 409, error: "Tài khoản thử nghiệm không tồn tại." };
+  }
+  try {
+    const openCount = await db.position.count({
+      where: { brokerAccountId: account.id, status: "OPEN" },
+    });
+    if (openCount > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Đang có ${openCount} vị thế mở — hãy đóng vị thế hoặc "Đặt lại về 0" trước khi đặt tiền mặt mới (equity phải tự tính từ vị thế thật).`,
+      };
+    }
+    const before = Number(account.cashBalance);
+    await db.brokerAccount.update({
+      where: { id: account.id },
+      data: {
+        cashBalance: BigInt(Math.round(amount)),
+        equity: BigInt(Math.round(amount)),
+        marginUsed: BigInt(0),
+      },
+    });
+    await writeKSandbox({
+      ...s,
+      initialAmount: amount,
+      activatedAt: new Date().toISOString(),
+    });
+    await db.auditLog.create({
+      data: {
+        userId,
+        action: "K1_SANDBOX_CASH_SET",
+        entity: "BrokerAccount",
+        entityId: account.id,
+        after: JSON.stringify({
+          before,
+          after: amount,
+          initialAmount: amount,
+          note: "đặt tiền mặt trực tiếp — tái cơ sở vòng P&L (lệnh/giao dịch/đường cong giữ nguyên)",
+        }),
+      },
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error("[lib/k-sandbox] setSandboxCash thất bại:", err);
+    return { ok: false, status: 500, error: "Đặt tiền mặt thất bại." };
+  }
+}
+
 /** Tạm dừng / tiếp tục auto-convert (giữ vị thế — §5.2 pause/resume). */
 export async function setSandboxPaused(
   paused: boolean

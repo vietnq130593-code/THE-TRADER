@@ -56,34 +56,13 @@ export function AgentsPanel() {
     queryFn: () => apiGet<AgentsResponse>("/api/agents"),
     staleTime: 30_000,
   });
-  const messagesQuery = useQuery({
-    queryKey: ["agent-messages"],
-    queryFn: () =>
-      apiGet<{ messages: AgentMessageRow[] }>("/api/agents/messages"),
-    staleTime: 30_000,
-  });
-  // PHASE3 B2: signals ACTIVE để gắn nút Phê duyệt / Từ chối vào tin strategist.
-  const signalsQuery = useQuery({
-    queryKey: ["signals"],
-    queryFn: () => apiGet<{ signals: SignalRow[] }>("/api/signals"),
-    staleTime: 30_000,
-  });
 
-  // Phiên #47 — nút "Chạy chu kỳ phân tích" đã XOÁ (nút "Chạy agent" trên
-  // thanh bar trên cùng là duy nhất). isRunning giờ đếm mutation đang chạy
-  // TOÀN APP qua useIsMutating + mutationKey chia sẻ — nên hàng pulse
-  // "Chu kỳ đa tác tử đang chạy" vẫn hiện đúng kể cả khi chu kỳ được kích
-  // hoạt từ nút Header (trước đây state per-instance không thấy nhau).
-  const isRunning = useIsMutating({ mutationKey: RUN_AGENTS_MUTATION_KEY }) > 0;
+  // PHIÊN #47 — nút "Chạy chu kỳ phân tích" đã XOÁ (nút "Chạy agent" trên
+  // thanh bar trên cùng là duy nhất).
 
   const agents = agentsQuery.data?.agents ?? [];
   const tasks = agentsQuery.data?.tasks ?? [];
   const totals = agentsQuery.data?.totals;
-  // Feed chỉ hiển thị tin của agent (bỏ tin USER chat 1-1 — §4.1 direction).
-  const messages = (messagesQuery.data?.messages ?? []).filter(
-    (m) => m.direction !== "USER"
-  );
-  const signals = signalsQuery.data?.signals ?? [];
 
   return (
     <section aria-label="Hệ thống đa tác tử" className="flex flex-col gap-4">
@@ -132,106 +111,140 @@ export function AgentsPanel() {
             </div>
             {/* Phiên #47 — nút "Chạy chu kỳ phân tích" XOÁ: dùng nút "Chạy agent"
                 duy nhất trên thanh bar trên cùng. Hàng pulse “Chu kỳ đa tác tử
-                đang chạy” phía dưới vẫn hiện đúng trạng thái đó qua useIsMutating. */}
+                đang chạy” ở thẻ Luồng thảo luận vẫn hiện đúng trạng thái đó
+                qua useIsMutating. */}
           </div>
         </CardContent>
       </Card>
 
-      {/* Tasks + message feed — dọc (cột hẹp 1/3 trong workspace Tín hiệu) */}
-      <div className="grid grid-cols-1 gap-4">
-        <Card className="gap-4">
-          <CardHeader>
-            <CardTitle className="text-sm">Nhiệm vụ agent</CardTitle>
-            <CardDescription>12 nhiệm vụ gần nhất</CardDescription>
-          </CardHeader>
-          <CardContent className="pb-0">
-            {agentsQuery.isLoading ? (
-              <div className="flex flex-col gap-2 pb-4">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={i} className="h-10 w-full" />
-                ))}
-              </div>
-            ) : tasks.length > 0 ? (
-              <ul className="max-h-96 divide-y overflow-y-auto custom-scrollbar">
-                {tasks.map((t) => (
-                  <li key={t.id} className="flex min-h-11 items-center gap-3 py-2.5 pr-2">
-                    <TaskStatusIcon status={t.status} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{t.title}</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {t.agentName} ·{" "}
-                        {formatDistanceToNow(new Date(t.createdAt), {
-                          addSuffix: true,
-                          locale: vi,
-                        })}
-                      </p>
-                    </div>
-                    <PriorityBadge priority={t.priority} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="pb-6 text-sm text-muted-foreground">
-                Không có nhiệm vụ nào.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="gap-4">
-          <CardHeader>
-            <CardTitle className="text-sm">Luồng thảo luận giữa các agent</CardTitle>
-            <CardDescription>30 tin nhắn gần nhất (mới nhất trước)</CardDescription>
-          </CardHeader>
-          <CardContent className="pb-0">
-            {messagesQuery.isLoading ? (
-              <div className="flex flex-col gap-3 pb-4">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex gap-3">
-                    <Skeleton className="size-9 shrink-0 rounded-full" />
-                    <div className="flex w-full flex-col gap-1.5">
-                      <Skeleton className="h-3.5 w-40" />
-                      <Skeleton className="h-4 w-full" />
-                      <Skeleton className="h-4 w-2/3" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : messagesQuery.isError ? (
-              <p className="pb-6 text-sm text-down">
-                {messagesQuery.error?.message ?? "Không tải được tin nhắn."}
-              </p>
-            ) : (
-              <ul className="max-h-[28rem] divide-y overflow-y-auto custom-scrollbar">
-                {isRunning && (
-                  <li className="flex items-center gap-3 py-3">
-                    <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                      <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
-                    </span>
-                    <p className="animate-pulse text-sm text-muted-foreground">
-                      <span className="font-medium text-foreground">
-                        Chu kỳ đa tác tử
-                      </span>{" "}
-                      đang chạy: 23 agents qua 5 nhóm — nền tảng dữ liệu → nghiên cứu
-                      → kiểm soát VETO → điều hành → học máy…
+      {/* Nhiệm vụ agent — dọc (cột hẹp 1/3 trong workspace Tín hiệu) */}
+      <Card className="gap-4">
+        <CardHeader>
+          <CardTitle className="text-sm">Nhiệm vụ agent</CardTitle>
+          <CardDescription>12 nhiệm vụ gần nhất</CardDescription>
+        </CardHeader>
+        <CardContent className="pb-0">
+          {agentsQuery.isLoading ? (
+            <div className="flex flex-col gap-2 pb-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : tasks.length > 0 ? (
+            <ul className="max-h-96 divide-y overflow-y-auto custom-scrollbar">
+              {tasks.map((t) => (
+                <li key={t.id} className="flex min-h-11 items-center gap-3 py-2.5 pr-2">
+                  <TaskStatusIcon status={t.status} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{t.title}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {t.agentName} ·{" "}
+                      {formatDistanceToNow(new Date(t.createdAt), {
+                        addSuffix: true,
+                        locale: vi,
+                      })}
                     </p>
-                  </li>
-                )}
-                {messages.map((m) => (
-                  <MessageItem key={m.id} message={m} signals={signals} />
-                ))}
-                {messages.length === 0 && !isRunning && (
-                  <li className="py-6 text-sm text-muted-foreground">
-                    Chưa có tin nhắn. Hãy chạy chu kỳ đầu tiên bằng nút “Chạy
-                    agent” trên thanh bar trên cùng.
-                  </li>
-                )}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                  </div>
+                  <PriorityBadge priority={t.priority} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="pb-6 text-sm text-muted-foreground">
+              Không có nhiệm vụ nào.
+            </p>
+          )}
+        </CardContent>
+      </Card>
     </section>
+  );
+}
+
+/**
+ * PHIÊN #90 — thẻ "Luồng thảo luận giữa các agent" TÁCH khỏi AgentsPanel để
+ * workspace Tín hiệu đặt nó vào CỘT RỘNG (2/3, dưới Tín hiệu giao dịch) thay
+ * vì dồn cuối cột hẹp 1/3 — hiệu lệnh trader: trước đây thẻ tràn dài xuống
+ * dưới trong khi cột trái còn trống lớn, nhìn lỗi.
+ *
+ * Nội dung + hành vi giữ nguyên 100% (feed broadcast + nút Phê duyệt / Từ chối
+ * tín hiệu strategist PHASE3 B2 §4.5 + hàng pulse khi chu kỳ đang chạy).
+ */
+export function AgentDiscussionCard() {
+  const messagesQuery = useQuery({
+    queryKey: ["agent-messages"],
+    queryFn: () =>
+      apiGet<{ messages: AgentMessageRow[] }>("/api/agents/messages"),
+    staleTime: 30_000,
+  });
+  // PHASE3 B2: signals ACTIVE để gắn nút Phê duyệt / Từ chối vào tin strategist.
+  const signalsQuery = useQuery({
+    queryKey: ["signals"],
+    queryFn: () => apiGet<{ signals: SignalRow[] }>("/api/signals"),
+    staleTime: 30_000,
+  });
+  // Phiên #47 — đếm mutation đang chạy TOÀN APP qua useIsMutating +
+  // mutationKey chia sẻ (kể cả khi chu kỳ kích hoạt từ nút Header).
+  const isRunning = useIsMutating({ mutationKey: RUN_AGENTS_MUTATION_KEY }) > 0;
+
+  // Feed chỉ hiển thị tin của agent (bỏ tin USER chat 1-1 — §4.1 direction).
+  const messages = (messagesQuery.data?.messages ?? []).filter(
+    (m) => m.direction !== "USER"
+  );
+  const signals = signalsQuery.data?.signals ?? [];
+
+  return (
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="text-sm">Luồng thảo luận giữa các agent</CardTitle>
+        <CardDescription>30 tin nhắn gần nhất (mới nhất trước)</CardDescription>
+      </CardHeader>
+      <CardContent className="pb-0">
+        {messagesQuery.isLoading ? (
+          <div className="flex flex-col gap-3 pb-4">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex gap-3">
+                <Skeleton className="size-9 shrink-0 rounded-full" />
+                <div className="flex w-full flex-col gap-1.5">
+                  <Skeleton className="h-3.5 w-40" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : messagesQuery.isError ? (
+          <p className="pb-6 text-sm text-down">
+            {messagesQuery.error?.message ?? "Không tải được tin nhắn."}
+          </p>
+        ) : (
+          <ul className="max-h-[28rem] divide-y overflow-y-auto custom-scrollbar">
+            {isRunning && (
+              <li className="flex items-center gap-3 py-3">
+                <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                  <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
+                </span>
+                <p className="animate-pulse text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    Chu kỳ đa tác tử
+                  </span>{" "}
+                  đang chạy: 23 agents qua 5 nhóm — nền tảng dữ liệu → nghiên cứu
+                  → kiểm soát VETO → điều hành → học máy…
+                </p>
+              </li>
+            )}
+            {messages.map((m) => (
+              <MessageItem key={m.id} message={m} signals={signals} />
+            ))}
+            {messages.length === 0 && !isRunning && (
+              <li className="py-6 text-sm text-muted-foreground">
+                Chưa có tin nhắn. Hãy chạy chu kỳ đầu tiên bằng nút “Chạy
+                agent” trên thanh bar trên cùng.
+              </li>
+            )}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

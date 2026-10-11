@@ -79,7 +79,7 @@ const WORKSPACE_ITEMS: {
   {
     id: "synthesis",
     label: "Tổng hợp",
-    description: "Bộ tổng hợp Bayes · cổng đồng thuận 80%",
+    description: "7 tab: Bayes · học máy · mạng thần kinh · tinh chỉnh",
     icon: Brain,
   },
   {

@@ -8,6 +8,7 @@ import {
   getKSandbox,
   getSandboxAccount,
   resetSandbox,
+  setSandboxCash,
   setSandboxPaused,
   topupSandbox,
 } from "@/lib/k-sandbox";
@@ -36,6 +37,8 @@ export const dynamic = "force-dynamic";
  * POST body {action, amount?}:
  *   - "activate" {amount ≥ 10tr, bội 100k} → tạo/tái bật + K1_SANDBOX_FUNDED
  *   - "topup"   {amount ≥ 1tr}             → + K1_SANDBOX_TOPUP
+ *   - "setcash" {amount ≥ 10tr, bội 100k}  → #90 đặt tiền mặt trực tiếp (tái
+ *               cơ sở vòng P&L, chặn khi còn vị thế mở) + K1_SANDBOX_CASH_SET
  *   - "reset"   (UI xác nhận 2 bước phía client) → xoá sạch + K1_SANDBOX_RESET
  *   - "pause" / "resume"                    → dừng/tiếp tục auto-convert
  *
@@ -200,6 +203,13 @@ export async function POST(req: Request) {
       }
       return NextResponse.json(await buildState());
     }
+    if (action === "setcash") {
+      const res = await setSandboxCash(amount);
+      if (!res.ok) {
+        return NextResponse.json({ error: res.error }, { status: res.status });
+      }
+      return NextResponse.json(await buildState());
+    }
     if (action === "reset") {
       const res = await resetSandbox();
       if (!res.ok) {
@@ -215,7 +225,7 @@ export async function POST(req: Request) {
       return NextResponse.json(await buildState());
     }
     return NextResponse.json(
-      { error: 'action phải là "activate", "topup", "reset", "pause" hoặc "resume".' },
+      { error: 'action phải là "activate", "topup", "setcash", "reset", "pause" hoặc "resume".' },
       { status: 422 }
     );
   } catch (err) {

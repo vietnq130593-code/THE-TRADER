@@ -17,24 +17,34 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPostJson } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
 import { changeColor, formatDateTime, formatPct, formatSigned, formatVnd } from "@/lib/format";
 import type { KSandboxState } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 /**
  * K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6): khối "Cơ chế thử nghiệm (tiền ảo)"
  * trong workspace Cài đặt.
  *
- * - Chưa kích hoạt: nhập số tiền (placeholder gợi ý 100.000.000 ₫ — §8-Q8
- *   "tôi tự nhập") + validate live (≥ 10 triệu, bội 100.000 ₫) + nút Kích hoạt.
+ * - Chưa kích hoạt / SAU ĐẶT LẠI (#90): dòng trạng thái "Tiền ảo hiện tại
+ *   0 ₫" + nhập số tiền (placeholder gợi ý 100.000.000 ₫ — §8-Q8 "tôi tự
+ *   nhập") + validate live (≥ 10 triệu, bội 100.000 ₫) + nút Kích hoạt.
  * - Đã kích hoạt: số dư · equity · lãi/lỗ từ lúc kích hoạt (₫ + %) · số phiên
  *   đã chạy · số lệnh auto · đồ thị equity mini (CashSnapshot k1-daily) ·
- *   Nạp thêm / Tạm dừng / Đặt lại (2 bước xác nhận).
+ *   ĐẶT LẠI TIỀN MẶT trực tiếp (#90 — không cần reset toàn bộ) · Nạp thêm ·
+ *   Tạm dừng · Đặt lại về 0 (Dialog xác nhận — thay nút 2-bấm dễ misunderstood).
  * - Trạng thái nguồn trung thực: 0 lệnh → "chưa có tín hiệu nào được thực thi".
  *
  * Tách bạch P0: card chỉ đọc/ghi qua /api/k/sandbox (scoped accountType
@@ -130,14 +140,89 @@ function Tile({
   );
 }
 
+/** Ô tiền có nhãn + validate live — dùng cho cả Đặt lại tiền mặt & Nạp thêm. */
+function MoneyControl({
+  id,
+  label,
+  description,
+  placeholder,
+  raw,
+  onChange,
+  valid,
+  pending,
+  buttonLabel,
+  ButtonIcon,
+  onConfirm,
+  disabled,
+  error,
+}: {
+  id: string;
+  label: string;
+  description: string;
+  placeholder: string;
+  raw: string;
+  onChange: (v: string) => void;
+  valid: boolean;
+  pending: boolean;
+  buttonLabel: string;
+  ButtonIcon: React.ComponentType<{ className?: string }>;
+  onConfirm: () => void;
+  disabled?: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border bg-muted/10 px-3 py-2.5">
+      <Label htmlFor={id} className="text-xs font-medium text-foreground">
+        {label}
+      </Label>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="relative flex-1">
+          <Input
+            id={id}
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder={placeholder}
+            aria-label={`${label} (VND)`}
+            value={raw}
+            onChange={(e) => onChange(groupDigits(e.target.value))}
+            className="pr-8 tabular-nums"
+          />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+            ₫
+          </span>
+        </div>
+        <Button
+          variant="outline"
+          className="min-h-10 gap-2 sm:w-auto"
+          disabled={!valid || pending || disabled}
+          onClick={onConfirm}
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <ButtonIcon className="size-4" aria-hidden="true" />
+          )}
+          {buttonLabel}
+        </Button>
+      </div>
+      {error ? (
+        <p className="text-xs text-amber-600 dark:text-amber-400">{error}</p>
+      ) : (
+        <p className="text-[11px] leading-snug text-muted-foreground">{description}</p>
+      )}
+    </div>
+  );
+}
+
 export function SandboxCard() {
   const queryClient = useQueryClient();
   const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
   const setPortfolioWorld = useUiStore((s) => s.setPortfolioWorld);
   const [activateRaw, setActivateRaw] = React.useState("");
+  const [cashRaw, setCashRaw] = React.useState("");
   const [topupRaw, setTopupRaw] = React.useState("");
-  const [resetArmed, setResetArmed] = React.useState(false);
-  const resetArmTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** #90 — reset qua Dialog xác nhận tường minh (thay nút 2-bấm dễ bỏ sót). */
+  const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["k-sandbox"],
@@ -159,13 +244,22 @@ export function SandboxCard() {
         toast.success("Đã kích hoạt cơ chế thử nghiệm", {
           description: `Cấp ${formatVnd(res.initialAmount)} tiền ảo — agents sẽ tự thực thi mọi tín hiệu qua cổng đồng thuận B9.`,
         });
+      } else if (vars.action === "setcash") {
+        setCashRaw("");
+        toast.success(`Đã đặt tiền mặt = ${formatVnd(vars.amount ?? 0)}`, {
+          description:
+            "Vòng lãi/lỗ tính lại từ số mới — lệnh, giao dịch và đường cong giữ nguyên.",
+        });
       } else if (vars.action === "topup") {
         setTopupRaw("");
         toast.success(`Đã nạp thêm ${formatVnd(vars.amount ?? 0)} tiền ảo`);
       } else if (vars.action === "reset") {
+        setResetDialogOpen(false);
+        setCashRaw("");
+        setTopupRaw("");
         toast.success("Đã đặt lại về 0 — thử nghiệm mới hoàn toàn", {
           description:
-            "Toàn bộ lệnh · vị thế · đường cong đã xoá sạch. Nhập số vốn mới ngay bên dưới để bắt đầu vòng thử nghiệm kế tiếp.",
+            "Toàn bộ lệnh · vị thế · giao dịch · đường cong đã xoá sạch, tiền ảo về 0 ₫. Nhập số vốn mới ngay bên dưới để bắt đầu vòng thử nghiệm kế tiếp.",
         });
       } else if (vars.action === "pause") {
         toast.success("Đã tạm dừng tự động thực thi", {
@@ -182,30 +276,26 @@ export function SandboxCard() {
     },
   });
 
-  // Huỷ kích nút reset 2 bước sau 5 giây không bấm xác nhận.
-  const armReset = () => {
-    if (resetArmTimer.current) clearTimeout(resetArmTimer.current);
-    if (resetArmed) {
-      setResetArmed(false);
-      mutation.mutate({ action: "reset" });
-      return;
-    }
-    setResetArmed(true);
-    resetArmTimer.current = setTimeout(() => setResetArmed(false), 5_000);
-  };
-  React.useEffect(
-    () => () => {
-      if (resetArmTimer.current) clearTimeout(resetArmTimer.current);
-    },
-    []
-  );
-
   const activateAmount = parseAmount(activateRaw);
   const activateValid =
     activateAmount >= MIN_ACTIVATE && activateAmount % STEP === 0;
+  const cashAmount = parseAmount(cashRaw);
+  const cashValid = cashAmount >= MIN_ACTIVATE && cashAmount % STEP === 0;
   const topupAmount = parseAmount(topupRaw);
   const topupValid = topupAmount >= MIN_TOPUP && topupAmount % STEP === 0;
   const enabled = data?.enabled ?? false;
+  const openCount = data?.account?.openCount ?? 0;
+
+  const cashError = cashRaw && !cashValid
+    ? cashAmount < MIN_ACTIVATE
+      ? `Tối thiểu ${formatVnd(MIN_ACTIVATE)}.`
+      : `Phải là bội số của ${formatVnd(STEP)}.`
+    : null;
+  const topupError = topupRaw && !topupValid
+    ? topupAmount < MIN_TOPUP
+      ? `Tối thiểu ${formatVnd(MIN_TOPUP)}.`
+      : `Phải là bội số của ${formatVnd(STEP)}.`
+    : null;
 
   return (
     <Card className="gap-4">
@@ -250,8 +340,15 @@ export function SandboxCard() {
             </Button>
           </div>
         ) : !enabled ? (
-          /* ── Chưa kích hoạt: nhập tiền + nút Kích hoạt (§8-Q8 tự nhập) ── */
+          /* ── Chưa kích hoạt / sau Đặt lại về 0: tiền ảo = 0 ₫ + nhập vốn ── */
           <div className="flex flex-col gap-3 sm:max-w-md">
+            {/* #90 — dòng trạng thái rõ ràng "đã về 0": đúng cả trường hợp
+                chưa từng kích hoạt lẫn vừa bấm Đặt lại về 0 (reset đặt
+                cash = 0 và tắt cơ chế). */}
+            <div className="flex items-center justify-between rounded-lg border border-dashed px-3 py-2.5">
+              <p className="text-xs text-muted-foreground">Tiền ảo hiện tại</p>
+              <p className="text-sm font-semibold tabular-nums text-foreground">0 ₫</p>
+            </div>
             <p className="text-sm text-muted-foreground">
               <span className="font-medium text-foreground">Bạn quyết định số vốn</span> — nhập
               số tiền ảo cấp cho agents (tối thiểu {formatVnd(MIN_ACTIVATE)}, bội số{" "}
@@ -295,8 +392,9 @@ export function SandboxCard() {
             <p className="text-xs text-muted-foreground">
               Gợi ý: {formatVnd(100_000_000)}. Mỗi lệnh auto ~{data?.sizePct ?? 5}% NAV, tối đa{" "}
               {data?.maxBudgetPctPerCycle ?? 10}% NAV mỗi chu kỳ. Kết toán equity 16:30 ICT hằng
-              ngày. Đặt lại bất cứ lúc nào ở dưới — vòng thử nghiệm mới bắt đầu từ 0 sạch sẽ
-              với số vốn bạn chọn.
+              ngày. Khi bật, Danh mục đầu tư &amp; chip tiền trên thanh bar tự chuyển sang xem
+              tiền thử nghiệm; đổi số vốn bất cứ lúc nào bằng ô “Đặt lại tiền mặt” bên dưới —
+              không cần đặt lại từ đầu.
             </p>
           </div>
         ) : (
@@ -306,12 +404,12 @@ export function SandboxCard() {
               <Tile
                 label="Tiền mặt"
                 value={formatVnd(data?.account?.cash ?? 0)}
-                hint={`${data?.account?.accountNumber ?? "SANDBOX-K1"} · thử nghiệm`}
+                hint={`${data?.account?.accountNumber ?? "SANDBOX-K1"} · chỉnh được ở dưới`}
               />
               <Tile
                 label="Tổng tài sản"
                 value={formatVnd(data?.account?.equity ?? 0)}
-                hint={`${data?.account?.openCount ?? 0} vị thế mở`}
+                hint={`tiền mặt + giá trị vị thế · ${openCount} vị thế mở`}
               />
               <Tile
                 label="Lãi/lỗ từ lúc kích hoạt"
@@ -369,92 +467,92 @@ export function SandboxCard() {
 
             <Separator />
 
-            {/* Vòng đời tiền: Nạp thêm · Tạm dừng/Tiếp tục · Đặt lại (2 bước) */}
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-              <div className="flex flex-col gap-2 sm:flex-row sm:flex-1">
-                <div className="relative flex-1">
-                  <Input
-                    inputMode="numeric"
-                    autoComplete="off"
-                    placeholder="Nạp thêm (VD 50.000.000)"
-                    aria-label="Số tiền nạp thêm vào tài khoản thử nghiệm (VND)"
-                    value={topupRaw}
-                    onChange={(e) => setTopupRaw(groupDigits(e.target.value))}
-                    className="pr-8 tabular-nums"
-                  />
-                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                    ₫
-                  </span>
-                </div>
-                <Button
-                  variant="outline"
-                  className="min-h-10 gap-2"
-                  disabled={!topupValid || mutation.isPending || data?.paused}
-                  onClick={() => mutation.mutate({ action: "topup", amount: topupAmount })}
-                >
-                  {mutation.isPending && mutation.variables?.action === "topup" ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Plus className="size-4" aria-hidden="true" />
-                  )}
-                  Nạp thêm
-                </Button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  className="min-h-10 gap-2"
-                  disabled={mutation.isPending}
-                  onClick={() =>
-                    mutation.mutate({ action: data?.paused ? "resume" : "pause" })
-                  }
-                >
-                  {mutation.isPending &&
-                  (mutation.variables?.action === "pause" ||
-                    mutation.variables?.action === "resume") ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  ) : data?.paused ? (
-                    <Play className="size-4" aria-hidden="true" />
-                  ) : (
-                    <Pause className="size-4" aria-hidden="true" />
-                  )}
-                  {data?.paused ? "Tiếp tục" : "Tạm dừng"}
-                </Button>
-                <Button
-                  variant={resetArmed ? "destructive" : "outline"}
-                  className={cn("min-h-10 gap-2", !resetArmed && "text-down")}
-                  disabled={mutation.isPending}
-                  onClick={armReset}
-                  aria-label={
-                    resetArmed
-                      ? "Xác nhận đặt lại về 0: xoá toàn bộ lệnh, vị thế, giao dịch và đường cong tài khoản thử nghiệm"
-                      : "Đặt lại tài khoản thử nghiệm về 0"
-                  }
-                  title={
-                    resetArmed
-                      ? undefined
-                      : "Về 0 từ đầu: xoá toàn bộ lệnh · vị thế · giao dịch · đường cong, tiền về 0 — sau đó bạn tự nhập số vốn mới"
-                  }
-                >
-                  {mutation.isPending && mutation.variables?.action === "reset" ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <RotateCcw className="size-4" aria-hidden="true" />
-                  )}
-                  {resetArmed ? "Bấm lần nữa để xoá" : "Đặt lại về 0"}
-                </Button>
-              </div>
+            {/* #90 — VÒNG ĐỜI TIỀN: 2 ô cạnh nhau (lg) — Đặt lại tiền mặt
+                (ghi đè tuyệt đối, không cần reset) + Nạp thêm (cộng dồn). */}
+            <div className="grid gap-3 lg:grid-cols-2">
+              <MoneyControl
+                id="sandbox-setcash"
+                label="Đặt lại tiền mặt (ghi đè)"
+                description={
+                  openCount > 0
+                    ? `Đang có ${openCount} vị thế mở — đóng vị thế hoặc "Đặt lại về 0" trước khi ghi đè.`
+                    : "Ghi đè số dư bằng đúng số bạn nhập · vòng lãi/lỗ tính lại từ số mới · lệnh & đường cong giữ nguyên."
+                }
+                placeholder={`VD ${formatVnd(data?.account?.cash ?? 0)}`}
+                raw={cashRaw}
+                onChange={setCashRaw}
+                valid={cashValid}
+                pending={mutation.isPending && mutation.variables?.action === "setcash"}
+                buttonLabel="Đặt tiền mặt"
+                ButtonIcon={RotateCcw}
+                onConfirm={() => mutation.mutate({ action: "setcash", amount: cashAmount })}
+                disabled={openCount > 0 || data?.paused}
+                error={cashError}
+              />
+              <MoneyControl
+                id="sandbox-topup"
+                label="Nạp thêm (cộng dồn)"
+                description={`Cộng vào tiền hiện có · tối thiểu ${formatVnd(MIN_TOPUP)} · không đếm là lãi.`}
+                placeholder="VD 50.000.000"
+                raw={topupRaw}
+                onChange={setTopupRaw}
+                valid={topupValid}
+                pending={mutation.isPending && mutation.variables?.action === "topup"}
+                buttonLabel="Nạp thêm"
+                ButtonIcon={Plus}
+                onConfirm={() => mutation.mutate({ action: "topup", amount: topupAmount })}
+                disabled={data?.paused}
+                error={topupError}
+              />
+            </div>
+
+            {/* Tạm dừng · Đặt lại về 0 (Dialog xác nhận — #90) */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                className="min-h-10 gap-2"
+                disabled={mutation.isPending}
+                onClick={() =>
+                  mutation.mutate({ action: data?.paused ? "resume" : "pause" })
+                }
+              >
+                {mutation.isPending &&
+                (mutation.variables?.action === "pause" ||
+                  mutation.variables?.action === "resume") ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : data?.paused ? (
+                  <Play className="size-4" aria-hidden="true" />
+                ) : (
+                  <Pause className="size-4" aria-hidden="true" />
+                )}
+                {data?.paused ? "Tiếp tục" : "Tạm dừng"}
+              </Button>
+              <Button
+                variant="outline"
+                className="min-h-10 gap-2 text-down"
+                disabled={mutation.isPending}
+                onClick={() => setResetDialogOpen(true)}
+                aria-label="Đặt lại tài khoản thử nghiệm về 0"
+                title="Về 0 từ đầu: xoá toàn bộ lệnh · vị thế · giao dịch · đường cong, tiền về 0 — sau đó bạn tự nhập số vốn mới"
+              >
+                <RotateCcw className="size-4" aria-hidden="true" />
+                Đặt lại về 0
+              </Button>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                “Đặt lại tiền mặt” đổi số vốn mà vẫn giữ lịch sử · “Đặt lại về 0” xoá sạch
+                vòng thử nghiệm.
+              </p>
             </div>
             {data?.paused && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 Đang tạm dừng: chu kỳ sau <span className="font-medium">0 lệnh mới</span>, vị thế
-                cũ vẫn giữ và vẫn kết toán equity hằng ngày.
+                cũ vẫn giữ và vẫn kết toán equity hằng ngày. Ô Đặt lại tiền mặt / Nạp thêm tạm
+                khoá tới khi tiếp tục lại.
               </p>
             )}
 
             {/* #88 — điều hướng chéo: tiền ở đây, lệnh/giao dịch ở Danh mục,
-                quyết định (tín hiệu) ở tab Tín hiệu — trader hỏi "thể hiện ở
-                module nào, tab nào" → nút nhảy thẳng thay vì chỉ lời khuyên. */}
+                quyết định (tín hiệu) ở tab Tín hiệu. */}
             <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-muted-foreground">
                 Thông tin đầy đủ của thử nghiệm nằm ở 3 nơi:
@@ -488,7 +586,8 @@ export function SandboxCard() {
             <ul className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
               <li className="flex items-start gap-1.5">
                 <span className="mt-0.5 shrink-0 font-semibold text-foreground">Tiền:</span>
-                Cài đặt (ở đây) — số dư, P&amp;L, đường cong equity, nạp/tạm dừng/đặt lại.
+                ở đây (sửa/nạp/đặt lại) + hiển thị chính tại Danh mục đầu tư &amp; chip tiền
+                thanh bar trên cùng.
               </li>
               <li className="flex items-start gap-1.5">
                 <span className="mt-0.5 shrink-0 font-semibold text-foreground">Lượt giao dịch:</span>
@@ -502,12 +601,62 @@ export function SandboxCard() {
             <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
               <Wallet className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
               Khoản tiền ảo chỉ dùng nội bộ — không chạm tài khoản giấy VNDIRECT của bạn. Kết thúc
-              thử nghiệm: bấm Đặt lại (tổng kết lãi/lỗ được lưu vào audit trước khi xoá) rồi nhập
-              số vốn mới nếu muốn chạy vòng khác.
+              thử nghiệm: bấm Đặt lại về 0 (tổng kết lãi/lỗ được lưu vào audit trước khi xoá)
+              rồi nhập số vốn mới nếu muốn chạy vòng khác.
             </p>
           </>
         )}
       </CardContent>
+
+      {/* #90 — Dialog xác nhận reset: tường minh thay nút 2-bấm (trader phản
+          ánh "bấm đặt lại về 0 nó cũng chẳng về 0" — một lần bấm không đủ &
+          dễ hiểu là đã xong). */}
+      <Dialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Đặt lại về 0 — xoá toàn bộ vòng thử nghiệm?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Tiền ảo về <span className="font-semibold text-foreground">0 ₫</span>, cơ chế
+                  thử nghiệm tắt. Xoá sạch của{" "}
+                  <span className="font-medium">chỉ tài khoản thử nghiệm</span>:
+                </p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>{data?.autoOrderCount ?? 0} lệnh tự động</li>
+                  <li>{openCount} vị thế mở</li>
+                  <li>toàn bộ giao dịch đã khớp của vòng hiện tại</li>
+                  <li>đường cong equity ({data?.sessionsRun ?? 0} điểm kết toán)</li>
+                </ul>
+                <p>
+                  Tổng kết lãi/lỗ được lưu vào audit trước khi xoá. Tài khoản Giấy của bạn không
+                  đổi một đồng. Chỉ muốn đổi số vốn? dùng ô{" "}
+                  <span className="font-medium text-foreground">Đặt lại tiền mặt</span> — không
+                  cần xoá gì cả.
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetDialogOpen(false)}>
+              Huỷ
+            </Button>
+            <Button
+              variant="destructive"
+              className="gap-2"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate({ action: "reset" })}
+            >
+              {mutation.isPending && mutation.variables?.action === "reset" ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RotateCcw className="size-4" aria-hidden="true" />
+              )}
+              Xoá hết &amp; về 0
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

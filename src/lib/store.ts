@@ -44,9 +44,23 @@ interface UiState {
   /** Phiên #88 (K1) — thế giới tài khoản đang xem trong Danh mục:
    *  "paper" (tài khoản Giữ của trader) | "sandbox" (tài khoản Thử nghiệm
    *  K1 — agents tự giao dịch). Đưa vào store để nút trong khối Settings
-   *  "Cơ chế thử nghiệm" nhảy thẳng sang Danh mục → Thử nghiệm. */
+   *  "Cơ chế thử nghiệm" nhảy thẳng sang Danh mục → Thử nghiệm.
+   *
+   *  Phiên #90 — portfolioWorldUserSet: trader có BẤM vào bộ lọc Giấy/Thử
+   *  nghiệm chưa? false (mặc định — chưa từng bấm) → Danh mục & chip tiền trên
+   *  Header TỰ ĐỘNG xem thế giới Thử nghiệm khi cơ chế thử nghiệm đang bật
+   *  (hiệu lệnh: "kích hoạt thử nghiệm thì coi tiền chế độ đó là tiền chính
+   *  để đầu tư giả định"). Trader bấm chọn tay → ghi đè tự động và tôn trọng
+   *  lựa chọn đó cho tới khi tải lại trang. */
   portfolioWorld: "paper" | "sandbox";
+  portfolioWorldUserSet: boolean;
   setPortfolioWorld: (world: "paper" | "sandbox") => void;
+
+  /** Phiên #90 — tab đang mở trong module Tổng hợp (7 tab: nhận định ·
+   *  bằng chứng · học máy · mạng thần kinh · thuật toán · dữ liệu · tinh
+   *  chỉnh). Cùng pattern portfolioTab — giữ lựa chọn khi đổi module qua lại. */
+  synthesisTab: string;
+  setSynthesisTab: (tab: string) => void;
 
   /** Quotes table mode: watchlist-only vs full VN30 board. */
   watchlistOnly: boolean;
@@ -88,7 +102,12 @@ export const useUiStore = create<UiState>()((set) => ({
   setPortfolioTab: (tab) => set({ portfolioTab: tab }),
 
   portfolioWorld: "paper",
-  setPortfolioWorld: (world) => set({ portfolioWorld: world }),
+  portfolioWorldUserSet: false,
+  setPortfolioWorld: (world) =>
+    set({ portfolioWorld: world, portfolioWorldUserSet: true }),
+
+  synthesisTab: "assessment",
+  setSynthesisTab: (tab) => set({ synthesisTab: tab }),
 
   watchlistOnly: false,
   setWatchlistOnly: (value) => set({ watchlistOnly: value }),

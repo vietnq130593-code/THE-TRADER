@@ -45,8 +45,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip as UiTooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAssessment, useSynthesizeNow } from "@/hooks/use-assessment";
-import { MlPanel } from "@/components/dashboard/ml-panel";
+import { MlOverviewTab } from "@/components/dashboard/ml-panel";
+import { NnTab } from "@/components/dashboard/ml/nn-tab";
+import { AlgorithmsTab } from "@/components/dashboard/ml/algorithms-tab";
+import { DataTab } from "@/components/dashboard/ml/data-tab";
+import { TuningTab } from "@/components/dashboard/ml/tuning-tab";
+import { useUiStore } from "@/lib/store";
 import { changeColor, formatDateTime, formatVnd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
@@ -133,9 +139,40 @@ interface HistoryRow {
 
 /* ─────────────────── Workspace ─────────────────── */
 
+/**
+ * PHIÊN #90 — hiệu lệnh trader: nội dung module Tổng hợp dài cuộn dọc (Bayes
+ * + Học máy 1.075d nối đuôi). CHIA 7 TAB NGANG (không thêm module mới —
+ * trader: "không cần module học máy, chỉ cần chia module tổng hợp thành các
+ * tab hợp lý"):
+ *
+ *   1. Nhận định      — header posterior + đa thị trường + cổng đồng thuận B9
+ *                       + CRB + tường thuật + bậc nhân quả 0/1/2.
+ *   2. Bằng chứng     — bậc 3 bảng cổ phiếu + drivers mức đóng góp + lịch sử pUp.
+ *   3. Học máy        — dải 8 thẻ mini + 4 khối (MLP · cổng B2 · Q-learning ·
+ *                       Bandit) + nút Huấn luyện / Kết toán reward.
+ *   4. Mạng thần kinh — sơ đồ MLP trọng số THẬT + GRU-24 + ensemble (tab #89).
+ *   5. Thuật toán     — 10 thẻ file·hàm·hằng số thật (tab #89).
+ *   6. Dữ liệu        — pipeline 8 chặng + trình duyệt 34 model + RAG (tab #89).
+ *   7. Tinh chỉnh     — ô nhập vận hành thật (tab #89).
+ *
+ * 5 tab học máy #89 được PHÂN GIẢI lên ngang hàng (không còn Tabs lồng) —
+ * tab đang mở lưu ở store (synthesisTab) để giữ khi đổi module qua lại.
+ */
+const SYNTHESIS_TABS = [
+  { value: "assessment", label: "Nhận định" },
+  { value: "evidence", label: "Bằng chứng" },
+  { value: "ml", label: "Học máy" },
+  { value: "network", label: "Mạng thần kinh" },
+  { value: "algorithms", label: "Thuật toán" },
+  { value: "data", label: "Dữ liệu" },
+  { value: "tuning", label: "Tinh chỉnh" },
+] as const;
+
 export function SynthesisWorkspace() {
   const { data, isLoading, isError, error, refetch } = useAssessment();
   const synthesizeNow = useSynthesizeNow();
+  const synthesisTab = useUiStore((s) => s.synthesisTab);
+  const setSynthesisTab = useUiStore((s) => s.setSynthesisTab);
 
   const assessment = data?.assessment ?? null;
   // Giữ tham chiếu ổn định từ cache (tránh useMemo deps đổi mỗi render).
@@ -151,6 +188,40 @@ export function SynthesisWorkspace() {
 
   const busy = synthesizeNow.isPending;
 
+  // Thu hẹp kiểu một lần (TS không suy ra được “notReady == null ⇒ assessment
+  // ≠ null” trong JSX) — dùng chung cho 2 tab Nhận định / Bằng chứng.
+  const readyAssessment =
+    !isLoading && !isError && assessment != null ? assessment : null;
+
+  // Trạng thái assessment dùng chung cho 2 tab Nhận định / Bằng chứng — cùng
+  // một nguồn /api/assessment (đủ điều kiện hiện bảng chứng mới khi có nhận
+  // định). Render element dùng lại được ở cả 2 TabsContent (Radix chỉ mount
+  // tab đang mở nên không trùng DOM).
+  const assessmentNotReady = isLoading ? (
+    <SynthesisSkeleton />
+  ) : isError ? (
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="text-base">Không tải được nhận định</CardTitle>
+        <CardDescription>
+          {error?.message ??
+            "API /api/assessment chưa phản hồi — backend có thể đang triển khai."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button variant="outline" className="min-h-11 gap-2" onClick={() => void refetch()}>
+          <RefreshCw className="size-4" aria-hidden="true" />
+          Thử lại
+        </Button>
+      </CardContent>
+    </Card>
+  ) : !readyAssessment ? (
+    <EmptyState
+      synthesizePending={synthesizeNow.isPending}
+      onSynthesize={() => synthesizeNow.mutate()}
+    />
+  ) : null;
+
   return (
     <div
       role="tabpanel"
@@ -158,9 +229,11 @@ export function SynthesisWorkspace() {
       aria-labelledby="workspace-tab-synthesis"
       className="flex flex-col gap-6"
     >
-      <h2 className="sr-only">Bộ tổng hợp Bayes — nhận định thị trường</h2>
+      <h2 className="sr-only">
+        Tổng hợp — nhận định Bayes, học máy &amp; kiến trúc tinh chỉnh
+      </h2>
 
-      {/* Header workspace: mô tả + 2 hành động */}
+      {/* Header workspace: mô tả + 2 hành động — LUÔN hiện trên mọi tab */}
       <Card>
         <CardContent className="flex flex-col gap-4 py-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
@@ -173,8 +246,9 @@ export function SynthesisWorkspace() {
             <div className="leading-tight">
               <p className="text-base font-semibold">Bộ tổng hợp Bayes</p>
               <p className="text-xs text-muted-foreground">
-                Nhận định thị trường theo mô hình nhân quả 4 bậc — tiên nghiệm →
-                thị trường → nhóm ngành → cổ phiếu (log-odds naive Bayes)
+                7 tab: nhận định 4 bậc nhân quả → bằng chứng cổ phiếu → học
+                máy 3 mô hình → mạng thần kinh trọng số thật → thuật toán ·
+                hàm → kiến trúc dữ liệu → tinh chỉnh vận hành thật
               </p>
             </div>
           </div>
@@ -208,75 +282,100 @@ export function SynthesisWorkspace() {
         </CardContent>
       </Card>
 
-      {isLoading ? (
-        <SynthesisSkeleton />
-      ) : isError ? (
-        <Card className="gap-4">
-          <CardHeader>
-            <CardTitle className="text-base">Không tải được nhận định</CardTitle>
-            <CardDescription>
-              {error?.message ??
-                "API /api/assessment chưa phản hồi — backend có thể đang triển khai."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button variant="outline" className="min-h-11 gap-2" onClick={() => void refetch()}>
-              <RefreshCw className="size-4" aria-hidden="true" />
-              Thử lại
-            </Button>
-          </CardContent>
-        </Card>
-      ) : !assessment ? (
-        <EmptyState
-          synthesizePending={synthesizeNow.isPending}
-          onSynthesize={() => synthesizeNow.mutate()}
-        />
-      ) : (
-        <>
-          {/* 1. Header nhận định: badge hướng + stacked bar + 3 stat */}
-          <AssessmentHeaderCard assessment={assessment} />
+      <Tabs value={synthesisTab} onValueChange={setSynthesisTab}>
+        {/* 7 tab — cuộn ngang trên mobile (pattern #89) */}
+        <div className="overflow-x-auto custom-scrollbar pb-1">
+          <TabsList className="w-max">
+            {SYNTHESIS_TABS.map((t) => (
+              <TabsTrigger key={t.value} value={t.value} className="text-xs">
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
-          {/* 1b. B5 — Đa thị trường: posterior phân đoạn (row cũ chưa có) */}
-          {assessment.segments != null && assessment.segments.length > 0 && (
-            <SegmentsCard segments={assessment.segments} />
+        {/* ── Tab 1 · Nhận định — posterior + đồng thuận + bậc 0/1/2 ── */}
+        <TabsContent value="assessment" className="mt-4 flex flex-col gap-6">
+          {readyAssessment ? (
+            <>
+              {/* 1. Header nhận định: badge hướng + stacked bar + 3 stat */}
+              <AssessmentHeaderCard assessment={readyAssessment} />
+
+              {/* 1b. B5 — Đa thị trường: posterior phân đoạn (row cũ chưa có) */}
+              {readyAssessment.segments != null && readyAssessment.segments.length > 0 && (
+                <SegmentsCard segments={readyAssessment.segments} />
+              )}
+
+              {/* 1c. B9 — Cổng đồng thuận 80% (row cũ chưa có) */}
+              {readyAssessment.consensus != null && (
+                <ConsensusCard consensus={readyAssessment.consensus} />
+              )}
+
+              {/* 1d. Phiên #51 — CRB: Ủy ban Kiểm soát Định lượng (row cũ chưa có) */}
+              {readyAssessment.riskQuant != null && (
+                <RiskQuantCard riskQuant={readyAssessment.riskQuant} />
+              )}
+
+              {/* 2. Tường thuật + VETO */}
+              <NarrativeCard assessment={readyAssessment} />
+
+              {/* 3. Bậc nhân quả 0/1/2 */}
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                <PriorCard assessment={readyAssessment} />
+                <MarketLevelCard assessment={readyAssessment} />
+                <SectorsCard assessment={readyAssessment} />
+              </div>
+            </>
+          ) : (
+            assessmentNotReady
           )}
+        </TabsContent>
 
-          {/* 1c. B9 — Cổng đồng thuận 80% (row cũ chưa có) */}
-          {assessment.consensus != null && (
-            <ConsensusCard consensus={assessment.consensus} />
+        {/* ── Tab 2 · Bằng chứng — bậc 3 cổ phiếu + drivers + lịch sử ── */}
+        <TabsContent value="evidence" className="mt-4 flex flex-col gap-6">
+          {readyAssessment ? (
+            <>
+              {/* 4. Bậc 3 — bảng cổ phiếu */}
+              <SymbolsCard assessment={readyAssessment} />
+
+              {/* 5. Bằng chứng & mức đóng góp */}
+              <DriversCard assessment={readyAssessment} />
+
+              {/* 6. Lịch sử */}
+              {historyAsc.length > 0 && (
+                <HistoryCard rows={historyAsc} recent={historyDesc.slice(0, 5)} />
+              )}
+            </>
+          ) : (
+            assessmentNotReady
           )}
+        </TabsContent>
 
-          {/* 1d. Phiên #51 — CRB: Ủy ban Kiểm soát Định lượng (row cũ chưa có) */}
-          {assessment.riskQuant != null && (
-            <RiskQuantCard riskQuant={assessment.riskQuant} />
-          )}
+        {/* ── Tab 3 · Học máy — 3 mô hình học thật + hành động ── */}
+        <TabsContent value="ml" className="mt-4">
+          <MlOverviewTab />
+        </TabsContent>
 
-          {/* 2. Tường thuật + VETO */}
-          <NarrativeCard assessment={assessment} />
+        {/* ── Tab 4 · Mạng thần kinh — MLP trọng số thật + GRU + ensemble ── */}
+        <TabsContent value="network" className="mt-4">
+          <NnTab />
+        </TabsContent>
 
-          {/* 3. Bậc nhân quả 0/1/2 */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <PriorCard assessment={assessment} />
-            <MarketLevelCard assessment={assessment} />
-            <SectorsCard assessment={assessment} />
-          </div>
+        {/* ── Tab 5 · Thuật toán — 10 thuật toán đang chạy ── */}
+        <TabsContent value="algorithms" className="mt-4">
+          <AlgorithmsTab />
+        </TabsContent>
 
-          {/* 4. Bậc 3 — bảng cổ phiếu */}
-          <SymbolsCard assessment={assessment} />
+        {/* ── Tab 6 · Dữ liệu & kiến trúc — pipeline + trình duyệt DB ── */}
+        <TabsContent value="data" className="mt-4">
+          <DataTab />
+        </TabsContent>
 
-          {/* 5. Bằng chứng & mức đóng góp */}
-          <DriversCard assessment={assessment} />
-
-          {/* 6. Lịch sử */}
-          {historyAsc.length > 0 && (
-            <HistoryCard rows={historyAsc} recent={historyDesc.slice(0, 5)} />
-          )}
-        </>
-      )}
-
-      {/* 7. Phiên #35 — Học máy & Học tăng cường (3 mô hình học thật,
-          query ml-status riêng — độc lập trạng thái assessment ở trên) */}
-      <MlPanel />
+        {/* ── Tab 7 · Tinh chỉnh — ô nhập vận hành thật ── */}
+        <TabsContent value="tuning" className="mt-4">
+          <TuningTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

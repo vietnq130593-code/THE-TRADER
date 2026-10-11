@@ -4,6 +4,7 @@ import * as React from "react";
 import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import {
+  FlaskConical,
   Loader2,
   Moon,
   Play,
@@ -27,6 +28,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiGet, apiPostJson } from "@/lib/api";
 import { useRunAgents } from "@/hooks/use-run-agents";
+import { usePortfolioWorld } from "@/hooks/use-portfolio-world";
 import { useUiStore, type Workspace } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { formatVnd, isMarketOpen, vnClock, vnDate } from "@/lib/format";
@@ -109,11 +111,19 @@ export function Header() {
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
 
+  // PHIÊN #90 — chip tài khoản & sức mua ĐỒNG BỘ thế giới tiền đang xem
+  // (usePortfolioWorld — cùng nguồn suy luận với Danh mục): cơ chế thử nghiệm
+  // đang bật & trader chưa chọn tay → chip hiển thị tiền THỬ NGHIỆM (hiệu
+  // lệnh "kích hoạt thử nghiệm thì coi tiền chế độ đó là tiền chính"), bấm
+  // "Giấy" trong Danh mục thì chip theo về tài khoản giấy. Query key
+  // ["portfolio", world] invalidate theo prefix như cũ.
+  const { viewAccountType, portfolioUrl } = usePortfolioWorld();
   const { data: portfolio } = useQuery({
-    queryKey: ["portfolio"],
-    queryFn: () => apiGet<PortfolioResponse>("/api/portfolio"),
+    queryKey: ["portfolio", viewAccountType],
+    queryFn: () => apiGet<PortfolioResponse>(portfolioUrl),
     staleTime: 60_000,
   });
+  const isSandboxView = viewAccountType === "sandbox";
 
   // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.4): trạng thái chế độ chạy liên tục —
   // query riêng refetch 60s (đồng hồ đếm ngược nhích mỗi lần refetch; nhãn phút
@@ -305,17 +315,46 @@ export function Header() {
             Live
           </Badge>
 
-          {/* Account chip */}
-          <div className="hidden items-center gap-2 rounded-lg border px-3 py-1.5 md:flex">
-            <div className="leading-tight">
-              <p className="font-mono text-[11px] text-muted-foreground">
-                VNDIRECT · {portfolio?.account.accountNumber ?? "—"}
-              </p>
-              <p className="tabular-nums text-sm font-semibold">
-                {portfolio ? formatVnd(portfolio.account.equity) : "— ₫"}
-              </p>
-            </div>
-          </div>
+          {/* Account chip — #90: theo thế giới tiền đang xem (thử nghiệm khi
+           * cơ chế K1 bật & chưa chọn tay — đồng bộ Danh mục) */}
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className={cn(
+                    "hidden items-center gap-2 rounded-lg border px-3 py-1.5 md:flex",
+                    isSandboxView && "border-primary/40 bg-primary/5"
+                  )}
+                >
+                  {isSandboxView && (
+                    <FlaskConical className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                  )}
+                  <div className="leading-tight">
+                    <p className="font-mono text-[11px] text-muted-foreground">
+                      {isSandboxView
+                        ? `THỬ NGHIỆM · ${portfolio?.account.accountNumber ?? "SANDBOX-K1"}`
+                        : `VNDIRECT · ${portfolio?.account.accountNumber ?? "—"}`}
+                    </p>
+                    <p className="tabular-nums text-sm font-semibold">
+                      {portfolio ? formatVnd(portfolio.account.equity) : "— ₫"}
+                    </p>
+                  </div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-64 text-left">
+                {isSandboxView ? (
+                  <p className="text-xs leading-relaxed">
+                    Tiền ảo của <b>cơ chế thử nghiệm (K1)</b> — agents tự giao dịch qua cổng
+                    đồng thuận. Xem chi tiết: Danh mục → Thử nghiệm · quản lý vốn: Cài đặt →
+                    Cơ chế thử nghiệm. Bấm “Giấy” trong Danh mục để chip này quay về tài khoản
+                    giấy VNDIRECT.
+                  </p>
+                ) : (
+                  <p className="text-xs leading-relaxed">Tài khoản giấy VNDIRECT của trader.</p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
           {/* PHASE3 B3: chip Sức mua (ước tính) — công thức minh bạch qua tooltip */}
           <TooltipProvider delayDuration={200}>

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { apiGet, apiPost } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
+import { usePortfolioWorld } from "@/hooks/use-portfolio-world";
 import { AllocationDonut } from "@/components/dashboard/allocation-donut";
 import {
   changeColor,
@@ -30,7 +31,7 @@ import {
   formatVnd,
   formatVolume,
 } from "@/lib/format";
-import type { KSandboxState, OrderRow, PortfolioResponse, TradeRow } from "@/lib/types";
+import type { OrderRow, PortfolioResponse, TradeRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface OrdersResponse {
@@ -53,25 +54,15 @@ export function PortfolioSection() {
   const setPortfolioTab = useUiStore((s) => s.setPortfolioTab);
 
   // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6-Q3): bộ lọc tài khoản Giấy/Thử nghiệm.
-  // Mặc định "paper" (hành vi cũ bảo toàn). Lựa chọn "sandbox" chỉ hiện khi
-  // cơ chế thử nghiệm đang bật (query k-sandbox đã có ở Settings/Header —
-  // dùng chung cache key nên không thêm tải). Query key gắn accountType →
-  // mọi world tự invalidate theo prefix ["portfolio"] như cũ.
-  // #88 — đưa state lên store (portfolioWorld) để nút trong khối Settings
-  // "Cơ chế thử nghiệm" nhảy thẳng tới đây ở đúng thế giới Thử nghiệm.
-  const accountType = useUiStore((s) => s.portfolioWorld);
-  const setAccountType = useUiStore((s) => s.setPortfolioWorld);
+  // PHIÊN #90 — dùng usePortfolioWorld (một nguồn suy luận dùng chung với chip
+  // tiền trên Header): cơ chế thử nghiệm đang bật & trader chưa từng bấm chọn
+  // tay → Danh mục TỰ xem thế giới Thử nghiệm (hiệu lệnh "kích hoạt thử nghiệm
+  // thì coi tiền chế độ đó là tiền chính để đầu tư giả định" — trước đây mặc
+  // định Giấy 452tr demo nên trader thấy "vẫn giữ giá trị demo cũ"). Query key
+  // gắn accountType → mọi world tự invalidate theo prefix ["portfolio"] như cũ.
+  const { viewAccountType, sandboxAvailable, sandboxState: kSandbox, setWorld: setAccountType } =
+    usePortfolioWorld();
   const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
-  const { data: kSandbox } = useQuery({
-    queryKey: ["k-sandbox"],
-    queryFn: () => apiGet<KSandboxState>("/api/k/sandbox"),
-    staleTime: 60_000,
-  });
-  const sandboxAvailable = kSandbox?.enabled === true;
-  // Sandbox bị tắt/đặt lại trong lúc đang xem → derive về Giấy (không setState
-  // trong effect — thuần dẫn xuất: hiện đúng ngay cả giữa transitions).
-  const viewAccountType: "paper" | "sandbox" =
-    accountType === "sandbox" && !sandboxAvailable ? "paper" : accountType;
 
   const portfolioQuery = useQuery({
     queryKey: ["portfolio", viewAccountType],
