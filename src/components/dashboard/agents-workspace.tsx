@@ -348,8 +348,12 @@ export function AgentsWorkspace() {
 
       {/* Body: roster (trái, cuộn dọc khi dài ở desktop) + panel chi tiết/chat (phải) */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+        {/* F-5-L01 (FB-6): `relative` để cột này thành containing block của sr-only
+            trong CoverageMatrix (position:absolute không inset) — bị xl:overflow-y-auto
+            clip đúng chỗ thay vì thoát ra body kéo ~1.298px cuộn trống dưới footer;
+            sr-only vẫn nằm trong accessibility tree cho screen reader. */}
         <div
-          className="flex flex-col gap-4 self-start xl:col-span-2 xl:max-h-[calc(100vh-13rem)] xl:overflow-y-auto xl:pr-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border"
+          className="relative flex flex-col gap-4 self-start xl:col-span-2 xl:max-h-[calc(100vh-13rem)] xl:overflow-y-auto xl:pr-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border"
         >
           {/* K3 (#94 — §6.4): “Lịch tuần” nhiệm vụ định kỳ cả nhóm theo thứ giờ */}
           {!agentsQuery.isLoading && !agentsQuery.isError && (

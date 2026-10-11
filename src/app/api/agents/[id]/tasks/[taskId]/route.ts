@@ -19,15 +19,19 @@ export const dynamic = "force-dynamic";
  *
  * Ngữ nghĩa lịch:
  *   - schedule đổi (khác giá trị cũ) → nextDueAt tính lại từ now.
- *   - resume (paused true → false, task có lịch) → nextDueAt tính lại từ now.
+ *   - resume (paused true → false, task có lịch) → nextDueAt tính lại từ now
+ *     + failStreak reset 0 (RESUME-STREAK FB-4A: trader chủ động đánh giá lại
+ *     nhiệm vụ — semantics "liên tiếp" chỉ giữ cho lỗi tự động/kill-switch).
  *   - pause (false → true) → giữ nguyên nextDueAt (lịch sử), resume sẽ tính mới.
  *   - schedule → null → nextDueAt = null (nhiệm vụ tay).
  *
  * Audit: K3_TASK_PAUSED / K3_TASK_RESUMED (đổi paused) · K3_TASK_UPDATED
  * (đổi trường khác). 404 khi task không thuộc agent. 422 fields[] khi sai.
  *
- * DELETE — xoá nhiệm vụ: 409 khi đang có AgentRun RUNNING của task (không
- * xoá giữa dòng); Audit K3_TASK_DELETED.
+ * DELETE — xoá nhiệm vụ: 409 khi AGENT sở hữu nhiệm vụ đang status RUNNING
+ * (F-K3-02 FB-4A: AgentRun chỉ ghi status cuối — không bao giờ có dòng RUNNING
+ * — nên guard cũ theo AgentRun RUNNING là dead code; guard theo Agent.status
+ * qua task.agentId mới đúng nghĩa "đang chạy"); Audit K3_TASK_DELETED.
  */
 
 interface FieldError {
@@ -191,6 +195,12 @@ export async function PATCH(
     if (newPaused === false && task.schedule && newSchedule === undefined) {
       data.nextDueAt = computeNextDueAt(task.schedule, now);
     }
+    // RESUME-STREAK (FB-4A): trader chủ động bật lại — reset chuỗi lỗi liên tiếp
+    // (kill-switch 5 lỗi chỉ đếm lỗi TỰ ĐỘNG liên tiếp; resume là đánh giá lại
+    // có chủ đích, không phải "lỗi nối tiếp thành công").
+    if (newPaused === false) {
+      data.failStreak = 0;
+    }
     // Engine defer: đẩy due ra xa (max(nextDueAt, now) + phút) — KHÔNG đụng khác.
     if (deferMinutes !== undefined) {
       const base = task.nextDueAt && task.nextDueAt > now ? task.nextDueAt : now;
@@ -313,16 +323,20 @@ export async function DELETE(
         { status: 404 }
       );
     }
-    // 409 khi nhiệm vụ đang có AgentRun RUNNING — không xoá giữa dòng.
-    const running = await db.agentRun.findFirst({
-      where: { taskId, taskStatus: "RUNNING" },
+    // 409 khi agent sở hữu nhiệm vụ đang chạy (Agent.status RUNNING) — không
+    // xoá giữa dòng. F-K3-02 (FB-4A): guard cũ tìm AgentRun taskStatus RUNNING
+    // là dead code (cả 3 chỗ tạo AgentRun đều ghi status CUỐI COMPLETED/
+    // FAILED — không dòng RUNNING nào tồn tại) → task đang chạy xoá được.
+    // Kiểm qua task.agentId → Agent đang RUNNING là đúng nghĩa "đang chạy".
+    const running = await db.agent.findFirst({
+      where: { id: task.agentId, status: "RUNNING" },
       select: { id: true },
     });
     if (running) {
       return NextResponse.json(
         {
           error:
-            "Nhiệm vụ đang được chạy (AgentRun RUNNING) — chờ hoàn tất rồi xoá để không mất lịch sử giữa dòng.",
+            "Agent đang chạy đúng nhiệm vụ này — chờ hoàn tất rồi xoá để không mất lịch sử giữa dòng.",
         },
         { status: 409 }
       );

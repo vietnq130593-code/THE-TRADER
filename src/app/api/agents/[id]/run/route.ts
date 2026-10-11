@@ -8,7 +8,7 @@ import {
   formatAllocationForMessage,
   bumpAllocationParseFail,
 } from "@/lib/exec/allocation";
-import { checkAgentRateLimit } from "@/lib/agent-ratelimit";
+import { checkAgentRateLimit, releaseStuckRunningAgents } from "@/lib/agent-ratelimit";
 import { ROSTER_BY_CODE } from "@/lib/agent-roster";
 import { runServiceAgent } from "@/lib/agent-service-runs";
 // K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.2): nhiệm vụ định kỳ — nextDueAt tính
@@ -197,14 +197,16 @@ async function updateTaskAfterRun(
   }
 }
 
-/** Khối prompt nhiệm vụ — tiêm vào user-prompt theo cơ chế context sẵn có. */
+/** Khối prompt nhiệm vụ — tiêm vào user-prompt theo cơ chế context sẵn có.
+ *  COSMETIC-1 (FB-4A): nhãn theo loại nhiệm vụ — có lịch là "NHIỆM VỤ ĐỊNH
+ *  KỲ", nhiệm vụ tay một lần (schedule null) chỉ "NHIỆM VỤ". */
 function buildTaskPromptBlock(
   title: string,
   description: string | null,
   schedule: string | null
 ): string {
   const lines = [
-    `NHIỆM VỤ ĐỊNH KỲ: ${title}`,
+    `${schedule ? "NHIỆM VỤ ĐỊNH KỲ" : "NHIỆM VỤ"}: ${title}`,
     description ?? "(không có mô tả thêm)",
   ];
   if (schedule) {
@@ -331,10 +333,17 @@ export async function POST(
       );
     }
     if (agent.status === "RUNNING") {
-      return NextResponse.json(
-        { error: "Agent đang chạy một tác vụ khác." },
-        { status: 400 }
-      );
+      // F-K3-01: thử watchdog MỘT NGUỒN (agent-ratelimit.ts) TRƯỚC khi chặn —
+      // agent kẹt RUNNING do crash/reload giữa run (không có run sống, quá 5
+      // phút từ lúc claim) được reset IDLE rồi chạy tiếp; agent đang chạy THẬT
+      // (claim còn tươi) vẫn 400 như cũ.
+      const freed = await releaseStuckRunningAgents(agent.id);
+      if (freed === 0) {
+        return NextResponse.json(
+          { error: "Agent đang chạy một tác vụ khác." },
+          { status: 400 }
+        );
+      }
     }
 
     // ── K3 (#94 §6.2): nạp nhiệm vụ khi có taskId — phải thuộc agent này ──

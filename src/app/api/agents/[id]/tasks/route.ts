@@ -177,11 +177,14 @@ export async function POST(
       }
     }
     // Execution Manager chỉ chạy trong chu kỳ đầy đủ (route single-run 409) —
-    // nhiệm vụ định kỳ cho agent này sẽ kẹt due vĩnh viễn → chặn từ gốc.
-    if (schedule && agent.code === "execution-manager") {
+    // mọi nhiệm vụ cho agent này kẹt: định kỳ kẹt due vĩnh viễn, nhiệm vụ tay
+    // một lần cũng 409 ở route run (F-K3-05 FB-4A: chặn CẢ schedule-null,
+    // trước đây chỉ chặn `schedule &&` → task một lần dead-letter) → chặn từ gốc.
+    if (agent.code === "execution-manager") {
       fields.push({
         field: "schedule",
-        message: "Execution Manager chỉ chạy trong chu kỳ đầy đủ — không nhận nhiệm vụ định kỳ.",
+        message:
+          "Execution Manager chỉ chạy trong chu kỳ đầy đủ — không nhận nhiệm vụ (định kỳ lẫn một lần).",
       });
     }
 

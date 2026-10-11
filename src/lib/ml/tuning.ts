@@ -26,6 +26,7 @@ import {
   MLP_ACTIVATIONS,
   MLP_ARCH_V2,
   MLP_FIT_DEFAULTS,
+  MLP_MAX_NEURONS,
   type MlpActivation,
 } from "@/lib/ml/nn";
 
@@ -118,7 +119,7 @@ export const MLP_ARCH_LIMITS: MlpArchLimits = {
   minLayers: 1,
   maxLayers: 5,
   minNeurons: 2,
-  maxNeurons: 96,
+  maxNeurons: MLP_MAX_NEURONS, // F-MLP-02 — một nguồn với constructor guard nn.ts
   activations: [...MLP_ACTIVATIONS],
   lossWeightMin: 0.1,
   lossWeightMax: 10,
@@ -170,10 +171,10 @@ function clampField(v: number, spec: TuningFieldSpec): number {
   return spec.integer ? Math.round(clamped) : clamped;
 }
 
-/** Kẹp 1 lớp ẩn vào [minNeurons, maxNeurons] (phòng thủ ghi tay DB). */
+/** Kẹp 1 lớp ẩn vào [minNeurons, MLP_MAX_NEURONS] (phòng thủ ghi tay DB). */
 function clampNeuron(v: number): number {
   const n = Math.round(v);
-  return Math.min(MLP_ARCH_LIMITS.maxNeurons, Math.max(MLP_ARCH_LIMITS.minNeurons, n));
+  return Math.min(MLP_MAX_NEURONS, Math.max(MLP_ARCH_LIMITS.minNeurons, n));
 }
 
 /** Kẹp 1 trọng số loss vào [0,1 · 10]. */
@@ -213,65 +214,79 @@ function reconcileMlpPartial(p: Partial<MlpTuning>): Partial<MlpTuning> {
  * Migration #94: parsed.mlp có h1/h2 mà KHÔNG có hidden → hidden = [h1, h2]
  * (activations relu×2 — đúng hành vi bản cũ); các trường mới thiếu →
  * effective merge bổ sung mặc định (semantic partial như cũ).
+ *
+ * Logic parse thuần tách ra `parseMlTuningValue` (F-MLP-10 · fixbug FB-4B) —
+ * scripts/ml-arch-verify.ts T10 test migration h1/h2 bằng object giả lập,
+ * KHÔNG cần đụng DB (giữ script hermetic 100% in-memory).
  */
 export async function readMlTuning(): Promise<MlTuning> {
   try {
     const row = await db.appSetting.findUnique({ where: { key: ML_TUNING_KEY } });
     if (!row) return {};
-    const parsed = JSON.parse(row.value) as Partial<MlTuning> & {
-      mlp?: Partial<MlpTuning> & { h1?: unknown; h2?: unknown };
-    };
-    const out: MlTuning = {};
-    const m = (parsed.mlp ?? {}) as Partial<MlpTuning> & { h1?: unknown; h2?: unknown };
-    const mlp: Partial<MlpTuning> = {};
-    for (const key of ["epochs", "patience", "batchSize", "lr", "l2", "valFraction", "seed"] as const) {
-      const v = m[key];
-      if (typeof v === "number" && Number.isFinite(v)) {
-        mlp[key] = clampField(v, FIELD_INDEX[key]);
-      }
-    }
-    if (Array.isArray(m.hidden)) {
-      // hidden đã là mảng (#94) — lọc số hợp lệ + kẹp từng lớp + 1..5 lớp.
-      const hidden = m.hidden
-        .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
-        .map(clampNeuron)
-        .slice(0, MLP_ARCH_LIMITS.maxLayers);
-      if (hidden.length >= MLP_ARCH_LIMITS.minLayers) mlp.hidden = hidden;
-    } else if (typeof m.h1 === "number" || typeof m.h2 === "number") {
-      // Migration #89 → #94: h1/h2 (2 lớp ẩn cố định) → hidden 2 lớp.
-      const h1 = typeof m.h1 === "number" && Number.isFinite(m.h1) ? clampNeuron(m.h1) : MLP_TUNING_DEFAULT.hidden[0];
-      const h2 = typeof m.h2 === "number" && Number.isFinite(m.h2) ? clampNeuron(m.h2) : MLP_TUNING_DEFAULT.hidden[1];
-      mlp.hidden = [h1, h2];
-    }
-    if (Array.isArray(m.activations)) {
-      const acts = m.activations.filter(
-        (v): v is MlpActivation => v === "relu" || v === "tanh" || v === "sigmoid"
-      );
-      if (acts.length >= 1) mlp.activations = acts.slice(0, MLP_ARCH_LIMITS.maxLayers);
-    }
-    if (Array.isArray(m.lossWeights) && m.lossWeights.length === 3) {
-      const [a, b, c] = m.lossWeights;
-      if ([a, b, c].every((v) => typeof v === "number" && Number.isFinite(v))) {
-        mlp.lossWeights = [clampLossWeight(a), clampLossWeight(b), clampLossWeight(c)];
-      }
-    }
-    const reconciled = reconcileMlpPartial(mlp);
-    if (Object.keys(reconciled).length > 0) out.mlp = reconciled as MlpTuning;
-    const r = (parsed.rag ?? {}) as Partial<RagTuning>;
-    const rag: Partial<RagTuning> = {};
-    for (const key of ["topK", "k1", "b", "wRecency"] as const) {
-      const v = r[key];
-      if (typeof v === "number" && Number.isFinite(v)) {
-        rag[key] = clampField(v, FIELD_INDEX[key]);
-      }
-    }
-    if (Object.keys(rag).length > 0) out.rag = rag as RagTuning;
-    if (typeof parsed.updatedAt === "string") out.updatedAt = parsed.updatedAt;
-    return out;
+    return parseMlTuningValue(JSON.parse(row.value));
   } catch (err) {
     console.error("[ml/tuning] readMlTuning lỗi (fail-soft → mặc định):", err);
     return {};
   }
+}
+
+/**
+ * Parse THẦN 1 giá trị AppSetting ml-tuning (đã JSON.parse) → MlTuning chỉ
+ * giữ trường hợp lệ (kẹp phạm vi, lọc mảng rác). Throwing khi JSON hỏng là
+ * việc của caller (readMlTuning nuốt → {}). Migration #94 h1/h2 → hidden
+ * [h1,h2] + activations relu×2 chạy Ở ĐÂY — giá trị cũ ĐƯỢC GIỮ.
+ */
+export function parseMlTuningValue(parsed: unknown): MlTuning {
+  const p = (parsed ?? {}) as Partial<MlTuning> & {
+    mlp?: Partial<MlpTuning> & { h1?: unknown; h2?: unknown };
+  };
+  const out: MlTuning = {};
+  const m = (p.mlp ?? {}) as Partial<MlpTuning> & { h1?: unknown; h2?: unknown };
+  const mlp: Partial<MlpTuning> = {};
+  for (const key of ["epochs", "patience", "batchSize", "lr", "l2", "valFraction", "seed"] as const) {
+    const v = m[key];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      mlp[key] = clampField(v, FIELD_INDEX[key]);
+    }
+  }
+  if (Array.isArray(m.hidden)) {
+    // hidden đã là mảng (#94) — lọc số hợp lệ + kẹp từng lớp + 1..5 lớp.
+    const hidden = m.hidden
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
+      .map(clampNeuron)
+      .slice(0, MLP_ARCH_LIMITS.maxLayers);
+    if (hidden.length >= MLP_ARCH_LIMITS.minLayers) mlp.hidden = hidden;
+  } else if (typeof m.h1 === "number" || typeof m.h2 === "number") {
+    // Migration #89 → #94: h1/h2 (2 lớp ẩn cố định) → hidden 2 lớp.
+    const h1 = typeof m.h1 === "number" && Number.isFinite(m.h1) ? clampNeuron(m.h1) : MLP_TUNING_DEFAULT.hidden[0];
+    const h2 = typeof m.h2 === "number" && Number.isFinite(m.h2) ? clampNeuron(m.h2) : MLP_TUNING_DEFAULT.hidden[1];
+    mlp.hidden = [h1, h2];
+  }
+  if (Array.isArray(m.activations)) {
+    const acts = m.activations.filter(
+      (v): v is MlpActivation => v === "relu" || v === "tanh" || v === "sigmoid"
+    );
+    if (acts.length >= 1) mlp.activations = acts.slice(0, MLP_ARCH_LIMITS.maxLayers);
+  }
+  if (Array.isArray(m.lossWeights) && m.lossWeights.length === 3) {
+    const [a, b, c] = m.lossWeights;
+    if ([a, b, c].every((v) => typeof v === "number" && Number.isFinite(v))) {
+      mlp.lossWeights = [clampLossWeight(a), clampLossWeight(b), clampLossWeight(c)];
+    }
+  }
+  const reconciled = reconcileMlpPartial(mlp);
+  if (Object.keys(reconciled).length > 0) out.mlp = reconciled as MlpTuning;
+  const r = (p.rag ?? {}) as Partial<RagTuning>;
+  const rag: Partial<RagTuning> = {};
+  for (const key of ["topK", "k1", "b", "wRecency"] as const) {
+    const v = r[key];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      rag[key] = clampField(v, FIELD_INDEX[key]);
+    }
+  }
+  if (Object.keys(rag).length > 0) out.rag = rag as RagTuning;
+  if (typeof p.updatedAt === "string") out.updatedAt = p.updatedAt;
+  return out;
 }
 
 /** Merge đã lưu + mặc định — giá trị HIỆU LỰC mà train/rag sẽ dùng. */

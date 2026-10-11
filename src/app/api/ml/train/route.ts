@@ -386,7 +386,11 @@ async function trainDlMlp(
     valFraction: tuning.mlp.valFraction,
     seed: tuning.mlp.seed,
   };
-  const mlp = new MLP(arch, tuning.mlp.activations);
+  // F-MLP-05 (fixbug FB-4B): truyền tuning.mlp.seed vào constructor để seed
+  // điều khiển CẢ khởi tạo trọng số lẫn shuffle (đúng hint "Khởi tạo + xáo
+  // trộn deterministic"). Mặc định 42 = RNG_SEED constructor → hành vi cũ
+  // giữ nguyên tuyệt đối khi trader chưa đổi seed.
+  const mlp = new MLP(arch, tuning.mlp.activations, tuning.mlp.seed);
   const fit = mlp.fit(Xstd, set.y, {
     learningRate: tuning.mlp.lr,
     batchSize: tuning.mlp.batchSize,

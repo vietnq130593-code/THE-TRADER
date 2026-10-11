@@ -65,14 +65,24 @@ async function buildState(): Promise<{
     createdAt: Date;
   }[] = [];
   try {
-    const rows = await db.agentTask.findMany({
-      where: { createdByAgentId: { not: null } },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      include: { agent: { select: { code: true, name: true, group: true } } },
-    });
-    assignedTotal = rows.length;
-    assignedPending = rows.filter((r) => r.status === "PENDING").length;
+    // F-K4-04 (FB-4A): stats đếm bằng count() THẬT theo where — findMany
+    // take:50 chỉ phục vụ bảng danh sách (trước đây assignedTotal/Pending chốt
+    // ở 50 khi >50 nhiệm vụ đã giao). lastAssignedAt vẫn từ rows[0] (orderBy
+    // createdAt desc → dòng mới nhất luôn nằm đầu nếu tồn tại).
+    const [rows, total, pending] = await Promise.all([
+      db.agentTask.findMany({
+        where: { createdByAgentId: { not: null } },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        include: { agent: { select: { code: true, name: true, group: true } } },
+      }),
+      db.agentTask.count({ where: { createdByAgentId: { not: null } } }),
+      db.agentTask.count({
+        where: { createdByAgentId: { not: null }, status: "PENDING" },
+      }),
+    ]);
+    assignedTotal = total;
+    assignedPending = pending;
     lastAssignedAt = rows.length ? rows[0].createdAt.toISOString() : null;
     // Tên agent giao (Chủ tịch) — join thủ công.
     const creatorIds = [

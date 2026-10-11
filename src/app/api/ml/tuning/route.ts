@@ -54,9 +54,13 @@ function buildPayload(saved: MlTuning) {
 }
 
 /**
- * Hoà giải activations về đúng độ dài hidden SAU KHI merge (pad relu / cắt) —
- * chỉ chạy khi hidden có mặt; hidden thay đổi mà không gửi activations →
- * phần thiếu tự bổ "relu" (trình chỉnh sửa luôn gửi kèm nhau nên hiếm khi xảy ra).
+ * Hoà giải activations về đúng độ dài hidden SAU KHI merge (pad relu / cắt).
+ * F-MLP-06 (fixbug FB-4B — sửa comment cho đúng hành vi thật): nhánh 422 ở
+ * POST bên dưới chặn TRƯỚC khi hàm này chạy mỗi khi activations sau merge lệch
+ * độ dài với hidden — kể cả trường hợp CHỈ gửi hidden (merge kéo activations
+ * CŨ theo, lệch độ dài → 422), không phải "hiếm khi xảy ra" như comment cũ
+ * khai. reconcile ở đây thực chất chỉ pad relu khi chưa CÓ activations nào
+ * (saved chỉ hyper #89 + lần đầu gửi hidden) hoặc độ dài đã khớp (no-op).
  */
 function reconcileMlpSection(section: Partial<MlpTuning>): Partial<MlpTuning> {
   if (section.hidden == null) return section;

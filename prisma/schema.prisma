@@ -336,6 +336,9 @@ model AgentRun {
   createdAt DateTime @default(now())
 
   @@index([agentId, startedAt(sort: Desc)])
+  // F-K3-06 (FB-4A): tra cứu run theo nhiệm vụ (verify V4 + guard route
+  // đọc AgentRun theo taskId) — index additive, không đổi cột.
+  @@index([taskId])
 }
 
 model AgentTask {

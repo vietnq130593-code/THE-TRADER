@@ -19,29 +19,68 @@ export type AgentRateLimit =
   | { ok: false; retryAfterSeconds: number };
 
 /**
+ * [F-K3-01] Watchdog MỘT NGUỒN reset Agent.status RUNNING → IDLE khi CẢ HAI:
+ *   - KHÔNG có AgentRun RUNNING nào "sống" của agent, VÀ
+ *   - quá 5 phút kể từ lần ghi status gần nhất (Agent.updatedAt — @updatedAt
+ *     đổi mỗi lần route claim RUNNING / persistRun trả trạng thái).
+ *
+ * Gốc bug (FB-3): cả 3 chỗ gọi ghi AgentRun đều tạo row với status CUỐI
+ * (COMPLETED/FAILED) — không bao giờ tồn tại dòng AgentRun RUNNING — nên nhánh
+ * reset Agent.status cũ (nằm sau `reaped.count > 0`) là dead code. Agent kẹt
+ * RUNNING (process crash / bun --hot / next dev reload giữa run, hoặc
+ * persistRun lỗi DB bị .catch nuốt) → K3 defer vô hạn + chu kỳ 409 +
+ * single-run 400 MÃI MÃI.
+ *
+ * Ranh giới 5 phút không đụng agent đang chạy THẬT: run đơn tối đa ~2 phút
+ * (LLM 45s × retry); chu kỳ 23 agents claim RUNNING lúc khởi động và trả từng
+ * agent khi xong — chu kỳ dài nhất 5 phút (maxDuration route) nên agent đang
+ * xếp hàng giữa chu kỳ luôn có updatedAt (mốc claim) tươi hơn 5 phút.
+ *
+ * Trả số agent đã reset. Idempotent — gọi thoải mái mỗi request.
+ */
+export async function releaseStuckRunningAgents(agentId?: string): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_RUNNING_MS);
+  try {
+    const res = await db.agent.updateMany({
+      where: {
+        ...(agentId ? { id: agentId } : {}),
+        status: "RUNNING",
+        updatedAt: { lt: cutoff },
+        runs: { none: { taskStatus: "RUNNING" } },
+      },
+      data: { status: "IDLE" },
+    });
+    return res.count;
+  } catch {
+    return 0; // không chặn luồng chính vì watchdog
+  }
+}
+
+/**
  * Dọn run kẹt RUNNING (audit AUD-CODE #5): AgentRun RUNNING quá 5 phút →
- * FAILED (lỗi "stale"), agent tương ứng đưa về IDLE nếu không có run sống
- * mới hơn. Trả về số run đã dọn. Idempotent — gọi thoải mái mỗi request.
+ * FAILED (lỗi "stale"). Trả về số run đã dọn. Idempotent — gọi thoải mái mỗi
+ * request.
+ *
+ * [F-K3-01] Reset Agent.status kẹt RUNNING được TÁCH khỏi reaped.count: run
+ * row của hệ này chỉ ghi status cuối nên nhánh reap gần như luôn 0 dòng —
+ * watchdog releaseStuckRunningAgents() vẫn phải chạy (agent kẹt không còn
+ * "run sống" để dựa vào). Gọi cả hai, bất kể kết quả từng bước.
  */
 export async function reapStaleAgentRuns(): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_RUNNING_MS);
   try {
     const reaped = await db.agentRun.updateMany({
       where: { taskStatus: "RUNNING", startedAt: { lt: cutoff } },
-      data: { taskStatus: "FAILED", finishedAt: new Date(), error: "Run kẹt RUNNING ( watchdog dọn sau 5 phút — process có thể đã restart giữa chừng)." },
+      data: { taskStatus: "FAILED", finishedAt: new Date(), error: "Run kẹt RUNNING (watchdog dọn sau 5 phút — process có thể đã restart giữa chừng)." },
     });
-    if (reaped.count === 0) return 0;
     // Agent kẹt trạng thái RUNNING nhưng không còn run sống → trả về IDLE
-    await db.agent.updateMany({
-      where: {
-        status: "RUNNING",
-        runs: { none: { taskStatus: "RUNNING" } },
-      },
-      data: { status: "IDLE" },
-    });
+    // (F-K3-01: chạy BẤT KỂ reaped.count — xem doc releaseStuckRunningAgents).
+    await releaseStuckRunningAgents();
     return reaped.count;
   } catch {
-    return 0; // không chặn luồng chính vì watchdog
+    // run reap lỗi vẫn phải thử reset agent — không chặn luồng chính
+    await releaseStuckRunningAgents();
+    return 0;
   }
 }
 
@@ -50,8 +89,15 @@ export async function reapStaleAgentRuns(): Promise<number> {
  * (a) run mới nhất đang RUNNING (và còn "sống" < 5 phút) → chặn;
  * (b) run mới nhất bắt đầu < 60s sau run trước → chặn kèm số giây còn chờ;
  * còn lại → cho phép. Run RUNNING kẹt quá 5 phút tự động được dọn + cho phép.
+ *
+ * [F-K3-01] Watchdog inline cũ (dọn run RUNNING stale) là dead code vì không
+ * dòng AgentRun RUNNING nào tồn tại — nay delegate về MỘT NGUỒN
+ * releaseStuckRunningAgents: agent kẹt RUNNING quá 5 phút được reset IDLE
+ * ngay đầu hàm (giải 429/400 vĩnh viễn cho chat/single-run của agent đó).
  */
 export async function checkAgentRateLimit(agentId: string): Promise<AgentRateLimit> {
+  // Watchdog một nguồn — reset agent kẹt (nếu có) trước khi quyết định.
+  await releaseStuckRunningAgents(agentId);
   const last = await db.agentRun.findFirst({
     where: { agentId },
     orderBy: { startedAt: "desc" },

@@ -141,7 +141,10 @@ export function buildK4ChairmanPromptBlock(
     "Quy tắc bắt buộc:",
     "- CHỈ giao cho agents trong danh sách dưới đây — KHÔNG giao cho nhóm Ban Điều hành (tự giao việc là cấm).",
     "- Nhiệm vụ là công việc thật (phân tích/kiểm tra/báo cáo/theo dõi) — KHÔNG giao 'nhiệm vụ tạo nhiệm vụ'.",
-    `- Lịch tối thiểu 4 giờ từ bây giờ: "HH:MM" hằng ngày hoặc "MON:HH:MM" hằng tuần; bỏ trống/null = nhiệm vụ một lần.`,
+    // F-K4-02: schedule BẮT BUỘC — engine chỉ dispatch nhiệm vụ có lịch
+    // (due-check lọc schedule≠null); nhiệm vụ "một lần" là dead-letter chiếm
+    // hạn mức PENDING vĩnh viễn → yêu cầu lịch tường minh ngay từ prompt.
+    "- Lịch BẮT BUỘC cho mọi nhiệm vụ, tối thiểu 4 giờ từ bây giờ: \"HH:MM\" hằng ngày hoặc \"MON:HH:MM\" hằng tuần (DOW ∈ MON..SUN) — không để trống/null (nhiệm vụ không có lịch sẽ bị từ chối).",
     "- Chỉ giao khi thực sự cần thiết — không giao cũng được (mảng rỗng).",
     "Agents nhận việc:",
     ...lines,
@@ -160,57 +163,82 @@ export function buildK4ChairmanPromptBlock(
  * hoặc JSON rác đến mức không tách được mảng. Fail-soft tuyệt đối: hàm không
  * ném, chu kỳ vẫn COMPLETED bất kể output thế nào.
  *
- * 3 tầng thử (tăng dần khoan dung): (a) JSON object fenced/toàn văn có khoá
- * assignTasks; (b) bracket-match mảng ngay sau khoá "assignTasks" kể cả khi
- * JSON tổng rác; (c) null.
+ * 3 tầng thử (tăng dần khoan dung):
+ *   (a) JSON object hợp lệ chứa khoá assignTasks — quét MỌI fenced block
+ *       (output Chủ tịch thường có 2+ khối: JSON tín hiệu trước, JSON giao
+ *       việc sau — F-K4-01: chỉ đọc khối ĐẦU sẽ mất nhiệm vụ) + toàn văn;
+ *       ưu tiên khối chứa khoá, khối SAU cùng thắng (F-K4-05: model có thể
+ *       echo ví dụ prompt trước khi xuất JSON thật);
+ *   (b) bracket-match mảng ngay sau khoá "assignTasks" kể cả khi JSON tổng
+ *       rác — quét TOÀN văn raw theo MỌI vị trí khoá, thử từ occurrence CUỐI
+ *       về ĐẦU (F-K4-05, cùng lý do anti-echo);
+ *   (c) null.
  */
 export function extractAssignTasks(raw: string): unknown[] | null {
   if (!raw || !raw.includes("assignTasks")) return null;
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = (fenced ? fenced[1] : raw).trim();
 
-  // (a) JSON object hợp lệ chứa khoá assignTasks
-  const brace = candidate.match(/\{[\s\S]*\}/);
-  if (brace) {
+  // (a) JSON object hợp lệ chứa khoá assignTasks — F-K4-01: quét MỌI fenced
+  // block thay vì chỉ khối đầu tiên. Thứ tự thử: fenced block từ CUỐI về ĐẦU
+  // (khối sau là JSON giao việc thật trong dạng 2-khối; đồng thời chống echo
+  // ví dụ prompt — F-K4-05), sau cùng mới tới toàn văn raw (JSON không fence).
+  const blocks = Array.from(
+    raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/g),
+    (m) => m[1]
+  );
+  const candidates = [...blocks.reverse(), raw.trim()];
+  for (const candidate of candidates) {
+    const brace = candidate.match(/\{[\s\S]*\}/);
+    if (!brace) continue;
     try {
       const obj = JSON.parse(brace[0]) as Record<string, unknown>;
       if (obj && typeof obj === "object" && "assignTasks" in obj) {
         const arr = obj.assignTasks;
-        return Array.isArray(arr) ? arr : null;
+        // Giá trị không phải mảng → ứng viên này rác, thử ứng viên KÉP (block
+        // khác / toàn văn) trước khi đầu hàng — không return null vội.
+        if (Array.isArray(arr)) return arr;
       }
     } catch {
-      // JSON tổng rác — thử tầng (b)
+      // JSON rác ở ứng viên này — thử ứng viên kế (tầng b sẽ quét raw).
     }
   }
 
-  // (b) Bracket-match mảng sau khoá — chịu được narrative lẫn lộn quanh JSON
-  const idx = candidate.indexOf("assignTasks");
-  const open = candidate.indexOf("[", idx);
-  if (open === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = open; i < candidate.length; i++) {
-    const ch = candidate[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "[") depth++;
-    else if (ch === "]") {
-      depth--;
-      if (depth === 0) {
-        try {
-          const arr = JSON.parse(candidate.slice(open, i + 1)) as unknown;
-          return Array.isArray(arr) ? arr : null;
-        } catch {
-          return null;
+  // (b) Bracket-match mảng sau khoá — chịu được narrative lẫn lộn quanh JSON.
+  // F-K4-01/F-K4-05: quét TOÀN văn raw theo MỌI vị trí khoá "assignTasks",
+  // thử từ occurrence CUỐI về ĐẦU (model echo ví dụ prompt TRƯỚC JSON thật).
+  let searchFrom = raw.length;
+  while (searchFrom > 0) {
+    const idx = raw.lastIndexOf("assignTasks", searchFrom - 1);
+    if (idx === -1) return null;
+    const open = raw.indexOf("[", idx);
+    if (open !== -1) {
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let i = open; i < raw.length; i++) {
+        const ch = raw[i];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === "[") depth++;
+        else if (ch === "]") {
+          depth--;
+          if (depth === 0) {
+            try {
+              const arr = JSON.parse(raw.slice(open, i + 1)) as unknown;
+              if (Array.isArray(arr)) return arr;
+            } catch {
+              // Mảng tại occurrence này rác — thử occurrence TRƯỚC đó.
+            }
+            break;
+          }
         }
       }
     }
+    searchFrom = idx;
   }
   return null;
 }
@@ -260,9 +288,10 @@ export interface K4ValidateResult {
  * Validate TỪNG nhiệm vụ propuestas của Chủ tịch — THUẦN, không DB, không
  * ném. Mọi vi phạm → bỏ nhiệm vụ + lý do (KHÔNG crash chu kỳ):
  *   agentCode tồn tại · nhóm ∈ research/control/platform/ml (cấm executive)
- *   · title 1..120 · description ≤600 · schedule qua parser chung + ≥ +4h
- *   · priority ∈ low|medium|high (thiếu → medium) · maxOpenTasksPerAgent
- *   · maxTasksPerCycle.
+ *   · title 1..120 · description ≤600 · schedule BẮT BUỘC qua parser chung
+ *   (F-K4-02 — engine chỉ dispatch task có schedule, nhiệm vụ "một lần"
+ *   dead-letter) + ≥ +4h · priority ∈ low|medium|high (thiếu → medium) ·
+ *   maxOpenTasksPerAgent · maxTasksPerCycle.
  */
 export function validateAssignTasks(
   items: unknown[],
@@ -330,20 +359,28 @@ export function validateAssignTasks(
       }
     }
 
+    // schedule — F-K4-02: BẮT BUỘC. Engine chỉ dispatch nhiệm vụ có lịch
+    // (due-check lọc schedule≠null) nên nhiệm vụ "một lần" là dead-letter
+    // chiếm hạn mức PENDING vĩnh viễn → chặn từ lớp validate với lý do rõ.
+    if (t.schedule == null || t.schedule === "") {
+      skipped.push({
+        agentCode,
+        reason: "schedule bắt buộc (schedule-bat-buoc) — nhiệm vụ một lần không được engine đôn đốc",
+      });
+      continue;
+    }
     // schedule + tối thiểu +4h
     let schedule: string | null = null;
     let nextDueAt: Date | null = null;
-    if (t.schedule != null && t.schedule !== "") {
-      if (typeof t.schedule !== "string" || !parseScheduleGrammar(t.schedule)) {
-        skipped.push({ agentCode, reason: `schedule "${String(t.schedule)}" không đúng grammar HH:MM / DOW:HH:MM` });
-        continue;
-      }
-      schedule = t.schedule.trim();
-      nextDueAt = computeNextDueAt(schedule, ctx.now);
-      if (nextDueAt.getTime() < ctx.now.getTime() + K4_MIN_LEAD_MS) {
-        skipped.push({ agentCode, reason: `lịch ${schedule} sớm hơn +4h từ giờ giao` });
-        continue;
-      }
+    if (typeof t.schedule !== "string" || !parseScheduleGrammar(t.schedule)) {
+      skipped.push({ agentCode, reason: `schedule "${String(t.schedule)}" không đúng grammar HH:MM / DOW:HH:MM` });
+      continue;
+    }
+    schedule = t.schedule.trim();
+    nextDueAt = computeNextDueAt(schedule, ctx.now);
+    if (nextDueAt.getTime() < ctx.now.getTime() + K4_MIN_LEAD_MS) {
+      skipped.push({ agentCode, reason: `lịch ${schedule} sớm hơn +4h từ giờ giao` });
+      continue;
     }
 
     // priority (thiếu → medium; sai kiểu → bỏ)
@@ -433,20 +470,47 @@ export async function assignChairmanTasks(
       k4: opts.k4,
     });
 
+    // F-K4-03: MỘT transaction cho cả lô create — lỗi giữa chừng không còn ghi
+    // nửa lô (partial write mất audit + sai số assigned của chu kỳ). createMany
+    // không trả row từng nhiệm vụ (cần taskId cho created[] + audit) nên dùng
+    // $transaction mảng create — AgentTask id @default(cuid()) vẫn tự sinh.
+    let createdTasks: { id: string }[] = [];
+    try {
+      createdTasks = await db.$transaction(
+        valid.map((v) =>
+          db.agentTask.create({
+            data: {
+              agentId: v.agentId,
+              title: v.title,
+              description: v.description,
+              priority: v.priority,
+              status: "PENDING",
+              schedule: v.schedule,
+              nextDueAt: v.nextDueAt,
+              createdByAgentId: opts.chairmanAgentId,
+            },
+          })
+        )
+      );
+    } catch (err) {
+      // Transaction fail → KHÔNG task nào được ghi — fail-soft, chu kỳ vẫn
+      // COMPLETED (giữ nguyên hợp đồng §7.1: lỗi DB không làm hỏng chu kỳ).
+      console.error("[lib/k4] transaction tạo nhiệm vụ Chủ tịch thất bại:", err);
+      return {
+        parsedCount: items.length,
+        created: [],
+        skipped: [
+          ...skipped,
+          { agentCode: null, reason: "loi-noi-bo (transaction thất bại — không ghi nửa lô)" },
+        ],
+      };
+    }
+
+    // Audit + log SAU transaction đã commit — từng dòng fail-soft riêng.
     const created: AssignChairmanTasksResult["created"] = [];
-    for (const v of valid) {
-      const task = await db.agentTask.create({
-        data: {
-          agentId: v.agentId,
-          title: v.title,
-          description: v.description,
-          priority: v.priority,
-          status: "PENDING",
-          schedule: v.schedule,
-          nextDueAt: v.nextDueAt,
-          createdByAgentId: opts.chairmanAgentId,
-        },
-      });
+    for (let i = 0; i < createdTasks.length; i++) {
+      const task = createdTasks[i];
+      const v = valid[i];
       created.push({
         taskId: task.id,
         agentCode: v.agentCode,

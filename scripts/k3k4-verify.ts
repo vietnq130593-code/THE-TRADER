@@ -22,8 +22,21 @@
  *      schedule rác · sớm hơn +4h · maxOpenTasksPerAgent · maxTasksPerCycle) +
  *      assignChairmanTasks DB (JSON hợp lệ tạo đúng createdByAgentId=Chủ tịch
  *      · JSON rác bị bỏ, không crash).
- *  V6  Dọn sạch: xoá toàn bộ task test (+ AgentRun/AgentMessage test của V4)
- *      + trả AppSetting "k4" về trạng thái TRƯỚC test.
+ *  V5b FB-4A (fixbug vòng 3 — vá K3/K4 theo báo cáo FB-3):
+ *      V-2BLOCKS extractAssignTasks dạng 2 fenced block (JSON tín hiệu trước
+ *      + JSON giao việc sau — S1/M4 đã gãy) · dạng unfenced sau khối tín hiệu
+ *      (M3) · echo ví dụ prompt trước JSON thật (S7 — lấy occurrence cuối) ·
+ *      echo unfenced trước JSON thật (tier b).
+ *      V-SCHED-NULL validateAssignTasks chặn schedule null/rỗng với lý do
+ *      schedule-bat-buoc (nhiệm vụ một lần là dead-letter — engine chỉ chạy
+ *      task có lịch).
+ *      V-WATCHDOG F-K3-01: agent status RUNNING quá 5 phút KHÔNG có run sống
+ *      → reapStaleAgentRuns() reset IDLE ngay cả khi reaped.count === 0 (đường
+ *      dead-code cũ); claim còn tươi (<5ph) KHÔNG bị đụng. Agent test tự tạo +
+ *      tự dọn (hermetic).
+ *  V6  Dọn sạch: xoá toàn bộ task test (+ AgentRun/AgentMessage test của V4
+ *      + agent test watchdog của V5b) + trả AppSetting "k4" về trạng thái
+ *      TRƯỚC test.
  *
  * Chạy: `bun scripts/k3k4-verify.ts` (dev server :3000 đang chạy).
  */
@@ -43,6 +56,8 @@ import {
   type K4AgentInfo,
   type K4Stored,
 } from "../src/lib/k4";
+// FB-4A (F-K3-01): watchdog reset Agent.status kẹt RUNNING — test V-WATCHDOG.
+import { reapStaleAgentRuns } from "../src/lib/agent-ratelimit";
 
 const APP_URL = process.env.APP_URL ?? "http://127.0.0.1:3000";
 const ICT_OFFSET_MS = 7 * 3_600_000;
@@ -130,6 +145,7 @@ async function main(): Promise<void> {
   const testTaskIds: string[] = [];
   const testRunIds: string[] = [];
   const testMessageIds: string[] = [];
+  const testAgentIds: string[] = []; // FB-4A V-WATCHDOG — agent test tự tạo
   let k4RowBefore: { key: string; value: string } | null = null;
 
   try {
@@ -623,6 +639,131 @@ async function main(): Promise<void> {
       );
     }
 
+    /* ═══ V5b — FB-4A: V-2BLOCKS · V-SCHED-NULL · V-WATCHDOG ═══ */
+    console.log("\nV5b · FB-4A — parse 2 khối + schedule bắt buộc + watchdog:");
+    {
+      // ── V-2BLOCKS · F-K4-01/F-K4-05: extractAssignTasks quét MỌI fenced ──
+      // S1/M4 (đã gãy với bản cũ — regex match() chỉ lấy khối ĐẦU): Chủ tịch
+      // xuất JSON tín hiệu fence TRƯỚC + JSON giao việc fence SAU (đúng dạng
+      // prompt "kèm khối JSON NGOÀI JSON tín hiệu đã có, CUỐI phản hồi").
+      const twoBlocks =
+        'Tổng hợp phiên…\n```json\n{"summary":"S","signal":{"symbol":"VCB","direction":"BUY"},"sentiment":"bullish"}\n```\n\nGiao việc cho tuần tới:\n```json\n{"assignTasks":[{"agentCode":"liquidity","title":"Theo dõi thanh khoản HNX","description":"Báo cáo ngắn","schedule":"TUE:23:00","priority":"high"}]}\n```';
+      const parsed2 = extractAssignTasks(twoBlocks);
+      check(
+        "V-2BLOCKS: 2 fenced block (tín hiệu trước + giao việc sau) → ĐÚNG nhiệm vụ khối 2",
+        Array.isArray(parsed2) &&
+          parsed2.length === 1 &&
+          (parsed2[0] as { agentCode?: string; schedule?: string })?.agentCode === "liquidity" &&
+          (parsed2[0] as { schedule?: string })?.schedule === "TUE:23:00"
+      );
+
+      // M3 (đã gãy): JSON tín hiệu fence + JSON giao việc KHÔNG fence ngay sau.
+      const unfenced =
+        'Tổng hợp phiên…\n```json\n{"summary":"S","signal":{"symbol":"VCB"}}\n```\n\n{"assignTasks":[{"agentCode":"news-sentiment","title":"Đội nhỏ tổng hợp tin","schedule":"WED:23:00"}]}';
+      const parsedU = extractAssignTasks(unfenced);
+      check(
+        "V-2BLOCKS: giao việc unfenced SAU khối tín hiệu fence → parse được (tier b toàn văn)",
+        Array.isArray(parsedU) &&
+          parsedU.length === 1 &&
+          (parsedU[0] as { agentCode?: string })?.agentCode === "news-sentiment"
+      );
+
+      // S7 (đã gãy): model ECHO ví dụ prompt (fence) TRƯỚC JSON thật (fence) —
+      // lấy khối SAU cùng chứa khoá (JSON thật), không tạo nhiệm vụ từ ví dụ.
+      const echoFenced =
+        'Ví dụ dạng output:\n```json\n{"assignTasks":[{"agentCode":"liquidity","title":"VÍ DỤ từ prompt","schedule":"14:00"}]}\n```\n\nJSON thật của tôi:\n```json\n{"assignTasks":[{"agentCode":"market-analyst","title":"THẬT — rà vùng hỗ trợ","schedule":"SAT:23:00"}]}\n```';
+      const parsedE = extractAssignTasks(echoFenced);
+      check(
+        "V-2BLOCKS: echo ví dụ fence TRƯỚC JSON thật fence → lấy JSON THẬT (occurrence cuối)",
+        Array.isArray(parsedE) &&
+          parsedE.length === 1 &&
+          (parsedE[0] as { agentCode?: string; title?: string })?.agentCode === "market-analyst" &&
+          String((parsedE[0] as { title?: string })?.title).startsWith("THẬT")
+      );
+
+      // S7 biến thể tier (b): echo ví dụ UNFENCED trước JSON thật unfenced —
+      // bracket-match quét raw từ occurrence CUỐI về ĐẦU → lấy JSON thật.
+      const echoUnfenced =
+        'Như ví dụ: {"assignTasks":[{"agentCode":"liquidity","title":"VÍ DỤ","schedule":"14:00"}]}\n\nĐây mới là giao việc thật:\n{"assignTasks":[{"agentCode":"liquidity","title":"THẬT — đo dòng tiền","schedule":"SUN:23:00"}]}';
+      const parsedEU = extractAssignTasks(echoUnfenced);
+      check(
+        "V-2BLOCKS: echo ví dụ unfenced trước JSON thật unfenced → tier b lấy JSON THẬT (occurrence cuối)",
+        Array.isArray(parsedEU) &&
+          parsedEU.length === 1 &&
+          String((parsedEU[0] as { title?: string })?.title).startsWith("THẬT")
+      );
+
+      // ── V-SCHED-NULL · F-K4-02: schedule null/rỗng bị chặn ──
+      const agentsByCodeB = new Map<string, K4AgentInfo>(
+        [liquidity, newsAgent, analyst].map((a) => [
+          a.code,
+          { id: a.id, code: a.code, name: a.name, group: a.group },
+        ])
+      );
+      const schedNull = validateAssignTasks(
+        [
+          { agentCode: "liquidity", title: "Không có lịch", schedule: null },
+          { agentCode: "news-sentiment", title: "Lịch rỗng", schedule: "" },
+          { agentCode: "market-analyst", title: "Thiếu hẳn trường schedule" },
+        ],
+        {
+          agentsByCode: agentsByCodeB,
+          openTaskCountByCode: new Map<string, number>(),
+          now: new Date(),
+          k4: { enabled: true, maxOpenTasksPerAgent: 3, maxTasksPerCycle: 5 },
+        }
+      );
+      check(
+        "V-SCHED-NULL: schedule null/rỗng/thiếu → BỎ với lý do schedule-bat-buoc (dead-letter)",
+        schedNull.valid.length === 0 &&
+          schedNull.skipped.length === 3 &&
+          schedNull.skipped.every((s) => s.reason.includes("schedule-bat-buoc")),
+        schedNull.skipped.map((s) => s.reason).join(" | ").slice(0, 160)
+      );
+
+      // ── V-WATCHDOG · F-K3-01: agent kẹt RUNNING không run sống → reset IDLE ──
+      // Agent test tự tạo (hermetic — không đụng agent thật; V6 dọn). Không có
+      // dòng AgentRun RUNNING nào trong hệ (run row chỉ ghi status cuối) →
+      // reaped.count === 0 → đường reset cũ là DEAD CODE, bản vá vẫn phải chạy.
+      const watchdogAgent = await db.agent.create({
+        data: {
+          code: "test-watchdog-fb4a",
+          name: "TEST FB-4A watchdog",
+          role: "NEWS_SENTIMENT",
+          group: "research",
+          description: "Agent kiểm định hermetic FB-4A — tự xoá sau verify.",
+          status: "RUNNING",
+          // Ép mốc "claim" 6 phút trước — quá ngưỡng watchdog 5 phút.
+          updatedAt: new Date(Date.now() - 6 * 60_000),
+        },
+      });
+      testAgentIds.push(watchdogAgent.id);
+      const reapedCount = await reapStaleAgentRuns();
+      const stuck = await db.agent.findUnique({
+        where: { id: watchdogAgent.id },
+        select: { status: true },
+      });
+      check(
+        "V-WATCHDOG: agent RUNNING >5ph không run sống → reset IDLE NGAY CẢ KHI reaped.count === 0",
+        stuck?.status === "IDLE" && reapedCount === 0,
+        `status=${String(stuck?.status)} · reaped=${reapedCount}`
+      );
+      // Claim còn tươi (< 5 phút) → KHÔNG đụng agent đang chạy thật.
+      await db.agent.update({
+        where: { id: watchdogAgent.id },
+        data: { status: "RUNNING" }, // updatedAt tự refresh = now
+      });
+      await reapStaleAgentRuns();
+      const fresh = await db.agent.findUnique({
+        where: { id: watchdogAgent.id },
+        select: { status: true },
+      });
+      check(
+        "V-WATCHDOG: claim còn tươi (<5ph) → GIỮ RUNNING (không đụng agent đang chạy thật)",
+        fresh?.status === "RUNNING"
+      );
+    }
+
     /* ═══ V6 — Dọn dẹp hermetic ═══ */
     console.log("\nV6 · Dọn sạch dữ liệu test:");
     {
@@ -647,15 +788,22 @@ async function main(): Promise<void> {
       for (const id of testTaskIds) {
         await db.agentTask.delete({ where: { id } }).catch(() => undefined);
       }
+      // FB-4A V-WATCHDOG — xoá agent test (cascade xoá run/rács của nó).
+      for (const id of testAgentIds) {
+        await db.agent.delete({ where: { id } }).catch(() => undefined);
+      }
       const left = await db.agentTask.count({
         where: { id: { in: testTaskIds } },
       });
       const leftRuns = await db.agentRun.count({
         where: { id: { in: testRunIds } },
       });
+      const leftAgents = await db.agent.count({
+        where: { id: { in: testAgentIds } },
+      });
       check(
-        `xoá ${testTaskIds.length} nhiệm vụ test + ${testRunIds.length} AgentRun test`,
-        left === 0 && leftRuns === 0
+        `xoá ${testTaskIds.length} nhiệm vụ test + ${testRunIds.length} AgentRun test + ${testAgentIds.length} agent test`,
+        left === 0 && leftRuns === 0 && leftAgents === 0
       );
       // Trả AppSetting "k4" về trạng thái TRƯỚC test (xóa key nếu trước đó chưa có).
       if (k4RowBefore) {
@@ -688,6 +836,9 @@ async function main(): Promise<void> {
       }
       for (const id of testRunIds) {
         await db.agentRun.delete({ where: { id } }).catch(() => undefined);
+      }
+      for (const id of testAgentIds) {
+        await db.agent.delete({ where: { id } }).catch(() => undefined);
       }
       if (k4RowBefore) {
         await db.appSetting

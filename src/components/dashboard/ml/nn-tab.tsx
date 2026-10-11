@@ -18,7 +18,9 @@
  *      (ReLU/tanh/sigmoid), 3 ô trọng số loss [DOWN, FLAT, UP] (0,1..10),
  *      bảng tham số W+b sống + cảnh báo quá tham số hoá > 5.000, sơ đồ nháp
  *      SVG cập nhật ĐỘNG, Lưu kiến trúc (POST /api/ml/tuning), Đặt lại về
- *      mặc định, Huấn luyện ngay (hook useTrainMl — target dl-mlp).
+ *      mặc định, Huấn luyện ngay (hook useTrainMl — target dl-mlp; F-MLP-01
+ *      · fixbug FB-4B: nút BỊ KHOÁ khi nháp chưa lưu — tránh train nhầm arch
+ *      cũ đã lưu trong khi màn hình hiển thị bản nháp mới).
  *
  * Trung thực: bản serving giữ nguyên đến khi train lại qua serving-swap guard
  * (valAcc ≥ bản cũ) — ghi chú rõ trên UI. Không có bản serving → empty-state
@@ -1037,8 +1039,12 @@ function ArchEditor({
           variant="secondary"
           className="min-h-11 gap-2"
           onClick={() => train.mutate("dl-mlp")}
-          disabled={save.isPending || train.isPending}
-          title="Huấn luyện lại MLP với kiến trúc đang lưu (AppSetting ml-tuning) trên dữ liệu EOD thật"
+          disabled={dirty || save.isPending || train.isPending}
+          title={
+            dirty
+              ? "Kiến trúc chưa lưu — bấm “Lưu kiến trúc” trước để bản huấn luyện dùng đúng cấu hình đang chỉnh (F-MLP-01)"
+              : "Huấn luyện lại MLP với kiến trúc đang lưu (AppSetting ml-tuning) trên dữ liệu EOD thật"
+          }
         >
           {train.isPending ? (
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -1050,8 +1056,8 @@ function ArchEditor({
       </div>
       {dirty && (
         <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
-          Kiến trúc chưa lưu — bấm “Lưu kiến trúc” trước khi huấn luyện để bản
-          train dùng đúng cấu hình này.
+          Kiến trúc chưa lưu — nút Huấn luyện bị khoá đến khi lưu; bấm “Lưu kiến
+          trúc” để bản train dùng đúng cấu hình này (F-MLP-01).
         </p>
       )}
       <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">

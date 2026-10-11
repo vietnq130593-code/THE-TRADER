@@ -3,7 +3,8 @@
  *
  * Backprop VIẾT TAY (cross-entropy + class-weight 1/freq × trọng số loss từng
  * đầu ra) + tối ưu Adam (β1 0,9 · β2 0,999 · ε 1e-8) + L2 weight-decay (chỉ
- * áp lên W, không áp bias). Khởi tạo He-normal, trọng số lưu Float64Array
+ * áp lên W, không áp bias). Khởi tạo uniform ±√(2/fanIn) — gần phương sai
+ * He, kế thừa semantics #89 (F-MLP-08); trọng số lưu Float64Array
  * phẳng để chạy nhanh trên Bun. Kiến trúc mặc định **v2-lag16:
  * 16 → 24 ReLU → 12 ReLU → 3 softmax (747 tham số)** — nhưng giờ mỗi lớp ẩn
  * (1..5 lớp, 2..96 nơ-rôn) có activation riêng relu | tanh | sigmoid.
@@ -47,8 +48,16 @@ export type MlpActivation = "relu" | "tanh" | "sigmoid";
 export const MLP_ACTIVATIONS: readonly MlpActivation[] = ["relu", "tanh", "sigmoid"];
 
 /**
- * Kiến trúc MLP N-layer (#94): hidden 1..5 lớp, mỗi lớp 2..96 nơ-rôn, mỗi lớp
- * một activation riêng. `in` do featureSet quyết định (lag16 = 16), `out` = 3.
+ * Trần nơ-rôn mỗi lớp ẩn (F-MLP-02 · fixbug FB-4B) — một nguồn sự thật dùng
+ * cả ở constructor guard lẫn MLP_ARCH_LIMITS của tuning.ts (tránh 2 chỗ lệch
+ * số). Phòng thủ weights JSON rác arch "16-500-3" dựng lưới 500 nơ-rôn.
+ */
+export const MLP_MAX_NEURONS = 96;
+
+/**
+ * Kiến trúc MLP N-layer (#94): hidden 1..5 lớp, mỗi lớp ≤ MLP_MAX_NEURONS
+ * (constructor chặn 1..96; UI/tuning kẹp 2..96), mỗi lớp một activation
+ * riêng. `in` do featureSet quyết định (lag16 = 16), `out` = 3.
  */
 export interface MlpArch {
   in: number;
@@ -219,29 +228,34 @@ export class MLP {
     activations?: readonly MlpActivation[],
     seed: number = RNG_SEED
   ) {
-    // Guard kiến trúc — 1..5 lớp ẩn, mỗi lớp ≥ 1 nơ-rôn (parseMlpArch đã ép
-    // chuỗi arch; đây chặn caller dựng object tay).
+    // Guard kiến trúc — 1..5 lớp ẩn, mỗi lớp 1..MLP_MAX_NEURONS nơ-rôn
+    // (parseMlpArch đã ép chuỗi arch; đây chặn caller dựng object tay VÀ
+    // weights JSON rác "16-500-3" — F-MLP-02 · fixbug FB-4B).
     if (
       !Array.isArray(arch.hidden) ||
       arch.hidden.length < 1 ||
       arch.hidden.length > 5 ||
-      arch.hidden.some((h) => !Number.isInteger(h) || h < 1) ||
+      arch.hidden.some((h) => !Number.isInteger(h) || h < 1 || h > MLP_MAX_NEURONS) ||
       !Number.isInteger(arch.in) ||
       arch.in < 1 ||
       !Number.isInteger(arch.out) ||
       arch.out < 1
     ) {
       throw new Error(
-        `arch MLP không hợp lệ: in=${arch.in} hidden=[${arch.hidden?.join(",")}] out=${arch.out}`
+        `arch MLP không hợp lệ (1..5 lớp ẩn, mỗi lớp 1..${MLP_MAX_NEURONS} nơ-rôn): in=${arch.in} hidden=[${arch.hidden?.join(",")}] out=${arch.out}`
       );
     }
     this.arch = arch;
     this.activations = normalizeActivations(activations ?? [], arch.hidden.length);
     const rng = mulberry32(seed);
-    // He initialization — mọi activation (đơn giản, deterministic).
+    // Khởi tạo uniform ±√(2/fanIn) với fanIn = số CỘT vào khối — variance
+    // (2/fanIn)/3, cùng bậc lượng với He chuẩn (F-MLP-08: sửa nhãn doc — đây
+    // KHÔNG phải He-normal mà là uniform đối xứng kế thừa semantics #89, giữ
+    // nguyên để bản train trước/sau không lệch nhau). Mọi activation dùng chung
+    // một kiểu (đơn giản, deterministic).
     const init = (rows: number, cols: number) => {
       const arr = new Float64Array(rows * cols);
-      const scale = Math.sqrt(2 / cols); // fanIn = cols
+      const scale = Math.sqrt(2 / cols); // fanIn = cols → biên ±√(2/fanIn)
       for (let i = 0; i < arr.length; i++) arr[i] = (rng() * 2 - 1) * scale;
       return arr;
     };
@@ -330,7 +344,10 @@ export class MLP {
       }
     }
     // #94 — hyper do caller truyền (tab Tinh chỉnh + trình chỉnh sửa kiến trúc)
-    // hoặc mặc định module; seed điều khiển shuffle (độc lập init constructor).
+    // hoặc mặc định module; seed điều khiển shuffle bên trong fit. F-MLP-05
+    // (fixbug FB-4B): train route giờ TRUYỀN CÙNG tuning.mlp.seed vào constructor
+    // → init trọng số + shuffle đều theo một seed (mặc định 42 giữ nguyên hành
+    // vi cũ — constructor mặc định RNG_SEED = 42).
     const lr = opts.learningRate ?? LEARNING_RATE;
     const batchSize = Math.max(1, Math.round(opts.batchSize ?? BATCH_SIZE));
     const maxEpochs = Math.max(1, Math.round(opts.maxEpochs ?? MAX_EPOCHS));

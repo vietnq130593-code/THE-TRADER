@@ -187,6 +187,21 @@ export interface MlTrainResponse {
   /** "valacc" = thua baseline (A4) · "featureset-gate" = khác bộ đặc trưng,
    *  cổng B2 chưa mở (B1 #81) · "first" = chưa có bản trước. */
   promotionReason?: "valacc" | "featureset-gate" | "first";
+  /** #94 — cấu hình MLP THẾT SỰ áp dụng cho bản vừa train (F-MLP-01 · fixbug
+   *  FB-4B: FE đưa arch vào toast để trader thấy đúng kiến trúc đã dùng —
+   *  tránh tưởng train bằng bản nháp chưa lưu). Tolerant khi backend cũ thiếu. */
+  appliedTuning?: {
+    arch: string;
+    activations: string[];
+    lossWeights: [number, number, number];
+    lr: number;
+    batchSize: number;
+    maxEpochs: number;
+    patience: number;
+    l2: number;
+    valFraction: number;
+    seed: number;
+  };
 }
 
 /* ─────────────────── Fetch helpers ─────────────────── */
@@ -574,6 +589,9 @@ export function useTrainMl() {
     },
     onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: ML_STATUS_QUERY_KEY });
+      // F-MLP-07 (fixbug FB-4B): sơ đồ serving trên tab Mạng thần kinh đọc từ
+      // /api/ml/architecture — không invalidate thì stale ≤60-120s sau train.
+      void queryClient.invalidateQueries({ queryKey: ML_ARCHITECTURE_QUERY_KEY });
 
       // Toast với số liệu THẬT từ response (tolerant — backend có thể thiếu field).
       const trained = Array.isArray(res.trained) ? res.trained : [];
@@ -612,6 +630,11 @@ export function useTrainMl() {
         }
       }
 
+      // F-MLP-01 (fixbug FB-4B): arch THẬT đã áp dụng từ response — trader
+      // nhìn toast biết ngay train bằng arch nào (bản lưu, không phải nháp).
+      const appliedArch =
+        typeof res.appliedTuning?.arch === "string" ? res.appliedTuning.arch : null;
+
       const title =
         valAccPct != null && episodes != null
           ? `Đã huấn luyện MLP (valAcc ${valAccPct}) + Q-learning (${episodes} episodes)${secs ? ` trong ${secs}` : ""}`
@@ -623,7 +646,11 @@ export function useTrainMl() {
 
       toast.success(title, {
         description:
-          [trained.length > 0 ? `Mục tiêu: ${trained.join(", ")}` : null, notServing]
+          [
+            trained.length > 0 ? `Mục tiêu: ${trained.join(", ")}` : null,
+            appliedArch != null ? `Arch đã áp dụng: ${appliedArch}` : null,
+            notServing,
+          ]
             .filter((part): part is string => part != null)
             .join(" · ") || undefined,
       });

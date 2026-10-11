@@ -36,7 +36,8 @@ export const runtime = "nodejs";
  *
  * Cache in-memory 60s (parse schema + đếm dòng không cần mỗi request).
  * Fail-soft từng phần: db lỗi → models rỗng + approximate:false; MLP không
- * có bản serving → mlp:null (UI empty-state trung thực).
+ * có bản serving HOẶC weights/arch rác (F-MLP-03 · fixbug FB-4B) → mlp:null
+ * (UI empty-state trung thực).
  */
 
 /* ─────────────────── Nhóm model (phân loại hiển thị) ─────────────────── */
@@ -206,42 +207,60 @@ async function buildMlpInfo(): Promise<{
 
   // #94 — nạp CẢ HAI định dạng weights: blocks (mới) hoặc W1..b3 (cũ, 2 lớp
   // ẩn relu) → map thành blocks tương đương. Serving v8/v19 không vỡ.
-  let arch: { in: number; hidden: number[]; out: number } = { in: 10, hidden: [16, 8], out: 3 };
-  let activations: MlpActivation[] = ["relu", "relu"];
-  let blocks: MlpWeightBlock[] | null = null;
+  // F-MLP-03 (fixbug FB-4B): weights JSON hỏng HOẶC arch-string không parse
+  // được → trả null cho CẢ phần mlp (UI empty-state trung thực) — KHÔNG giữ
+  // arch mặc định 10-16-8-3 sai sự thật cho bản serving rác.
+  let w: {
+    arch?: string;
+    activations?: unknown;
+    blocks?: unknown;
+    W1?: number[];
+    b1?: number[];
+    W2?: number[];
+    b2?: number[];
+    W3?: number[];
+    b3?: number[];
+  };
   try {
-    const w = JSON.parse(row.weights) as {
-      arch?: string;
-      activations?: unknown;
-      blocks?: unknown;
-      W1?: number[];
-      b1?: number[];
-      W2?: number[];
-      b2?: number[];
-      W3?: number[];
-      b3?: number[];
-    };
-    if (w.arch) arch = parseMlpArch(w.arch);
-    activations = normalizeActivations(w.activations, arch.hidden.length);
-    if (Array.isArray(w.blocks)) {
-      const parsedBlocks = (w.blocks as { W?: unknown; b?: unknown }[]).map((bk) => ({
-        W: (Array.isArray(bk.W) ? bk.W : []).map(round3),
-        b: (Array.isArray(bk.b) ? bk.b : []).map(round3),
-      }));
-      // Chỉ nhận blocks khi đúng số khối (hidden + 1) — sai thì bỏ, tính arch.
-      blocks = parsedBlocks.length === arch.hidden.length + 1 ? parsedBlocks : null;
-    } else if (Array.isArray(w.W1) && Array.isArray(w.b1) && Array.isArray(w.W3)) {
-      // Định dạng CŨ W1..b3 (trước #94) — chính xác 2 lớp ẩn relu.
-      if (arch.hidden.length === 2) {
-        blocks = [
-          { W: (w.W1 ?? []).map(round3), b: (w.b1 ?? []).map(round3) },
-          { W: (w.W2 ?? []).map(round3), b: (w.b2 ?? []).map(round3) },
-          { W: (w.W3 ?? []).map(round3), b: (w.b3 ?? []).map(round3) },
-        ];
-      }
-    }
+    w = JSON.parse(row.weights) as typeof w;
   } catch {
-    blocks = null; // weights hỏng → vẫn trả arch mặc định + null weights
+    return null; // weights không phải JSON hợp lệ → mlp:null trung thực
+  }
+  let arch: { in: number; hidden: number[]; out: number };
+  try {
+    // Thiếu arch (bản cực cũ không có chuỗi) → mặc định v8 10-16-8-3; arch
+    // CÓ nhưng rác → parseMlpArch throw → mlp:null (không phóng đo).
+    arch = typeof w.arch === "string" ? parseMlpArch(w.arch) : { in: 10, hidden: [16, 8], out: 3 };
+  } catch {
+    return null; // arch-string rác → mlp:null (F-MLP-03)
+  }
+  const activations: MlpActivation[] = normalizeActivations(w.activations, arch.hidden.length);
+  let blocks: MlpWeightBlock[] | null = null;
+  if (Array.isArray(w.blocks)) {
+    const parsedBlocks = (w.blocks as { W?: unknown; b?: unknown }[]).map((bk) => ({
+      W: (Array.isArray(bk.W) ? bk.W : []).map(round3),
+      b: (Array.isArray(bk.b) ? bk.b : []).map(round3),
+    }));
+    // Chỉ nhận blocks khi đúng số khối (hidden + 1) — sai thì bỏ, tính arch.
+    blocks = parsedBlocks.length === arch.hidden.length + 1 ? parsedBlocks : null;
+  } else if (
+    // F-MLP-04 (fixbug FB-4B): kiểm ĐỦ 6 mảng W1,b1,W2,b2,W3,b3 như nn.ts
+    // fromJSON — thiếu W2/b2 → weights null (không chấp nhận khối giữa rỗng).
+    Array.isArray(w.W1) &&
+    Array.isArray(w.b1) &&
+    Array.isArray(w.W2) &&
+    Array.isArray(w.b2) &&
+    Array.isArray(w.W3) &&
+    Array.isArray(w.b3)
+  ) {
+    // Định dạng CŨ W1..b3 (trước #94) — chính xác 2 lớp ẩn relu.
+    if (arch.hidden.length === 2) {
+      blocks = [
+        { W: w.W1.map(round3), b: w.b1.map(round3) },
+        { W: w.W2.map(round3), b: w.b2.map(round3) },
+        { W: w.W3.map(round3), b: w.b3.map(round3) },
+      ];
+    }
   }
 
   // paramCount tính TỪ BLOCKS THẬT (đúng từng khối W+b); thiếu blocks → công thức arch.

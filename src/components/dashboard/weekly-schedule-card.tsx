@@ -21,6 +21,15 @@ import type { ScheduledTaskRow } from "@/lib/types";
  * Dữ liệu từ GET /api/agents → scheduledTasks (workspace cha truyền vào).
  */
 
+/** Nhãn aria tiếng Việt đúng cho 1 thứ trong tuần.
+ *  COSMETIC-2 (FB-4A): DOW 0 là "Chủ nhật" — KHÔNG tiền tố "Thứ" (trước đây
+ *  "Thứ Chủ nhật" sai tiếng Việt); các ngày khác DOW_LABELS_VN đã chứa
+ *  "thứ Hai"… — chỉ viết hoa chữ đầu ("Thứ Hai"), không nhân đôi tiền tố. */
+function dayAriaLabel(d: number): string {
+  const label = DOW_LABELS_VN[d] ?? "";
+  return d === 0 ? label : label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 /** Dòng hiển thị 1 nhiệm vụ trong lịch. */
 function ScheduleLine({ t, time }: { t: ScheduledTaskRow; time: string }) {
   return (
@@ -130,7 +139,11 @@ export function WeeklyScheduleCard({ tasks }: { tasks: ScheduledTaskRow[] }) {
         {dayOrder
           .filter((d) => (byDow.get(d)?.length ?? 0) > 0)
           .map((d) => (
-            <div key={d} className="rounded-lg border bg-muted/30 p-2.5" aria-label={`Thứ ${DOW_LABELS_VN[d]}`}>
+            <div
+              key={d}
+              className="rounded-lg border bg-muted/30 p-2.5"
+              aria-label={dayAriaLabel(d)}
+            >
               <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 {DOW_LABELS_VN[d]}
               </p>

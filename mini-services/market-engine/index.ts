@@ -699,7 +699,12 @@ interface K3DueTask {
 }
 const k3InFlight = new Set<string>();
 const K3_GET_TIMEOUT_MS = 10_000;
-const K3_RUN_POST_TIMEOUT_MS = 110_000;
+// F-K3-07 (FB-4A): mặc định 130s > maxDuration 120s của route run — engine
+// không tự cắt sớm request còn đang chạy hợp lệ (env override vẫn tôn trọng).
+const K3_RUN_POST_TIMEOUT_MS =
+  Number(process.env.K3_RUN_POST_TIMEOUT_MS) > 0
+    ? Number(process.env.K3_RUN_POST_TIMEOUT_MS)
+    : 130_000;
 const K3_DEFER_PATCH_TIMEOUT_MS = 15_000;
 const K3_DEFER_MINUTES = 5;
 async function k3DeferBusyTask(t: K3DueTask): Promise<void> {
@@ -772,11 +777,14 @@ async function k3TaskDueCheck(): Promise<void> {
   if (tasks.length === 0) return;
   for (const t of tasks) {
     if (typeof t.taskId !== "string" || typeof t.agentId !== "string") continue;
+    // F-K3-03 (FB-4A): in-flight TRƯỚC defer — run do CHÍNH engine vừa bắn
+    // đang chạy thì KHÔNG hoãn (trước đây defer-check đứng trước khiến engine
+    // tự hoãn task nó đang chạy: agent được trả RUNNING sau khi POST bắt đầu).
+    if (k3InFlight.has(t.taskId)) continue; // run chưa xong — không bắn kép
     if (t.agentStatus === "RUNNING") {
       void k3DeferBusyTask(t);
       continue;
     }
-    if (k3InFlight.has(t.taskId)) continue; // run chưa xong — không bắn kép
     void k3DispatchTask(t);
   }
 }
