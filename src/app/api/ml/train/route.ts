@@ -12,7 +12,7 @@ import {
   type TrainingSetWithSeries,
   type TrainingWindowMeta,
 } from "@/lib/ml/features";
-import { MLP, type MlpArch } from "@/lib/ml/nn";
+import { MLP, mlpArchString, type MlpArch } from "@/lib/ml/nn";
 import { GRU } from "@/lib/ml/gru";
 import { readEffectiveMlTuning } from "@/lib/ml/tuning";
 import { buildTrainingSequences, ML_GRU_WINDOW } from "@/lib/ml/features";
@@ -94,14 +94,20 @@ interface MlModelMeta extends TrainingWindowMeta {
   gateVerdict?: "PASS" | "FAIL";
   /** B3 (#81) — độ dài cửa sổ chuỗi (chỉ kind dl-gru). */
   window?: number;
-  /** #89 — cấu hình tinh chỉnh THẬT đã train bản này (AppSetting ml-tuning
-   *  tại thời điểm train — truy vết mỗi bản dùng arch/hyper nào). */
+  /** #89 → #94 — cấu hình tinh chỉnh THẬT đã train bản này (AppSetting
+   *  ml-tuning tại thời điểm train — truy vết mỗi bản dùng arch/hyper nào).
+   *  #94: arch N-layer + activations từng lớp + lossWeights từng đầu ra. */
   tuning?: {
     arch: string;
+    activations: string[];
+    lossWeights: [number, number, number];
     lr: number;
     batchSize: number;
     maxEpochs: number;
     patience: number;
+    l2: number;
+    valFraction: number;
+    seed: number;
   };
 }
 
@@ -307,19 +313,25 @@ async function recentWindowHashesOf(
   };
 }
 
-/** #89 — hyper MLP THẬT SỰ áp dụng cho lần train này (từ AppSetting
- *  ml-tuning, fail-soft → mặc định module). Trả ra response + meta để truy
- *  vết mỗi bản được train với cấu hình nào. */
+/** #89 → #94 — hyper + kiến trúc MLP THẬT SỰ áp dụng cho lần train này (từ
+ *  AppSetting ml-tuning, fail-soft → mặc định module). Trả ra response + meta
+ *  để truy vết mỗi bản được train với cấu hình nào. */
 interface AppliedMlpTuning {
   arch: string;
+  activations: string[];
+  lossWeights: [number, number, number];
   lr: number;
   batchSize: number;
   maxEpochs: number;
   patience: number;
+  l2: number;
+  valFraction: number;
+  seed: number;
 }
 
 /**
- * Train MLP v2-lag16 (16→h1→h2→3, tham số tuỳ chọn #89) trên top-20 thanh khoản:
+ * Train MLP v2-lag16 (16 → hidden[] N-layer, tham số hoá #89 + kiến trúc
+ * N-layer #94) trên top-20 thanh khoản:
  * buildTrainingSet → cap 60k mẫu gần nhất → z-score → fit (Adam,
  * early-stop) → topSymbols theo độ tách pUp−pDown của mô hình trên từng mã
  * → lưu MlModel kind dl-mlp (meta ghi featureSet "v2-lag16" + tuning #89).
@@ -351,30 +363,39 @@ async function trainDlMlp(
   // A3 (#79) — histogram đặc trưng RAW của TRAIN split (đồng bộ meta PSI)
   const featureHist = computeFeatureHist(set.X);
   const { mean, std, Xstd } = standardize(set.X);
-  // #89 — arch + hyper từ AppSetting ml-tuning (fail-soft: không có key →
-  // đúng MLP_ARCH_V2 16-24-12-3 + lr 0,01/batch 32/60 epoch/patience 12 —
-  // hành vi trước #89 giữ nguyên từng số). Chiều in LUÔN = ML_FEATURE_COUNT
-  // (tuyến đặc trưng cố định — chỉ lớp ẩn/optimizer là tuỳ chỉnh được).
+  // #89 → #94 — arch + activations + hyper từ AppSetting ml-tuning (fail-soft:
+  // không có key → đúng MLP_ARCH_V2 16-24-12-3 relu×2 + lr 0,01/batch 32/60
+  // epoch/patience 12/lossWeights [1,1,1]/l2 0/val 0,2/seed 42 — hành vi
+  // trước #94 giữ nguyên từng số). Chiều in LUÔN = ML_FEATURE_COUNT (tuyến
+  // đặc trưng cố định — chỉ lớp ẩn/activation/optimizer là tuỳ chỉnh được).
   const tuning = await readEffectiveMlTuning();
   const arch: MlpArch = {
     in: ML_FEATURE_COUNT,
-    h1: tuning.mlp.h1,
-    h2: tuning.mlp.h2,
+    hidden: tuning.mlp.hidden,
     out: 3,
   };
   const appliedTuning: AppliedMlpTuning = {
-    arch: `${arch.in}-${arch.h1}-${arch.h2}-${arch.out}`,
+    arch: mlpArchString(arch),
+    activations: tuning.mlp.activations,
+    lossWeights: tuning.mlp.lossWeights,
     lr: tuning.mlp.lr,
     batchSize: tuning.mlp.batchSize,
     maxEpochs: tuning.mlp.epochs,
     patience: tuning.mlp.patience,
+    l2: tuning.mlp.l2,
+    valFraction: tuning.mlp.valFraction,
+    seed: tuning.mlp.seed,
   };
-  const mlp = new MLP(arch);
+  const mlp = new MLP(arch, tuning.mlp.activations);
   const fit = mlp.fit(Xstd, set.y, {
     learningRate: tuning.mlp.lr,
     batchSize: tuning.mlp.batchSize,
     maxEpochs: tuning.mlp.epochs,
     patience: tuning.mlp.patience,
+    lossWeights: tuning.mlp.lossWeights,
+    l2: tuning.mlp.l2,
+    valFraction: tuning.mlp.valFraction,
+    seed: tuning.mlp.seed,
   });
   mlp.setNorm({ mean, std });
 

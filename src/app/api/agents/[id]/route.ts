@@ -180,6 +180,16 @@ export async function GET(
           status: t.status,
           priority: t.priority,
           createdAt: t.createdAt,
+          // K3 (#94 — AUTONOMY_BLUEPRINT §6.1): trường mới additive (tab
+          // Nhiệm vụ giờ đọc đầy đủ từ GET /api/agents/[id]/tasks riêng).
+          schedule: t.schedule,
+          nextDueAt: t.nextDueAt,
+          lastRunAt: t.lastRunAt,
+          runCount: t.runCount,
+          failStreak: t.failStreak,
+          paused: t.paused,
+          createdByAgentId: t.createdByAgentId,
+          completedAt: t.completedAt,
         })),
         chat: chat.map((m) => ({
           id: m.id,

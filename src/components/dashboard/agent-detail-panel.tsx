@@ -47,11 +47,10 @@ import {
   agentSuccessPct,
 } from "@/components/dashboard/agent-roster-card";
 import { AgentChat } from "@/components/dashboard/agent-chat";
-import {
-  MessageItem,
-  PriorityBadge,
-  TaskStatusIcon,
-} from "@/components/dashboard/agents-panel";
+// K3 (#94 — AUTONOMY_BLUEPRINT §6.4): tab Nhiệm vụ nâng cấp — form tạo nhiệm
+// vụ định kỳ + danh sách đầy đủ trường mới + tạm dừng/xoá/chạy ngay.
+import { AgentTasksTab } from "@/components/dashboard/agent-tasks-tab";
+import { MessageItem } from "@/components/dashboard/agents-panel";
 import type { AgentDetailResponse, SignalRow } from "@/lib/types";
 
 /** Input → Output theo vai (map tĩnh tiếng Việt — PHASE3 §4.6). */
@@ -503,31 +502,9 @@ export function AgentDetailPanel({
             </div>
           </TabsContent>
 
-          {/* ── Nhiệm vụ ──────────────────────────────────────────── */}
+          {/* ── Nhiệm vụ (K3 #94 — định kỳ + tay, form tạo, tạm dừng, xoá) ── */}
           <TabsContent value="tasks" className="mt-3">
-            {detail.tasks.length > 0 ? (
-              <ul className="max-h-96 divide-y overflow-y-auto custom-scrollbar">
-                {detail.tasks.map((t) => (
-                  <li
-                    key={t.id}
-                    className="flex min-h-11 items-center gap-3 py-2.5 pr-2"
-                  >
-                    <TaskStatusIcon status={t.status} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{t.title}</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {t.agentName}
-                      </p>
-                    </div>
-                    <PriorityBadge priority={t.priority} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Không có nhiệm vụ nào.
-              </p>
-            )}
+            <AgentTasksTab agentId={agent.id} agentCode={agent.code} />
           </TabsContent>
 
           {/* ── Phát thanh (broadcast feed + tín hiệu mở) ─────────── */}

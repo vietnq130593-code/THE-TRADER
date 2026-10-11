@@ -1,20 +1,27 @@
 /**
- * src/lib/ml/nn.ts — MẠNG NƠ-RON MLP THẬT, KIẾN TRÚC THAM SỐ HOÁ (B1 #81).
+ * src/lib/ml/nn.ts — MẠNG NƠ-RON MLP THẬT, KIẾN TRÚC N-LỚP TÙY CHỈNH (#94 · Task 3).
  *
- * Backprop VIẾT TAY (cross-entropy + class-weight 1/freq) + tối ưu Adam
- * (β1 0,9 · β2 0,999 · ε 1e-8). Khởi tạo He-normal, trọng số lưu Float64Array
- * phẳng để chạy nhanh trên Bun. Kiến trúc mặc định **v2-lag16: 16 → 24 ReLU →
- * 12 ReLU → 3 softmax (747 tham số)** — ML_OPS_BLUEPRINT §4 B1; `fromJSON`
- * nạp đúng arch ghi trong weights JSON (bản v8 serving "10-16-8-3" vẫn đọc
- * được — tương thích ngược qua cửa hoán đổi theo cổng B2).
+ * Backprop VIẾT TAY (cross-entropy + class-weight 1/freq × trọng số loss từng
+ * đầu ra) + tối ưu Adam (β1 0,9 · β2 0,999 · ε 1e-8) + L2 weight-decay (chỉ
+ * áp lên W, không áp bias). Khởi tạo He-normal, trọng số lưu Float64Array
+ * phẳng để chạy nhanh trên Bun. Kiến trúc mặc định **v2-lag16:
+ * 16 → 24 ReLU → 12 ReLU → 3 softmax (747 tham số)** — nhưng giờ mỗi lớp ẩn
+ * (1..5 lớp, 2..96 nơ-rôn) có activation riêng relu | tanh | sigmoid.
+ *
+ * Serialize format MỚI (#94): { arch: "16-24-12-3", activations: ["relu","relu"],
+ * blocks: [{W, b} × hidden.length], norm }. `fromJSON` nạp được CẢ HAI định
+ * dạng — bản cũ W1/b1/W2/b2/W3/b3 (v8 serving "10-16-8-3", v19+ "16-24-12-3")
+ * map thành blocks tương đương với activation relu — bản serving đang chạy
+ * không được vỡ (cửa hoán đổi theo cổng B2 giữ nguyên hợp đồng).
  *
  * Quy ước class: 0 = DOWN · 1 = FLAT · 2 = UP. predictProba trả theo thứ tự
- * [pUp, pFlat, pDown] cho dễ dùng phía serving/Bayes. Cut 80/20 THEO THỜI GIAN
- * (val = block cuối — không leakage tương lai), shuffle chỉ trong train split.
- * Early-stop patience theo valLoss, khôi phục trọng số tốt nhất.
+ * [pUp, pFlat, pDown] cho dễ dùng phía serving/Bayes. Cut train/val THEO THỜI
+ * GIAN (val = block cuối — không leakage tương lai, tỷ lệ tuỳ chỉnh
+ * valFraction mặc định 0,2), shuffle chỉ trong train split. Early-stop patience
+ * theo valLoss (KHÔNG weighting), khôi phục trọng số tốt nhất.
  *
- * RNG seed cố định (mulberry32) → kết quả huấn luyện deterministic/lặp lại
- * được — metrics trung thực, không "may rủi" từng lần train.
+ * RNG seed cố định (mulberry32, tuỳ chỉnh qua opts.seed mặc định 42) → kết quả
+ * huấn luyện deterministic/lặp lại được — metrics trung thực.
  */
 
 /** Tham số chuẩn hoá z-score nhúng vào mô hình khi lưu (weights + norm). */
@@ -33,35 +40,65 @@ export interface MlpMetrics {
   valLoss: number;
 }
 
-/** Kiến trúc MLP — tham số hoá B1 (#81), không còn hardcode 10-16-8-3. */
+/** Hàm kích hoạt của TỪNG lớp ẩn — relu giữ hành vi trước #94 (mặc định). */
+export type MlpActivation = "relu" | "tanh" | "sigmoid";
+
+/** Danh sách activation hợp lệ — validate của tuning.ts/UI dùng lại (một nguồn). */
+export const MLP_ACTIVATIONS: readonly MlpActivation[] = ["relu", "tanh", "sigmoid"];
+
+/**
+ * Kiến trúc MLP N-layer (#94): hidden 1..5 lớp, mỗi lớp 2..96 nơ-rôn, mỗi lớp
+ * một activation riêng. `in` do featureSet quyết định (lag16 = 16), `out` = 3.
+ */
 export interface MlpArch {
   in: number;
-  h1: number;
-  h2: number;
+  hidden: number[];
   out: number;
 }
 
 /**
- * Kiến trúc v2-lag16 (B1 — ML_OPS_BLUEPRINT §4): IN 16 → H1 24 → H2 12 →
+ * Kiến trúc v2-lag16 (B1 — ML_OPS_BLUEPRINT §4): IN 16 → 24 ReLU → 12 ReLU →
  * OUT 3 = 24×16+24 + 12×24+12 + 3×12+3 = **747 tham số** (~84 mẫu/tham số
  * danh nghĩa trên 60k mẫu — vùng an toàn so GRU §B3).
  */
-export const MLP_ARCH_V2: MlpArch = { in: 16, h1: 24, h2: 12, out: 3 };
+export const MLP_ARCH_V2: MlpArch = { in: 16, hidden: [24, 12], out: 3 };
 
-/** Chuỗi arch canonical "in-h1-h2-out" (ghi vào weights JSON khi lưu). */
+/** Chuỗi arch canonical "in-hidden…-out" (ghi vào weights JSON khi lưu). */
 export function mlpArchString(arch: MlpArch): string {
-  return `${arch.in}-${arch.h1}-${arch.h2}-${arch.out}`;
+  return `${arch.in}-${arch.hidden.join("-")}-${arch.out}`;
 }
 
-/** Parse "in-h1-h2-out" → MlpArch; throw khi sai format (fromJSON dùng). */
+/**
+ * Parse "in-hidden…-out" → MlpArch. Chuỗi 3..7 phần nguyên dương (đầu vào −
+ * 1..5 lớp ẩn − đầu ra): "16-8-3" (1 lớp ẩn) · "16-24-12-3" (2 lớp, giữ
+ * nguyên nghĩa bản cũ) · "16-24-12-8-3" (3 lớp). Throw khi sai format —
+ * fromJSON dùng để chặn JSON hỏng.
+ */
 export function parseMlpArch(s: string): MlpArch {
   const parts = s.split("-");
-  if (parts.length !== 4) throw new Error(`arch MLP sai định dạng: "${s}"`);
+  if (parts.length < 3 || parts.length > 7) {
+    throw new Error(`arch MLP sai định dạng (cần 3..7 phần, nhận ${parts.length}): "${s}"`);
+  }
   const nums = parts.map((p) => Number(p));
   if (nums.some((n) => !Number.isInteger(n) || n <= 0)) {
     throw new Error(`arch MLP sai số: "${s}"`);
   }
-  return { in: nums[0], h1: nums[1], h2: nums[2], out: nums[3] };
+  return { in: nums[0], hidden: nums.slice(1, -1), out: nums[nums.length - 1] };
+}
+
+/**
+ * Chuẩn hoá mảng activation về đúng độ dài lớp ẩn: thiếu →補 "relu" (giữ hành
+ * vi bản cũ), thừa → cắt. Giá trị lạ → "relu" (fail-safe phục vụ serving).
+ * Nhận `unknown` — từJSON có thể thiếu/trống/bất kỳ kiểu gì.
+ */
+export function normalizeActivations(acts: unknown, hiddenCount: number): MlpActivation[] {
+  const out: MlpActivation[] = [];
+  const src = Array.isArray(acts) ? (acts as unknown[]) : [];
+  for (let i = 0; i < hiddenCount; i++) {
+    const v = src[i];
+    out.push(v === "tanh" || v === "sigmoid" || v === "relu" ? v : "relu");
+  }
+  return out;
 }
 
 const ADAM_B1 = 0.9;
@@ -73,15 +110,27 @@ const MAX_EPOCHS = 60;
 const PATIENCE = 12;
 const VAL_FRACTION = 0.2;
 const RNG_SEED = 42;
+const L2 = 0;
+const LOSS_WEIGHTS: readonly [number, number, number] = [1, 1, 1];
 
-/** Tuỳ chọn huấn luyện MLP (#89 — tinh chỉnh từ tab "Tinh chỉnh").
- *  Mặc định từng trường = hằng số phía trên — không truyền thì hành vi
- *  GIỮ NGUYÊN như trước #89 (deterministic, seed 42). */
+/**
+ * Tuỳ chọn huấn luyện MLP (#89 + #94). Mặc định từng trường = hằng số phía
+ * trên — không truyền thì hành vi GIỮ NGUYÊN như trước #94 (deterministic,
+ * seed 42, valFraction 0,2, không L2, lossWeights đều 1).
+ */
 export interface MlpFitOptions {
   learningRate?: number;
   batchSize?: number;
   maxEpochs?: number;
   patience?: number;
+  /** Nhân với class-weight tự động 1/tần suất — thứ tự class [DOWN, FLAT, UP]. */
+  lossWeights?: readonly [number, number, number];
+  /** Weight-decay L2 — áp CHỈ lên W, không áp bias. */
+  l2?: number;
+  /** Tỷ lệ val (block cuối, cut theo thời gian) — 0,1..0,4 hợp lý. */
+  valFraction?: number;
+  /** Seed RNG (init + shuffle) — deterministic khi cố định. */
+  seed?: number;
 }
 
 /** Mặc định fit — nguồn sự thật duy nhất cho ml/tuning.ts (không copy số). */
@@ -90,6 +139,10 @@ export const MLP_FIT_DEFAULTS: Readonly<Required<MlpFitOptions>> = {
   batchSize: BATCH_SIZE,
   maxEpochs: MAX_EPOCHS,
   patience: PATIENCE,
+  lossWeights: [...LOSS_WEIGHTS] as [number, number, number],
+  l2: L2,
+  valFraction: VAL_FRACTION,
+  seed: RNG_SEED,
 };
 
 /** RNG mulberry32 — deterministic, đủ tốt cho init/shuffle/ε-greedy. */
@@ -117,44 +170,107 @@ function softmax(z: Float64Array): Float64Array {
   return out;
 }
 
+/** Kích hoạt lớp ẩn theo loại. */
+function activate(kind: MlpActivation, z: number): number {
+  switch (kind) {
+    case "tanh":
+      return Math.tanh(z);
+    case "sigmoid":
+      return 1 / (1 + Math.exp(-z));
+    default: // relu
+      return z > 0 ? z : 0;
+  }
+}
+
+/**
+ * Đạo hàm activation tính từ GIÁ TRỊ SAU kích hoạt a (không cần z):
+ * relu: a>0?1:0 (a = max(0,z)) · tanh: 1−a² · sigmoid: a(1−a).
+ */
+function actDerivFromOut(kind: MlpActivation, a: number): number {
+  switch (kind) {
+    case "tanh":
+      return 1 - a * a;
+    case "sigmoid":
+      return a * (1 - a);
+    default: // relu
+      return a > 0 ? 1 : 0;
+  }
+}
+
+/** Cache forward — activation từng lớp ẩn + xác suất softmax đầu ra. */
+interface MlpForwardCache {
+  a: Float64Array[];
+  p: Float64Array;
+}
+
 /** Mô hình MLP — dùng như class: new MLP() → fit → predictProba. */
 export class MLP {
   private readonly arch: MlpArch;
-  // Trọng số phẳng: W1[H1×IN], b1[H1], W2[H2×H1], b2[H2], W3[OUT×H2], b3[OUT]
-  private W1: Float64Array;
-  private b1: Float64Array;
-  private W2: Float64Array;
-  private b2: Float64Array;
-  private W3: Float64Array;
-  private b3: Float64Array;
+  /** Activation TỪNG lớp ẩn — độ dài = hidden.length. */
+  readonly activations: MlpActivation[];
+  /** Trọng số phẳng Ws[l][to×from] (row-major) + bias bs[l] — l chạy trên lớp ẩn. */
+  private Ws: Float64Array[];
+  private bs: Float64Array[];
   /** Chuẩn hoá z-score đặc trưng (set sau khi fit trên X đã chuẩn hoá). */
   norm: MlpNorm | null = null;
 
-  constructor(arch: MlpArch = MLP_ARCH_V2, seed: number = RNG_SEED) {
+  constructor(
+    arch: MlpArch = MLP_ARCH_V2,
+    activations?: readonly MlpActivation[],
+    seed: number = RNG_SEED
+  ) {
+    // Guard kiến trúc — 1..5 lớp ẩn, mỗi lớp ≥ 1 nơ-rôn (parseMlpArch đã ép
+    // chuỗi arch; đây chặn caller dựng object tay).
+    if (
+      !Array.isArray(arch.hidden) ||
+      arch.hidden.length < 1 ||
+      arch.hidden.length > 5 ||
+      arch.hidden.some((h) => !Number.isInteger(h) || h < 1) ||
+      !Number.isInteger(arch.in) ||
+      arch.in < 1 ||
+      !Number.isInteger(arch.out) ||
+      arch.out < 1
+    ) {
+      throw new Error(
+        `arch MLP không hợp lệ: in=${arch.in} hidden=[${arch.hidden?.join(",")}] out=${arch.out}`
+      );
+    }
     this.arch = arch;
-    const { in: IN, h1: H1, h2: H2, out: OUT } = arch;
+    this.activations = normalizeActivations(activations ?? [], arch.hidden.length);
     const rng = mulberry32(seed);
-    const init = (rows: number, cols: number, fanIn: number) => {
+    // He initialization — mọi activation (đơn giản, deterministic).
+    const init = (rows: number, cols: number) => {
       const arr = new Float64Array(rows * cols);
-      const scale = Math.sqrt(2 / fanIn); // He initialization (ReLU)
+      const scale = Math.sqrt(2 / cols); // fanIn = cols
       for (let i = 0; i < arr.length; i++) arr[i] = (rng() * 2 - 1) * scale;
       return arr;
     };
-    this.W1 = init(H1, IN, IN);
-    this.b1 = new Float64Array(H1);
-    this.W2 = init(H2, H1, H1);
-    this.b2 = new Float64Array(H2);
-    this.W3 = init(OUT, H2, H2);
-    this.b3 = new Float64Array(OUT);
+    this.Ws = [];
+    this.bs = [];
+    let from = arch.in;
+    for (const h of arch.hidden) {
+      this.Ws.push(init(h, from));
+      this.bs.push(new Float64Array(h));
+      from = h;
+    }
+    // Khối RA (softmax) — Ws/bs chỉ số L (cuối) — cùng mảng với các lớp ẩn.
+    this.Ws.push(init(arch.out, from));
+    this.bs.push(new Float64Array(arch.out));
   }
 
   /** Số tham số khả huấn luyện (metrics/nghiệm thu ghi rõ). */
   get paramCount(): number {
-    const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
-    return H1 * IN + H1 + H2 * H1 + H2 + OUT * H2 + OUT;
+    let count = 0;
+    let from = this.arch.in;
+    for (const h of this.arch.hidden) {
+      count += h * from + h;
+      from = h;
+    }
+    count += this.arch.out * from + this.arch.out;
+    return count;
   }
 
-  /** Chuỗi arch "in-h1-h2-out" của bản này. */
+  /** Chuỗi arch "in-hidden…-out" của bản này. */
   get archString(): string {
     return mlpArchString(this.arch);
   }
@@ -165,42 +281,47 @@ export class MLP {
   }
 
   /** Forward 1 mẫu (đã chuẩn hoá) → softmax 3 class [DOWN, FLAT, UP]. */
-  private forward(x: number[], cache: { h1: Float64Array; h2: Float64Array; p: Float64Array }): void {
-    const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
-    const { W1, b1, W2, b2, W3, b3 } = this;
-    const h1 = cache.h1;
-    for (let j = 0; j < H1; j++) {
-      let s = b1[j];
-      const off = j * IN;
-      for (let k = 0; k < IN; k++) s += W1[off + k] * x[k];
-      h1[j] = s > 0 ? s : 0; // ReLU
+  private forward(x: readonly number[], cache: MlpForwardCache): void {
+    const { in: IN, hidden, out: OUT } = this.arch;
+    let input: readonly number[] | Float64Array = x;
+    for (let l = 0; l < hidden.length; l++) {
+      const to = hidden[l];
+      const from = l === 0 ? IN : hidden[l - 1];
+      const W = this.Ws[l];
+      const b = this.bs[l];
+      const a = cache.a[l];
+      for (let j = 0; j < to; j++) {
+        let s = b[j];
+        const off = j * from;
+        for (let k = 0; k < from; k++) s += W[off + k] * input[k];
+        a[j] = activate(this.activations[l], s);
+      }
+      input = a;
     }
-    const h2 = cache.h2;
-    for (let j = 0; j < H2; j++) {
-      let s = b2[j];
-      const off = j * H1;
-      for (let k = 0; k < H1; k++) s += W2[off + k] * h1[k];
-      h2[j] = s > 0 ? s : 0; // ReLU
-    }
-    const z3 = new Float64Array(OUT);
+    const zOut = new Float64Array(OUT);
+    const L = hidden.length; // ≥ 1 (guard constructor)
+    const from = hidden[L - 1];
+    const W = this.Ws[L];
+    const b = this.bs[L];
     for (let j = 0; j < OUT; j++) {
-      let s = b3[j];
-      const off = j * H2;
-      for (let k = 0; k < H2; k++) s += W3[off + k] * h2[k];
-      z3[j] = s;
+      let s = b[j];
+      const off = j * from;
+      for (let k = 0; k < from; k++) s += W[off + k] * input[k];
+      zOut[j] = s;
     }
-    cache.p = softmax(z3);
+    cache.p = softmax(zOut);
   }
 
   /**
    * Huấn luyện trên X ĐÃ CHUẨN HOÁ (caller dùng standardize trước).
-   * Cross-entropy có class-weight w_c = (N/3)/N_c (1/tần suất, chuẩn hoá
-   * mean 1) — val loss KHÔNG weighting để so sánh epoch ↔ epoch công bằng.
+   * Cross-entropy có class-weight w_c = (N/3)/N_c × lossWeights[c] (1/tần suất
+   * × tuỳ chỉnh đầu ra, thứ tự [DOWN, FLAT, UP]) — val loss KHÔNG weighting
+   * để so sánh epoch ↔ epoch công bằng. L2 (opts.l2) áp CHỈ lên W. Cut
+   * train/val theo THỜI GIAN với tỷ lệ opts.valFraction (val = block cuối).
    * Xếp độ dài theo cột arch.in (bản lag16 16 chiều — caller cùng featureSet).
-   * #89: opts override lr/batch/epochs/patience (mặc định = hằng số module).
    */
   fit(X: number[][], y: number[], opts: MlpFitOptions = {}): MlpMetrics {
-    const { in: IN, h1: H1, h2: H2, out: OUT } = this.arch;
+    const { in: IN, hidden, out: OUT } = this.arch;
     const n = X.length;
     if (n < OUT * 10) throw new Error(`MLP fit cần ≥ ${OUT * 10} mẫu, nhận ${n}`);
     for (const row of X) {
@@ -208,37 +329,52 @@ export class MLP {
         throw new Error(`MLP fit nhận vector ${row.length} chiều ≠ arch ${IN} (featureSet lệch?)`);
       }
     }
-    const rng = mulberry32(RNG_SEED + 7);
-    // #89 — hyper do caller truyền (tab Tinh chỉnh) hoặc mặc định module.
+    // #94 — hyper do caller truyền (tab Tinh chỉnh + trình chỉnh sửa kiến trúc)
+    // hoặc mặc định module; seed điều khiển shuffle (độc lập init constructor).
     const lr = opts.learningRate ?? LEARNING_RATE;
     const batchSize = Math.max(1, Math.round(opts.batchSize ?? BATCH_SIZE));
     const maxEpochs = Math.max(1, Math.round(opts.maxEpochs ?? MAX_EPOCHS));
     const patience = Math.max(1, Math.round(opts.patience ?? PATIENCE));
+    const l2 = Math.max(0, opts.l2 ?? L2);
+    const valFraction = Math.min(0.5, Math.max(0.05, opts.valFraction ?? VAL_FRACTION));
+    const seed = Math.max(0, Math.round(opts.seed ?? RNG_SEED));
+    const lossW = opts.lossWeights ?? LOSS_WEIGHTS;
+    const rng = mulberry32(seed + 7);
 
-    // Class-weight 1/freq (mất class → weight 1)
+    // Class-weight 1/freq × lossWeights (mất class → weight 1)
     const counts = [0, 0, 0];
     for (const label of y) counts[label]++;
-    const weights = counts.map((c) => (c > 0 ? n / 3 / c : 1));
+    const weights = counts.map((c, i) => (c > 0 ? (n / 3 / c) * (lossW[i] ?? 1) : lossW[i] ?? 1));
 
-    // Cut 80/20 theo THỜI GIAN — val là block cuối
-    const nTrain = Math.floor(n * (1 - VAL_FRACTION));
+    // Cut theo THỜI GIAN với tỷ lệ valFraction — val là block cuối
+    const nTrain = Math.floor(n * (1 - valFraction));
     const trainIdx: number[] = [];
     for (let i = 0; i < nTrain; i++) trainIdx.push(i);
     const valIdx: number[] = [];
     for (let i = nTrain; i < n; i++) valIdx.push(i);
 
-    // Adam state cho từng khối tham số
-    const params = [this.W1, this.b1, this.W2, this.b2, this.W3, this.b3];
+    // Adam state cho từng khối tham số: [W0..WL-1, b0..bL-1] + khối ra.
+    // Quy ước blocks: 0..hidden.length-1 = W ẩn, hidden.length..2L-1 = b ẩn,
+    // 2L = W ra, 2L+1 = b ra (paramCount blocks = 2L + 2).
+    const L = hidden.length;
+    const params: Float64Array[] = [];
+    for (let l = 0; l < L; l++) params.push(this.Ws[l]);
+    for (let l = 0; l < L; l++) params.push(this.bs[l]);
+    params.push(this.Ws[L]); // W ra
+    params.push(this.bs[L]); // b ra
     const grads = params.map((p) => new Float64Array(p.length));
     const m = params.map((p) => new Float64Array(p.length));
     const v = params.map((p) => new Float64Array(p.length));
     let adamStep = 0;
 
     // Cache forward + gradient trung gian (tái sử dụng — không alloc trong loop)
-    const cache = { h1: new Float64Array(H1), h2: new Float64Array(H2), p: new Float64Array(OUT) };
-    const dh1 = new Float64Array(H1);
-    const dh2 = new Float64Array(H2);
-    const dz3 = new Float64Array(OUT);
+    const cache: MlpForwardCache = {
+      a: hidden.map((h) => new Float64Array(h)),
+      p: new Float64Array(OUT),
+    };
+    const dzOut = new Float64Array(OUT);
+    const delta = new Float64Array(Math.max(...hidden, OUT));
+    const deltaNext = new Float64Array(Math.max(...hidden, OUT));
 
     const snapshot = () => params.map((p) => p.slice());
     let bestValLoss = Infinity;
@@ -263,56 +399,46 @@ export class MLP {
           const i = trainIdx[bi];
           const x = X[i];
           this.forward(x, cache);
-          const { h1, h2, p } = cache;
 
-          // Gradient cross-entropy (có class-weight), mean theo batch
+          // Gradient cross-entropy lớp ra (class-weight × lossWeights, mean batch)
           const cw = weights[y[i]] / bs;
-          dz3.fill(0);
-          for (let c = 0; c < OUT; c++) dz3[c] = (p[c] - (c === y[i] ? 1 : 0)) * cw;
+          dzOut.fill(0);
+          for (let c = 0; c < OUT; c++) dzOut[c] = (cache.p[c] - (c === y[i] ? 1 : 0)) * cw;
+          delta.set(dzOut);
 
-          // Lớp 3: dW3 = dz3·h2ᵀ, dh2 = W3ᵀ·dz3
-          const gW3 = grads[4];
-          const gb3 = grads[5];
-          dh2.fill(0);
-          for (let j = 0; j < OUT; j++) {
-            const d = dz3[j];
-            gb3[j] += d;
-            const off = j * H2;
-            for (let k = 0; k < H2; k++) {
-              gW3[off + k] += d * h2[k];
-              dh2[k] += this.W3[off + k] * d;
+          // Backward từ lớp ra xuống lớp ẩn đầu — l = L là KHỐI RA.
+          for (let l = L; l >= 0; l--) {
+            const to = l === L ? OUT : hidden[l];
+            const from = l === 0 ? IN : l === L ? hidden[L - 1] : hidden[l - 1];
+            const prev: readonly number[] | Float64Array = l === 0 ? x : cache.a[l - 1];
+            const gW = grads[l === L ? 2 * L : l]; // W của lớp l (ra = 2L)
+            const gb = grads[l === L ? 2 * L + 1 : L + l]; // b của lớp l (ra = 2L+1)
+            for (let j = 0; j < to; j++) {
+              const d = delta[j];
+              gb[j] += d;
+              const off = j * from;
+              for (let k = 0; k < from; k++) gW[off + k] += d * prev[k];
             }
-          }
-          // ReLU gate lớp 2
-          for (let k = 0; k < H2; k++) if (h2[k] <= 0) dh2[k] = 0;
-
-          // Lớp 2: dW2 = dh2·h1ᵀ, dh1 = W2ᵀ·dh2
-          const gW2 = grads[2];
-          const gb2 = grads[3];
-          dh1.fill(0);
-          for (let j = 0; j < H2; j++) {
-            const d = dh2[j];
-            gb2[j] += d;
-            const off = j * H1;
-            for (let k = 0; k < H1; k++) {
-              gW2[off + k] += d * h1[k];
-              dh1[k] += this.W2[off + k] * d;
+            if (l > 0) {
+              // Truyền delta về activation output lớp l-1 rồi nhân đạo hàm.
+              deltaNext.fill(0);
+              const W = this.Ws[l];
+              for (let j = 0; j < to; j++) {
+                const d = delta[j];
+                const off = j * from;
+                for (let k = 0; k < from; k++) deltaNext[k] += W[off + k] * d;
+              }
+              const actPrev = this.activations[l - 1];
+              const aPrev = cache.a[l - 1];
+              for (let k = 0; k < from; k++) {
+                deltaNext[k] *= actDerivFromOut(actPrev, aPrev[k]);
+              }
+              delta.set(deltaNext.subarray(0, from));
             }
-          }
-          for (let k = 0; k < H1; k++) if (h1[k] <= 0) dh1[k] = 0;
-
-          // Lớp 1: dW1 = dh1·xᵀ
-          const gW1 = grads[0];
-          const gb1 = grads[1];
-          for (let j = 0; j < H1; j++) {
-            const d = dh1[j];
-            gb1[j] += d;
-            const off = j * IN;
-            for (let k = 0; k < IN; k++) gW1[off + k] += d * x[k];
           }
         }
 
-        // Cập nhật Adam trên mọi khối tham số
+        // Cập nhật Adam trên mọi khối — L2 áp CHỈ lên W (không áp bias).
         adamStep++;
         const lrT =
           lr * Math.sqrt(1 - Math.pow(ADAM_B2, adamStep)) / (1 - Math.pow(ADAM_B1, adamStep));
@@ -321,9 +447,11 @@ export class MLP {
           const g = grads[pi];
           const mm = m[pi];
           const vv = v[pi];
+          const isWeight = pi < L || pi === 2 * L; // W ẩn + W ra
           for (let k = 0; k < p.length; k++) {
-            mm[k] = ADAM_B1 * mm[k] + (1 - ADAM_B1) * g[k];
-            vv[k] = ADAM_B2 * vv[k] + (1 - ADAM_B2) * g[k] * g[k];
+            const gk = isWeight ? g[k] + l2 * p[k] : g[k];
+            mm[k] = ADAM_B1 * mm[k] + (1 - ADAM_B1) * gk;
+            vv[k] = ADAM_B2 * vv[k] + (1 - ADAM_B2) * gk * gk;
             p[k] -= (lrT * mm[k]) / (Math.sqrt(vv[k]) + ADAM_EPS);
           }
         }
@@ -388,9 +516,8 @@ export class MLP {
    */
   predictProba(x: number[]): [number, number, number] {
     const input = this.norm ? this.applyNormInternal(x) : x;
-    const cache = {
-      h1: new Float64Array(this.arch.h1),
-      h2: new Float64Array(this.arch.h2),
+    const cache: MlpForwardCache = {
+      a: this.arch.hidden.map((h) => new Float64Array(h)),
       p: new Float64Array(this.arch.out),
     };
     this.forward(input, cache);
@@ -407,26 +534,42 @@ export class MLP {
     return x.map((v, j) => (v - (mean[j] ?? 0)) / ((std[j] ?? 1) || 1));
   }
 
-  /** Serialize trọng số + norm + arch → chuỗi JSON lưu cột MlModel.weights. */
+  /**
+   * Serialize trọng số + norm + arch + activations → chuỗi JSON lưu cột
+   * MlModel.weights. Format MỚI #94: blocks[{W, b} × hidden.length] (khối ra
+   * là blocks cuối). fromJSON nạp lại đúng từng byte.
+   */
   toJSON(): string {
+    const L = this.arch.hidden.length;
+    const blocks: { W: number[]; b: number[] }[] = [];
+    for (let l = 0; l <= L; l++) {
+      blocks.push({
+        W: Array.from(this.Ws[l]),
+        b: Array.from(this.bs[l]),
+      });
+    }
     return JSON.stringify({
       arch: this.archString,
-      W1: Array.from(this.W1),
-      b1: Array.from(this.b1),
-      W2: Array.from(this.W2),
-      b2: Array.from(this.b2),
-      W3: Array.from(this.W3),
-      b3: Array.from(this.b3),
+      activations: this.activations,
+      blocks,
       norm: this.norm,
     });
   }
 
-  /** Nạp mô hình từ JSON (arch + weights + norm). Throw khi JSON hỏng/sai
-   *  kiến trúc — đọc đúng arch ghi trong JSON (v8 "10-16-8-3" hay v2
-   *  "16-24-12-3" đều nạp được — B1 tương thích ngược). */
+  /**
+   * Nạp mô hình từ JSON — HIỂU CẢ HAI định dạng:
+   *  (1) MỚI #94: { arch, activations, blocks: [{W, b}…] } — số blocks =
+   *      hidden.length + 1 (kể khối ra).
+   *  (2) CŨ (≤ #89): { arch, W1, b1, W2, b2, W3, b3 } — 2 lớp ẩn relu
+   *      (v8 serving "10-16-8-3" hay v2 "16-24-12-3") → map thành blocks
+   *      tương đương. Bản serving đang chạy không được vỡ.
+   * Throw khi JSON hỏng/sai kiến trúc (đủ/thiếu khối trọng số).
+   */
   static fromJSON(json: string): MLP {
     const raw = JSON.parse(json) as {
       arch?: string;
+      activations?: unknown;
+      blocks?: unknown;
       W1?: number[];
       b1?: number[];
       W2?: number[];
@@ -436,18 +579,47 @@ export class MLP {
       norm?: MlpNorm | null;
     };
     const arch = parseMlpArch(raw.arch ?? "");
-    const { in: IN, h1: H1, h2: H2, out: OUT } = arch;
-    const mlp = new MLP(arch, 1); // init tạm — ghi đè bằng trọng số JSON
+    const activations = normalizeActivations(raw.activations, arch.hidden.length);
+    const mlp = new MLP(arch, activations, 1); // init tạm — ghi đè bằng trọng số JSON
     const copy = (src: number[] | undefined, len: number, name: string): Float64Array => {
-      if (!Array.isArray(src) || src.length !== len) throw new Error(`MLP weights thiếu ${name} (arch ${mlpArchString(arch)})`);
+      if (!Array.isArray(src) || src.length !== len) {
+        throw new Error(`MLP weights thiếu ${name} (arch ${mlpArchString(arch)})`);
+      }
       return Float64Array.from(src);
     };
-    mlp.W1 = copy(raw.W1, H1 * IN, "W1");
-    mlp.b1 = copy(raw.b1, H1, "b1");
-    mlp.W2 = copy(raw.W2, H2 * H1, "W2");
-    mlp.b2 = copy(raw.b2, H2, "b2");
-    mlp.W3 = copy(raw.W3, OUT * H2, "W3");
-    mlp.b3 = copy(raw.b3, OUT, "b3");
+
+    if (Array.isArray(raw.blocks)) {
+      // Format MỚI — blocks.length phải = hidden.length + 1 (kể khối ra).
+      const L = arch.hidden.length;
+      const blocks = raw.blocks as { W?: number[]; b?: number[] }[];
+      if (blocks.length !== L + 1) {
+        throw new Error(
+          `MLP weights blocks ${blocks.length} khối ≠ arch ${L + 1} (hidden ${L} + ra 1)`
+        );
+      }
+      let from = arch.in;
+      for (let l = 0; l <= L; l++) {
+        const to = l === L ? arch.out : arch.hidden[l];
+        mlp.Ws[l] = copy(blocks[l].W, to * from, `blocks[${l}].W`);
+        mlp.bs[l] = copy(blocks[l].b, to, `blocks[${l}].b`);
+        from = to;
+      }
+    } else {
+      // Format CŨ W1..b3 — chính xác 2 lớp ẩn (bản trước #94).
+      if (arch.hidden.length !== 2) {
+        throw new Error(
+          `MLP weights định dạng cũ W1..b3 nhưng arch ${mlpArchString(arch)} có ${arch.hidden.length} lớp ẩn`
+        );
+      }
+      const { in: IN, hidden, out: OUT } = arch;
+      const [H1, H2] = hidden;
+      mlp.Ws[0] = copy(raw.W1, H1 * IN, "W1");
+      mlp.bs[0] = copy(raw.b1, H1, "b1");
+      mlp.Ws[1] = copy(raw.W2, H2 * H1, "W2");
+      mlp.bs[1] = copy(raw.b2, H2, "b2");
+      mlp.Ws[2] = copy(raw.W3, OUT * H2, "W3");
+      mlp.bs[2] = copy(raw.b3, OUT, "b3");
+    }
     mlp.norm = raw.norm ?? null;
     return mlp;
   }

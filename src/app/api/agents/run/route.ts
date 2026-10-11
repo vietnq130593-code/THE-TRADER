@@ -9,6 +9,14 @@ import { expireDueSignals } from "@/lib/signal-execution";
 import { markKRunCycle } from "@/lib/k-run";
 // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.3): auto-convert tín hiệu chu kỳ sang sandbox.
 import { autoConvertSignalToSandbox } from "@/lib/k-sandbox";
+// K4 (#94 — AUTONOMY_BLUEPRINT v1.1 §7): Ban Điều hành giao việc — Chủ tịch
+// xuất JSON assignTasks trong chu kỳ (chỉ khi k4.enabled), validate fail-soft.
+import {
+  getK4,
+  buildK4ChairmanPromptBlock,
+  assignChairmanTasks,
+  type AssignChairmanTasksResult,
+} from "@/lib/k4";
 import {
   ROLE_PROMPTS,
   buildMarketBlock,
@@ -419,6 +427,11 @@ export async function POST() {
   // fail-soft tuyệt đối bên trong (lỗi DB chỉ console.error); key chưa từng
   // tạo → no-op — env AGENT_CYCLE_MINUTES fallback nguyên vẹn.
   await markKRunCycle();
+
+  // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): đọc cấu hình k4 MỘT LẦN đầu chu kỳ —
+  // enabled → tiêm khối GIAO VIỆC vào prompt Chủ tịch (sau RAG block) + parse
+  // assignTasks sau khi Chủ tịch chạy xong. getK4 fail-soft (mặc định tắt).
+  const k4 = await getK4();
 
   // Mark every agent RUNNING while the cycle executes
   await db.agent.updateMany({
@@ -884,6 +897,10 @@ export async function POST() {
       `TÍN HIỆU ĐANG MỞ:\n${openSignalsBlock}`,
       // L1 (#83) — tri thức truy hồi cho Chủ tịch (ngữ cảnh đối chiếu, không phải bằng chứng)
       ...(ragBlock ? ["", ragBlock] : []),
+      // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): khối GIAO VIỆC — CHỈ khi k4.enabled
+      // (tắt → 0 token thêm, prompt y như trước K4). Đặt SAU RAG block đúng
+      // thiết kế đã duyệt; yêu cầu Chairman kèm JSON assignTasks cuối output.
+      ...(k4.enabled ? ["", buildK4ChairmanPromptBlock(k4)] : []),
       // P0-4 §3.3 — cờ chất lượng dữ liệu A9 cho Chủ tịch (8-1b: DEGRADED →
       // cờ prompt; SEVERE → cờ + RiskAlert ack-bắt-buộc; KHÔNG hard-stop)
       ...(dqPromptBlock ? ["", dqPromptBlock] : []),
@@ -904,6 +921,9 @@ export async function POST() {
     const strategistStart = Date.now();
     let strategist: StrategistResult | null = null;
     let strategistRunId = "";
+    // K4 (#94): output THÔ của Chủ tịch — parse assignTasks sau try/catch (kể
+    // cả khi persistMessage lỗi, output LLM vẫn còn để giao việc đúng chỗ).
+    let strategistRaw: string | null = null;
     // CRB-9 — kellyHint của chu kỳ (null = bỏ/skip — tham mưu)
     let kellyHintF: number | null = null;
     try {
@@ -911,6 +931,7 @@ export async function POST() {
         ROLE_PROMPTS[CHAIRMAN_CODE].system,
         strategistUserPrompt
       );
+      strategistRaw = raw;
       const parsed = parseJsonBlock<{
         summary: unknown;
         recommendation: unknown;
@@ -1084,6 +1105,21 @@ export async function POST() {
         null,
         strategistErr instanceof Error ? strategistErr.message : "Lỗi tổng hợp."
       ).catch(() => undefined);
+    }
+
+    // ── K4 (#94 — AUTONOMY_BLUEPRINT §7.1): Chủ tịch GIAO VIỆC ──────────────
+    // Sau khi Chairman chạy xong (có output thô) và TRƯỚC Đợt F: parse
+    // assignTasks từ output → validate từng nhiệm vụ → tạo AgentTask
+    // createdByAgentId = Chủ tịch. TUYỆT ĐỐI fail-soft: JSON rác → 0 nhiệm vụ,
+    // chu kỳ vẫn COMPLETED (dữ liệu đầu vào phải chịu được — §7.1). Chairman
+    // fail (không output) → không giao. k4 tắt → bỏ hẳn (0 hiệu ứng).
+    let k4Result: AssignChairmanTasksResult | null = null;
+    if (k4.enabled && strategistRaw) {
+      k4Result = await assignChairmanTasks(strategistRaw, {
+        chairmanAgentId: strategistAgent.id,
+        k4,
+        now: new Date(cycleStart),
+      });
     }
 
     // ══ ĐỢT F · Thực thi & hậu cần ═════════════════════════════════
@@ -1292,6 +1328,19 @@ export async function POST() {
                 skipped: k1Sandbox.skipped.map((s) => s.reason),
               }
             : null,
+          // K4 (#94 §7.1): kết quả giao việc của Chủ tịch trong chu kỳ (null khi
+          // k4 tắt / Chairman fail; created rỗng khi Chairman không giao việc)
+          k4: k4Result
+            ? {
+                assigned: k4Result.created.length,
+                tasks: k4Result.created.map((t) => ({
+                  agentCode: t.agentCode,
+                  title: t.title,
+                  schedule: t.schedule,
+                })),
+                skipped: k4Result.skipped.map((s) => s.reason),
+              }
+            : null,
           // Phiên #34 — tóm tắt Bộ tổng hợp Bayes của chu kỳ (null khi tổng hợp lỗi)
           assessment: assessmentSummary
             ? {
@@ -1331,6 +1380,9 @@ export async function POST() {
         // K1 (#87): lệnh sandbox tự sinh từ tín hiệu chu kỳ này (world riêng —
         // không phải "order" paper; client hiển thị qua khối K1/Thử nghiệm)
         k1Sandbox,
+        // K4 (#94 §7.1): nhiệm vụ Chủ tịch giao trong chu kỳ này (null khi k4
+        // tắt — UI khối Ban Điều hành đọc chi tiết từ GET /api/k4).
+        k4: k4Result,
         failures,
         durationMs: cycleDurationMs,
         // Mở rộng 23 agents — tổng kết các đợt đã chạy

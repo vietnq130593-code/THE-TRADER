@@ -273,24 +273,25 @@ export interface MlLayerSpec {
   note: string;
 }
 
+/** Hàm kích hoạt của TỪNG lớp ẩn MLP (#94) — relu giữ hành vi bản cũ. */
+export type MlActivation = "relu" | "tanh" | "sigmoid";
+
 export interface MlMlpArchInfo {
   version: number | null;
   trainedAt: string | null;
   featureSet: string;
   archString: string;
-  arch: { in: number; h1: number; h2: number; out: number };
+  /** #94 — arch N-layer: in → hidden[1..5] → out. */
+  arch: { in: number; hidden: number[]; out: number };
+  /** #94 — activation TỪNG lớp ẩn của bản serving (đúng độ dài hidden). */
+  activations: MlActivation[];
   paramCount: number;
   layers: MlLayerSpec[];
   featureNames: string[];
   outputLabels: string[];
-  weights: {
-    W1: number[];
-    b1: number[];
-    W2: number[];
-    b2: number[];
-    W3: number[];
-    b3: number[];
-  } | null;
+  /** #94 — trọng số theo khối W+b (số khối = hidden.length + 1, khối cuối là ra).
+   *  API đã map định dạng cũ W1..b3 thành blocks tương đương. */
+  weights: { blocks: { W: number[]; b: number[] }[] } | null;
 }
 
 export interface MlGruArchInfo {
@@ -321,6 +322,26 @@ export interface MlPipelineStage {
   items: MlPipelineItem[];
 }
 
+/** #94 — cấu hình MLP ĐANG CHỈNH (hiệu lực từ AppSetting ml-tuning — KHÔNG
+ *  phải bản serving): arch N-layer + activation từng lớp + trọng số loss từng
+ *  đầu ra [DOWN, FLAT, UP] + hyper huấn luyện. Trình chỉnh sửa kiến trúc ANN
+ *  (tab Mạng thần kinh) khởi tạo draft local từ đây. */
+export interface MlArchDraft {
+  arch: { in: number; hidden: number[]; out: number };
+  archString: string;
+  activations: MlActivation[];
+  lossWeights: [number, number, number];
+  hyper: {
+    epochs: number;
+    patience: number;
+    batchSize: number;
+    lr: number;
+    l2: number;
+    valFraction: number;
+    seed: number;
+  };
+}
+
 export interface MlArchitectureResponse {
   db: MlDbArchitecture;
   mlp: MlMlpArchInfo | null;
@@ -328,6 +349,8 @@ export interface MlArchitectureResponse {
   ensemble: MlEnsembleInfo;
   pipeline: MlPipelineStage[];
   features: { setLabel: string; count: number; horizonDays: number; names: string[] };
+  /** #94 — null khi DB lỗi (fail-soft, UI dùng mặc định code). */
+  draft: MlArchDraft | null;
 }
 
 async function fetchMlArchitecture(): Promise<MlArchitectureResponse> {
@@ -355,13 +378,26 @@ export function useMlArchitecture() {
 
 export const ML_TUNING_QUERY_KEY = ["ml-tuning"] as const;
 
+/** #94 — MLP tuning v2: kiến trúc N-layer + lossWeights + hyper mới.
+ *  hidden/activations/lossWeights chỉnh qua trình chỉnh sửa kiến trúc ANN
+ *  (tab Mạng thần kinh); hyper số chỉnh ở tab Tinh chỉnh. */
 export interface MlTuningMlp {
-  h1: number;
-  h2: number;
+  /** Số nơ-rôn TỪNG lớp ẩn (1..5 lớp, 2..96 nơ-rôn). */
+  hidden: number[];
+  /** Activation TỪNG lớp ẩn — cùng độ dài hidden. */
+  activations: MlActivation[];
+  /** Trọng số loss từng đầu ra [DOWN, FLAT, UP] — nhân class-weight 1/tần suất. */
+  lossWeights: [number, number, number];
   epochs: number;
   patience: number;
   batchSize: number;
   lr: number;
+  /** L2 weight-decay (chỉ áp W). */
+  l2: number;
+  /** Tỷ lệ tập xác thực (block cuối). */
+  valFraction: number;
+  /** Seed RNG deterministic. */
+  seed: number;
 }
 
 export interface MlTuningRag {

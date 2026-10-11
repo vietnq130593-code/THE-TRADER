@@ -31,3 +31,28 @@ export async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
   }
   return data;
 }
+
+/** PATCH với JSON body — K3 #94 (sửa/tạm dừng/tiếp tục nhiệm vụ định kỳ). */
+export async function apiPatchJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!res.ok || data == null) {
+    throw new Error(data?.error ?? `Yêu cầu thất bại (${res.status})`);
+  }
+  return data;
+}
+
+/** DELETE — K3 #94 (xoá nhiệm vụ). */
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: "DELETE" });
+  const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!res.ok || data == null) {
+    throw new Error(data?.error ?? `Yêu cầu thất bại (${res.status})`);
+  }
+  return data;
+}
+

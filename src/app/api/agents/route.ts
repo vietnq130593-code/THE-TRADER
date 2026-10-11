@@ -21,7 +21,7 @@ function groupLabelOf(group: string): string {
 }
 export async function GET() {
   try {
-    const [agents, tasks, pendingCounts, lastRuns, runStats, chatCounts, errorRuns] =
+    const [agents, tasks, pendingCounts, lastRuns, runStats, chatCounts, errorRuns, scheduledTasks] =
       await Promise.all([
         db.agent.findMany({
           orderBy: { createdAt: "asc" },
@@ -67,6 +67,15 @@ export async function GET() {
           orderBy: { startedAt: "desc" },
           take: 25,
           select: { agentId: true, error: true },
+        }),
+        // K3 (#94 — AUTONOMY_BLUEPRINT §6.4): nhiệm vụ định kỳ toàn đội cho
+        // khối "Lịch tuần" trong workspace Đội Agent (schedule ≠ null) —
+        // phần tử CUỐI của Promise.all (không xô vị trí destructuring cũ).
+        db.agentTask.findMany({
+          where: { schedule: { not: null } },
+          orderBy: [{ nextDueAt: "asc" }],
+          take: 100,
+          include: { agent: { select: { id: true, code: true, name: true, group: true } } },
         }),
       ]);
 
@@ -184,6 +193,28 @@ export async function GET() {
           status: t.status,
           priority: t.priority,
           createdAt: t.createdAt,
+          // K3 (#94): trường mới additive cho các consumers cũ.
+          schedule: t.schedule,
+          nextDueAt: t.nextDueAt,
+          lastRunAt: t.lastRunAt,
+          runCount: t.runCount,
+          failStreak: t.failStreak,
+          paused: t.paused,
+          createdByAgentId: t.createdByAgentId,
+          completedAt: t.completedAt,
+        })),
+        // K3 (#94): "Lịch tuần" — nhiệm vụ định kỳ cả đội theo thứ giờ.
+        scheduledTasks: scheduledTasks.map((t) => ({
+          id: t.id,
+          agentId: t.agent.id,
+          agentCode: t.agent.code,
+          agentName: t.agent.name,
+          group: t.agent.group,
+          title: t.title,
+          schedule: t.schedule ?? "",
+          nextDueAt: t.nextDueAt,
+          paused: t.paused,
+          runCount: t.runCount,
         })),
         totals,
         // Provider LLM đang chạy (auto: Opencode Zen space-bunny-free khi có key,

@@ -57,6 +57,12 @@ import { useSingleAgentRun, RateLimitError } from "@/hooks/use-agent-actions";
 import { LlmModelPicker } from "@/components/dashboard/llm-model-picker";
 import { AgentRosterCard } from "@/components/dashboard/agent-roster-card";
 import { AgentDetailPanel } from "@/components/dashboard/agent-detail-panel";
+// K3 (#94 — AUTONOMY_BLUEPRINT §6.4): khối “Lịch tuần” gom nhiệm vụ định kỳ
+// cả nhóm theo thứ giờ (đặt đầu roster).
+import { WeeklyScheduleCard } from "@/components/dashboard/weekly-schedule-card";
+// K4 (#94 — AUTONOMY_BLUEPRINT §7.3): khối “Giao việc” Ban Điều hành — đặt
+// dưới ChairmanScorecard cùng pattern E-P1-4.
+import { K4AssignedCard } from "@/components/dashboard/k4-assigned-card";
 import { CoverageMatrix } from "@/components/dashboard/coverage-matrix";
 // E-P0-5 (EXECUTION_OPS_BLUEPRINT v1.1): khối KPI vận hành nhóm executive.
 import { ExecutiveKpi } from "@/components/dashboard/executive-kpi";
@@ -345,6 +351,12 @@ export function AgentsWorkspace() {
         <div
           className="flex flex-col gap-4 self-start xl:col-span-2 xl:max-h-[calc(100vh-13rem)] xl:overflow-y-auto xl:pr-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border"
         >
+          {/* K3 (#94 — §6.4): “Lịch tuần” nhiệm vụ định kỳ cả nhóm theo thứ giờ */}
+          {!agentsQuery.isLoading && !agentsQuery.isError && (
+            <WeeklyScheduleCard
+              tasks={agentsQuery.data?.scheduledTasks ?? []}
+            />
+          )}
 
           {agentsQuery.isLoading ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
@@ -420,6 +432,9 @@ export function AgentsWorkspace() {
                 {/* E-P1-4 — Bảng điểm Chủ tịch (A1): NGAY DƯỚI section nhóm
                     executive — cùng pattern B8 (mô tả, không phán xét §6.5) */}
                 {section.key === "executive" && <ChairmanScorecardCard />}
+                {/* K4 (#94 — AUTONOMY_BLUEPRINT §7.3): khối GIAO VIỆC của Ban
+                    Điều hành — nhiệm vụ đã giao + cấu hình k4 (dưới ChairmanScorecard) */}
+                {section.key === "executive" && <K4AssignedCard />}
               </Fragment>
             ))
           )}

@@ -146,6 +146,121 @@ export interface AgentTaskRow {
   status: string;
   priority: string;
   createdAt: string;
+  /** K3 (#94 — AUTONOMY_BLUEPRINT §6.1) — trường mới additive (optional-tolerant
+   *  cho dữ liệu cũ/dòng chưa có lịch). */
+  schedule?: string | null;
+  nextDueAt?: string | null;
+  lastRunAt?: string | null;
+  runCount?: number;
+  failStreak?: number;
+  paused?: boolean;
+  /** null = trader tạo | tên agent khi do Chủ tịch giao (K4). */
+  createdByAgentId?: string | null;
+  createdByName?: string | null;
+  completedAt?: string | null;
+}
+
+/* ── K3 (#94 — AUTONOMY_BLUEPRINT §6.2): nhiệm vụ định kỳ của 1 agent ── */
+
+/** GET /api/agents/[id]/tasks — dòng nhiệm vụ đầy đủ (tab Nhiệm vụ). */
+export interface AgentTaskDetail {
+  id: string;
+  agentId: string;
+  agentCode: string;
+  agentName: string;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  schedule: string | null;
+  nextDueAt: string | null;
+  lastRunAt: string | null;
+  runCount: number;
+  failStreak: number;
+  paused: boolean;
+  createdByAgentId: string | null;
+  createdByName: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentTasksResponse {
+  tasks: AgentTaskDetail[];
+}
+
+/** GET /api/agents/tasks/due — nhiệm vụ due cho engine đôn đốc (§6.3). */
+export interface DueTaskRow {
+  taskId: string;
+  agentId: string;
+  agentCode: string;
+  agentName: string;
+  agentStatus: string;
+  title: string;
+  schedule: string;
+  nextDueAt: string;
+  paused: boolean;
+}
+
+export interface DueTasksResponse {
+  now: string;
+  tasks: DueTaskRow[];
+}
+
+/** GET /api/agents → scheduledTasks — "Lịch tuần" gom nhiệm vụ định kỳ toàn đội. */
+export interface ScheduledTaskRow {
+  id: string;
+  agentId: string;
+  agentCode: string;
+  agentName: string;
+  group: string;
+  title: string;
+  schedule: string;
+  nextDueAt: string;
+  paused: boolean;
+  runCount: number;
+}
+
+/* ── K4 (#94 — AUTONOMY_BLUEPRINT §7.2/§7.3): Ban Điều hành giao việc ── */
+
+/** Cấu hình k4 (AppSetting key "k4"). */
+export interface K4Config {
+  enabled: boolean;
+  maxOpenTasksPerAgent: number;
+  maxTasksPerCycle: number;
+}
+
+/** Dòng bảng "Nhiệm vụ đã giao" trong workspace Ban Điều hành. */
+export interface K4AssignedTaskRow {
+  id: string;
+  agentCode: string;
+  agentName: string;
+  agentGroup: string;
+  title: string;
+  schedule: string | null;
+  priority: string;
+  status: string;
+  paused: boolean;
+  runCount: number;
+  lastRunAt: string | null;
+  nextDueAt: string | null;
+  createdByAgentId: string | null;
+  createdByName: string | null;
+  createdAt: string;
+}
+
+export interface K4State {
+  exists: boolean;
+  enabled: boolean;
+  maxOpenTasksPerAgent: number;
+  maxTasksPerCycle: number;
+  /** Thống kê nhiệm vụ đã giao (createdByAgentId ≠ null). */
+  stats: {
+    assignedTotal: number;
+    assignedPending: number;
+    lastAssignedAt: string | null;
+  };
+  /** 50 nhiệm vụ đã giao gần nhất (bảng UI). */
+  tasks: K4AssignedTaskRow[];
 }
 
 export interface AgentCard {
@@ -211,6 +326,8 @@ export interface LlmInfo {
 export interface AgentsResponse {
   agents: AgentCard[];
   tasks: AgentTaskRow[];
+  /** K3 (#94): nhiệm vụ định kỳ toàn đội cho khối "Lịch tuần" (additive). */
+  scheduledTasks?: ScheduledTaskRow[];
   /** PHASE3 B2: tổng hợp chi phí AI toàn đội (§5.5 — chip chi phí AI). */
   totals: AgentsTotals;
   /** Provider LLM runtime (Opencode Zen space-bunny-free khi có key, GLM-4.6 trong sandbox). */

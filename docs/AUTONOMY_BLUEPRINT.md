@@ -1,8 +1,8 @@
 # AUTONOMY BLUEPRINT — 4 KẾ HOẠCH K1–K4: TIỀN ẢO THỬ NGHIỆM · CHẾ ĐỘ CHẠY LIÊN TỤC · NHIỆM VỤ ĐỊNH KỲ · BAN ĐIỀU HÀNH GIAO VIỆC
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/AUTONOMY_BLUEPRINT.md` · **Version:** 1.3 · **Created:** 2026-10-11 (phiên #85) · **Updated:** 2026-10-11 (phiên #88 — **bản đồ hiển thị K1 + 3 sửa số học "về 0 từ đầu"** theo 2 yêu cầu trader: reset-toàn-bộ/vốn-tự-quyết-định + "thông tin ở module/tab nào" — xem §5.6a/§5.6b)
-> **Status:** **K2 ✅ xong #86 · K1 ✅ xong #87 (+ củng cố #88) — K3 là bậc kế tiếp** · K3/K4 xếp hàng theo thứ tự đã duyệt §3
+> **Document:** `docs/AUTONOMY_BLUEPRINT.md` · **Version:** 1.4 · **Created:** 2026-10-11 (phiên #85) · **Updated:** 2026-10-12 (phiên #94 — **K3 ✅ + K4 ✅ xong #94 — TOÀN BỘ 4 KẾ HOẠCH K1–K4 HOÀN TẤT**)
+> **Status:** **K2 ✅ xong #86 · K1 ✅ xong #87 (+ củng cố #88) · K3 ✅ xong #94 · K4 ✅ xong #94 — lộ trình 4 bậc KHÉP SẠCH** · Nhiệm vụ định kỳ (AgentTask +7 cột + engine k3TaskDueCheck 60s) và Chủ tịch giao việc (AppSetting k4 + validate fail-soft 8 luật) triển khai đúng §6/§7; k4 mặc định TẮT — trader bật bằng Switch trong workspace Đội Agent → Ban Điều hành
 > **Nguồn gốc:** trader tiết lộ 4 kế hoạch tương lai tại §8 [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) v1.1 (phiên #79) kèm ghi chú kiến trúc; hiệu lệnh soạn blueprint này: *"Trước hết viết Blueprint triển khai K1-K4 cho tôi"* (phiên #85).
 > **Cross-refs:** [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) (§8 — 5/5 DUYỆT nền tảng) · [ML_LEARNING_BLUEPRINT.md](./ML_LEARNING_BLUEPRINT.md) (cổng L1–L5 — K1 cấp dữ liệu cho L5/GRU) · [EXECUTION_OPS_BLUEPRINT.md](./EXECUTION_OPS_BLUEPRINT.md) (TWAP E-P1-2 · ExecutionPlan · committed view) · [PHASE3_BLUEPRINT.md](./PHASE3_BLUEPRINT.md) (§4.5/§4.9 — chu kỳ KHÔNG tự tạo lệnh) · [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) · [DB_SCHEMA.md](./DB_SCHEMA.md) · [Fixbug.md](../Fixbug.md)
 

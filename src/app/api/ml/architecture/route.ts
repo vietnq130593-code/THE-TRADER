@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { db } from "@/lib/db";
-import { parseMlpArch } from "@/lib/ml/nn";
+import { mlpArchString, normalizeActivations, parseMlpArch, type MlpActivation } from "@/lib/ml/nn";
+import { readEffectiveMlTuning } from "@/lib/ml/tuning";
 import { GRU_ARCH } from "@/lib/ml/gru";
 import { ENSEMBLE_WEIGHTS, ML_ENSEMBLE_DEADBAND } from "@/lib/ml/ensemble";
 import { FEATURE_NAMES } from "@/lib/ml/psi";
@@ -20,12 +21,18 @@ export const runtime = "nodejs";
  *              ALL; fallback pg_stat_user_tables ≈; cùng fallback null) —
  *              UI hiển thị kiến trúc database THẬT đang chạy, không copy tay.
  *   mlp      — arch + trọng số THẬT của bản dl-mlp serving (parse weights
- *              JSON — từJSON tương thích mọi arch "in-h1-h2-out").
+ *              JSON theo format MỚI blocks #94 lẫn CŨ W1..b3 → layers[]
+ *              động đúng số lớp + activation từng lớp + paramCount tính
+ *              từ blocks thật).
  *   gru      — arch tĩnh GRU-24 (GRU_ARCH) + bản dl-gru mới nhất (shadow).
  *   ensemble — trọng số 2/3 giọng + deadband (ENSEMBLE_WEIGHTS — một nguồn).
  *   pipeline — 8 chặng dòng chảy dữ liệu (nguồn → lưu trữ → đặc trưng → mô
  *              hình → ensemble → bandit → tổng hợp → quyết định) kèm số
  *              dòng sống lấy từ phần db.
+ *   draft    — #94: arch + activations + lossWeights + hyper HIỆU LỰC từ
+ *              readEffectiveMlTuning (AppSetting ml-tuning) — cấu hình ĐANG
+ *              CHỈNH cho trình chỉnh sửa kiến trúc (không phải serving).
+ *              Draft KHÔNG nằm trong cache 60s — luôn tươi sau mỗi lần lưu.
  *
  * Cache in-memory 60s (parse schema + đếm dòng không cần mỗi request).
  * Fail-soft từng phần: db lỗi → models rỗng + approximate:false; MLP không
@@ -154,13 +161,10 @@ async function countRowsApprox(): Promise<RowCounts | null> {
 
 /* ─────────────────── Trọng số MLP serving (cho sơ đồ mạng) ─────────────────── */
 
-interface MlpWeightStats {
-  W1: number[];
-  b1: number[];
-  W2: number[];
-  b2: number[];
-  W3: number[];
-  b3: number[];
+/** Một khối trọng số W + b (format MỚI #94 — số khối = hidden + khối ra). */
+interface MlpWeightBlock {
+  W: number[];
+  b: number[];
 }
 
 function round3(v: number): number {
@@ -172,12 +176,13 @@ async function buildMlpInfo(): Promise<{
   trainedAt: string | null;
   featureSet: string;
   archString: string;
-  arch: { in: number; h1: number; h2: number; out: number };
+  arch: { in: number; hidden: number[]; out: number };
+  activations: MlpActivation[];
   paramCount: number;
   layers: { name: string; units: number; activation: string; params: number; note: string }[];
   featureNames: string[];
   outputLabels: string[];
-  weights: MlpWeightStats | null;
+  weights: { blocks: MlpWeightBlock[] } | null;
 } | null> {
   let row: { version: number; trainedAt: Date; weights: string; meta: string | null } | null = null;
   try {
@@ -199,11 +204,16 @@ async function buildMlpInfo(): Promise<{
     // meta hỏng → mặc định trung thực
   }
 
-  let arch = { in: 10, h1: 16, h2: 8, out: 3 };
-  let weights: MlpWeightStats | null = null;
+  // #94 — nạp CẢ HAI định dạng weights: blocks (mới) hoặc W1..b3 (cũ, 2 lớp
+  // ẩn relu) → map thành blocks tương đương. Serving v8/v19 không vỡ.
+  let arch: { in: number; hidden: number[]; out: number } = { in: 10, hidden: [16, 8], out: 3 };
+  let activations: MlpActivation[] = ["relu", "relu"];
+  let blocks: MlpWeightBlock[] | null = null;
   try {
     const w = JSON.parse(row.weights) as {
       arch?: string;
+      activations?: unknown;
+      blocks?: unknown;
       W1?: number[];
       b1?: number[];
       W2?: number[];
@@ -212,59 +222,83 @@ async function buildMlpInfo(): Promise<{
       b3?: number[];
     };
     if (w.arch) arch = parseMlpArch(w.arch);
-    weights = {
-      W1: (w.W1 ?? []).map(round3),
-      b1: (w.b1 ?? []).map(round3),
-      W2: (w.W2 ?? []).map(round3),
-      b2: (w.b2 ?? []).map(round3),
-      W3: (w.W3 ?? []).map(round3),
-      b3: (w.b3 ?? []).map(round3),
-    };
+    activations = normalizeActivations(w.activations, arch.hidden.length);
+    if (Array.isArray(w.blocks)) {
+      const parsedBlocks = (w.blocks as { W?: unknown; b?: unknown }[]).map((bk) => ({
+        W: (Array.isArray(bk.W) ? bk.W : []).map(round3),
+        b: (Array.isArray(bk.b) ? bk.b : []).map(round3),
+      }));
+      // Chỉ nhận blocks khi đúng số khối (hidden + 1) — sai thì bỏ, tính arch.
+      blocks = parsedBlocks.length === arch.hidden.length + 1 ? parsedBlocks : null;
+    } else if (Array.isArray(w.W1) && Array.isArray(w.b1) && Array.isArray(w.W3)) {
+      // Định dạng CŨ W1..b3 (trước #94) — chính xác 2 lớp ẩn relu.
+      if (arch.hidden.length === 2) {
+        blocks = [
+          { W: (w.W1 ?? []).map(round3), b: (w.b1 ?? []).map(round3) },
+          { W: (w.W2 ?? []).map(round3), b: (w.b2 ?? []).map(round3) },
+          { W: (w.W3 ?? []).map(round3), b: (w.b3 ?? []).map(round3) },
+        ];
+      }
+    }
   } catch {
-    weights = null; // weights hỏng → vẫn trả arch mặc định + null weights
+    blocks = null; // weights hỏng → vẫn trả arch mặc định + null weights
   }
 
-  const paramCount = arch.h1 * arch.in + arch.h1 + arch.h2 * arch.h1 + arch.h2 + arch.out * arch.h2 + arch.out;
+  // paramCount tính TỪ BLOCKS THẬT (đúng từng khối W+b); thiếu blocks → công thức arch.
+  let paramCount = 0;
+  if (blocks != null) {
+    paramCount = blocks.reduce((sum, bk) => sum + bk.W.length + bk.b.length, 0);
+  } else {
+    let from = arch.in;
+    for (const h of arch.hidden) {
+      paramCount += h * from + h;
+      from = h;
+    }
+    paramCount += arch.out * from + arch.out;
+  }
+
+  // Bảng lớp DỘNG theo số lớp ẩn — activation từng lớp lấy từ weights JSON.
+  const actLabel: Record<MlpActivation, string> = { relu: "ReLU", tanh: "tanh", sigmoid: "sigmoid" };
+  const layers: { name: string; units: number; activation: string; params: number; note: string }[] = [
+    {
+      name: "Lớp vào",
+      units: arch.in,
+      activation: "—",
+      params: 0,
+      note: `${arch.in} đặc trưng z-score (rổ top-20 thanh khoản)`,
+    },
+  ];
+  let from = arch.in;
+  arch.hidden.forEach((h, i) => {
+    layers.push({
+      name: `Lớp ẩn ${i + 1}`,
+      units: h,
+      activation: actLabel[activations[i] ?? "relu"],
+      params: h * from + h,
+      note: `He-init · W${i + 1}·a${i} + b${i + 1}`,
+    });
+    from = h;
+  });
+  layers.push({
+    name: "Lớp ra",
+    units: arch.out,
+    activation: "softmax",
+    params: arch.out * from + arch.out,
+    note: "3 lớp: Giảm · Đi ngang · Tăng",
+  });
+
   return {
     version: row.version,
     trainedAt: row.trainedAt.toISOString(),
     featureSet,
-    archString: `${arch.in}-${arch.h1}-${arch.h2}-${arch.out}`,
+    archString: mlpArchString(arch),
     arch,
+    activations,
     paramCount,
-    layers: [
-      {
-        name: "Lớp vào",
-        units: arch.in,
-        activation: "—",
-        params: 0,
-        note: `${arch.in} đặc trưng z-score (rổ top-20 thanh khoản)`,
-      },
-      {
-        name: "Lớp ẩn 1",
-        units: arch.h1,
-        activation: "ReLU",
-        params: arch.h1 * arch.in + arch.h1,
-        note: "He-normal init · W1·x + b1",
-      },
-      {
-        name: "Lớp ẩn 2",
-        units: arch.h2,
-        activation: "ReLU",
-        params: arch.h2 * arch.h1 + arch.h2,
-        note: "W2·h1 + b2",
-      },
-      {
-        name: "Lớp ra",
-        units: arch.out,
-        activation: "softmax",
-        params: arch.out * arch.h2 + arch.out,
-        note: "3 lớp: Giảm · Đi ngang · Tăng",
-      },
-    ],
+    layers,
     featureNames: FEATURE_NAMES.slice(0, arch.in),
     outputLabels: ["Giảm", "Đi ngang", "Tăng"],
-    weights,
+    weights: blocks != null ? { blocks } : null,
   };
 }
 
@@ -535,19 +569,65 @@ async function buildArchitecture(): Promise<Record<string, unknown>> {
   };
 }
 
+/* ─────────────────── Draft #94 — cấu hình đang chỉnh (ngoài cache) ─────────────────── */
+
+/**
+ * Arch + activations + lossWeights + hyper HIỆU LỰC từ readEffectiveMlTuning
+ * (AppSetting ml-tuning) — trình chỉnh sửa kiến trúc ANN ở tab Mạng thần kinh
+ * khởi tạo draft local từ đây. ĐÂY LÀ CẤU HÌNH ĐANG CHỈNH, không phải serving.
+ */
+async function buildArchDraft(): Promise<{
+  arch: { in: number; hidden: number[]; out: number };
+  archString: string;
+  activations: MlpActivation[];
+  lossWeights: [number, number, number];
+  hyper: {
+    epochs: number;
+    patience: number;
+    batchSize: number;
+    lr: number;
+    l2: number;
+    valFraction: number;
+    seed: number;
+  };
+}> {
+  const tuning = await readEffectiveMlTuning(); // fail-soft → mặc định module
+  const arch = { in: ML_FEATURE_COUNT, hidden: tuning.mlp.hidden, out: 3 };
+  return {
+    arch,
+    archString: mlpArchString(arch),
+    activations: tuning.mlp.activations,
+    lossWeights: tuning.mlp.lossWeights,
+    hyper: {
+      epochs: tuning.mlp.epochs,
+      patience: tuning.mlp.patience,
+      batchSize: tuning.mlp.batchSize,
+      lr: tuning.mlp.lr,
+      l2: tuning.mlp.l2,
+      valFraction: tuning.mlp.valFraction,
+      seed: tuning.mlp.seed,
+    },
+  };
+}
+
 export async function GET() {
+  let base: Record<string, unknown>;
   if (archCache && Date.now() - archCache.at < ARCH_CACHE_MS) {
-    return NextResponse.json(archCache.data);
+    base = archCache.data as Record<string, unknown>;
+  } else {
+    try {
+      base = (await buildArchitecture()) as Record<string, unknown>;
+      archCache = { at: Date.now(), data: base };
+    } catch (err) {
+      console.error("[api/ml/architecture] GET lỗi:", err);
+      return NextResponse.json(
+        { error: "Không dựng được kiến trúc hệ thống học máy." },
+        { status: 500 }
+      );
+    }
   }
-  try {
-    const data = await buildArchitecture();
-    archCache = { at: Date.now(), data };
-    return NextResponse.json(data);
-  } catch (err) {
-    console.error("[api/ml/architecture] GET lỗi:", err);
-    return NextResponse.json(
-      { error: "Không dựng được kiến trúc hệ thống học máy." },
-      { status: 500 }
-    );
-  }
+  // Draft #94 LUÔN tươi (ngoài cache 60s) — trình chỉnh sửa kiến trúc cần
+  // phản ánh AppSetting ml-tuning ngay sau khi Lưu, không đợi cache hết hạn.
+  const draft = await buildArchDraft().catch(() => null);
+  return NextResponse.json({ ...base, draft });
 }

@@ -1,9 +1,11 @@
 "use client";
 
 /**
- * ml/tuning-tab.tsx (#89) — tab "Tinh chỉnh": ô nhập điều chỉnh hyper MLP
- * (kích thước lớp ẩn · epoch · patience · batch · lr) + tham số RAG BM25
- * (topK · k₁ · b · w recency) + kill-switch GRU + đặt lại vòng học Bandit.
+ * ml/tuning-tab.tsx (#89 → #94 · Task 3) — tab "Tinh chỉnh": ô nhập điều chỉnh
+ * hyper MLP (epoch · patience · batch · lr · L2 · tỷ lệ val · seed — kiến
+ * trúc lớp ẩn + trọng số loss chuyển sang trình chỉnh sửa ở tab Mạng thần
+ * kinh) + tham số RAG BM25 (topK · k₁ · b · w recency) + kill-switch GRU +
+ * đặt lại vòng học Bandit.
  *
  * VẬN HÀNH THẬT (không phải UI trang trí):
  *  - Lưu → POST /api/ml/tuning → AppSetting "ml-tuning" → train route/rag.ts
@@ -326,10 +328,10 @@ export function TuningTab() {
           <>
             Áp dụng từ lần huấn luyện KẾ TIẾP (nút “Huấn luyện” ở tab Tổng quan).
             Bản serving không đổi đến khi train lại và qua serving-swap guard
-            (valAcc ≥ bản cũ). Meta bản mới ghi rõ arch + hyper đã dùng. Chiều
-            đầu vào luôn 16 đặc trưng (v2-lag16) — chỉ lớp ẩn &amp; tối ưu hoá
-            điều chỉnh được. Ví dụ an toàn: 16-24-12-3 (747 tham số, ~84
-            mẫu/tham số).
+            (valAcc ≥ bản cũ). Meta bản mới ghi rõ arch + activations + hyper đã
+            dùng. <strong>Kiến trúc lớp ẩn &amp; trọng số loss từng đầu ra</strong>{" "}
+            chỉnh ở trình chỉnh sửa kiến trúc ANN — tab <strong>Mạng thần kinh</strong>.
+            Ví dụ an toàn: 16-24-12-3 (747 tham số, ~84 mẫu/tham số).
           </>
         }
       >

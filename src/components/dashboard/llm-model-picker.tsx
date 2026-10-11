@@ -1,14 +1,16 @@
 "use client";
 
 /**
- * LlmModelPicker — nút "Model AI" trong workspace Đội Agent (phiên #93).
+ * LlmModelPicker — nút "Model AI" trong workspace Đội Agent (phiên #93,
+ * lọc chỉ model MIỄN PHÍ theo hiệu lệnh trader #94).
  *
- * Mở dropdown danh sách model Opencode (live từ /zen/v1/models — 12+ model
- * free chạy $0 qua Opencode CLI): bấm chọn model nào thì TOÀN ĐỘI 23 agent
- * chuyển sang model đó từ cuộc gọi LLM tiếp theo (AppSetting "llm-model",
- * không cần restart). Kèm nút "Kiểm tra model" gọi thử thật — đo độ trễ +
- * tokens + chi phí ngay tại chỗ (trả lời câu hỏi "model này có hoạt động
- * bình thường không" bằng chứng cứ sống, không đoán).
+ * Mở dropdown danh sách model Opencode FREE (live từ /zen/v1/models — 12
+ * model free chạy $0 qua Opencode CLI; HÀNG TRẢ PHÍ ĐÃ LOẠI khỏi danh
+ * sách chọn): bấm chọn model nào thì TOÀN ĐỘI 23 agent chuyển sang model đó
+ * từ cuộc gọi LLM tiếp theo (AppSetting "llm-model", không cần restart).
+ * Kèm nút "Kiểm tra model" gọi thử thật — đo độ trễ + tokens + chi phí ngay
+ * tại chỗ. Nếu đội đang kẹt ở model trả phí → cảnh báo + nút chuyển nhanh
+ * về model free mặc định (space-bunny-free).
  *
  * Chống 429 đã nằm ở tầng lib/llm.ts (throttle + backoff) — dropdown chỉ
  * hiển thị cấu hình guard đang hiệu lực cho trader yên tâm.
@@ -16,7 +18,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Cpu, FlaskConical, Loader2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, Cpu, FlaskConical, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,7 +91,10 @@ export function LlmModelPicker() {
 
   const data = modelsQuery.data;
   const current = data?.current ?? "…";
-  const isCurrentFree = data?.models.find((m) => m.id === current)?.free ?? current.endsWith("-free");
+  /** #94 — chỉ hiển thị model MIỄN PHÍ (hàng trả phí loại khỏi danh sách chọn). */
+  const freeModels = data?.models.filter((m) => m.free) ?? [];
+  const isCurrentFree =
+    data?.models.find((m) => m.id === current)?.free ?? current.endsWith("-free");
 
   return (
     <DropdownMenu>
@@ -121,11 +126,12 @@ export function LlmModelPicker() {
 
       <DropdownMenuContent align="end" className="w-80 sm:w-96">
         <DropdownMenuLabel className="flex flex-col gap-1">
-          <span className="text-sm">Model AI toàn đội agent</span>
+          <span className="text-sm">Model AI toàn đội agent — miễn phí</span>
           <span className="text-[11px] font-normal leading-snug text-muted-foreground">
             {data ? (
               <>
-                Provider <span className="font-mono">{data.provider}</span> · đang dùng{" "}
+                {freeModels.length} model chạy $0 · Provider{" "}
+                <span className="font-mono">{data.provider}</span> · đang dùng{" "}
                 <span className="font-mono">{current}</span>
                 {isCurrentFree ? " (miễn phí)" : " (trả phí)"}
               </>
@@ -134,6 +140,31 @@ export function LlmModelPicker() {
             )}
           </span>
         </DropdownMenuLabel>
+
+        {/* Đội đang kẹt ở model TRẢ PHÍ → cảnh báo + nút chuyển nhanh về free */}
+        {data && !isCurrentFree && (
+          <>
+            <div className="mx-2 mb-1 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-amber-700 dark:text-amber-400">
+                  Đang dùng model trả phí — tốn tiền mỗi cuộc gọi
+                </p>
+                <button
+                  type="button"
+                  className="mt-1 rounded font-medium text-amber-800 underline decoration-dotted underline-offset-2 dark:text-amber-300"
+                  onClick={() =>
+                    data.defaultModel && selectMutation.mutate(data.defaultModel)
+                  }
+                  disabled={selectMutation.isPending || !data.defaultModel}
+                >
+                  Chuyển ngay về {data.defaultModel ?? "model free"} ($0)
+                </button>
+              </div>
+            </div>
+            <DropdownMenuSeparator />
+          </>
+        )}
 
         {/* Kết quả kiểm tra model gần nhất — bằng chứng sống model đang chạy */}
         {testResult && (
@@ -154,7 +185,7 @@ export function LlmModelPicker() {
           </>
         )}
 
-        {/* Danh sách model — cuộn khi dài (87 model live), scrollbar mảnh */}
+        {/* Danh sách model MIỄN PHÍ (#94 — hàng trả phí đã loại), cuộn khi dài */}
         <div className="max-h-72 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border">
           {modelsQuery.isLoading ? (
             <div className="flex flex-col gap-2 p-2">
@@ -170,10 +201,10 @@ export function LlmModelPicker() {
             <p className="px-2 py-3 text-xs leading-relaxed text-muted-foreground">
               Provider <span className="font-mono">zai</span> chạy cố định GLM-4.6
               trong sandbox. Đặt <span className="font-mono">OPENCODE_ZEN_API_KEY</span>{" "}
-              trong .env để chọn được 12+ model Opencode free.
+              trong .env để chọn được 12 model Opencode free.
             </p>
           ) : (
-            data.models.map((m) => {
+            freeModels.map((m) => {
               const isCurrent = m.id === current;
               return (
                 <DropdownMenuItem
@@ -200,13 +231,9 @@ export function LlmModelPicker() {
                   </span>
                   <Badge
                     variant="secondary"
-                    className={cn(
-                      "ml-auto shrink-0 px-1.5 text-[10px]",
-                      m.free &&
-                        "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                    )}
+                    className="ml-auto shrink-0 bg-emerald-500/10 px-1.5 text-[10px] text-emerald-600 dark:text-emerald-400"
                   >
-                    {m.free ? "Miễn phí" : "Trả phí"}
+                    Miễn phí
                   </Badge>
                 </DropdownMenuItem>
               );
@@ -240,11 +267,12 @@ export function LlmModelPicker() {
 
         {data && (
           <p className="px-2 pb-1.5 pt-1 text-[10px] leading-relaxed text-muted-foreground">
+            Chỉ hiện model MIỄN PHÍ ($0 qua Opencode CLI — hàng trả phí đã ẩn).
             Chống 429: giãn cách {Math.round(data.guard.minSpacingMs / 100) / 10}s
             /lượt gọi · tối đa {data.guard.maxConcurrent} gọi song song · tự thử
             lại {data.guard.retryBackoffMs.length} lần (2s → 6s → 15s) khi bị
             rate limit. Danh sách{" "}
-            {data.source === "live" ? "live từ Opencode Zen" : "dự phòng (12 model free)"}.
+            {data.source === "live" ? `live từ Opencode Zen (${freeModels.length} free)` : "dự phòng (12 model free)"}.
           </p>
         )}
       </DropdownMenuContent>

@@ -11,6 +11,9 @@ import {
 import { checkAgentRateLimit } from "@/lib/agent-ratelimit";
 import { ROSTER_BY_CODE } from "@/lib/agent-roster";
 import { runServiceAgent } from "@/lib/agent-service-runs";
+// K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.2): nhiệm vụ định kỳ — nextDueAt tính
+// lại theo parser chung sau mỗi run; kill-switch 5 lỗi liên tiếp → paused.
+import { computeNextDueAt } from "@/lib/schedule";
 import {
   callLlmWithRetry,
   estimateTokens,
@@ -31,6 +34,12 @@ export const maxDuration = 120;
  *    0 chi phí LLM, ~0.2–1.5s
  * → AgentRun + AgentMessage (broadcast) + health + audit AGENT_RUN_COMPLETED
  * (mode "single"). Lỗi → persistRun FAILED + 502 (pattern run route).
+ *
+ * K3 (#94 — AUTONOMY_BLUEPRINT §6.2): body thêm {taskId} — chạy agent THEO
+ * một nhiệm vụ (engine due-check hoặc nút "Chạy ngay"): nạp AgentTask (thuộc
+ * agent này, 404 nếu lệch) · tiêm khối "NHIỆM VỤ ĐỊNH KỲ: title\ndescription"
+ * vào user-prompt · AgentRun ghi taskId · kết thúc → cập nhật AgentTask
+ * (runCount/failStreak/result/nextDueAt, kill-switch 5 lỗi) — fail-soft.
  */
 
 /** Robustly extract the first JSON object from an LLM response. */
@@ -47,7 +56,8 @@ function parseJsonBlock<T extends Record<string, unknown>>(raw: string): Partial
   }
 }
 
-/** Persist an agent run + restore agent status + update health (persistRun-style). */
+/** Persist an agent run + restore agent status + update health (persistRun-style).
+ *  K3 (#94): taskId — liên kết AgentRun với AgentTask định kỳ đã sinh ra run. */
 async function persistRun(
   agentId: string,
   success: boolean,
@@ -55,7 +65,8 @@ async function persistRun(
   tokensIn: number,
   tokensOut: number,
   output: string | null,
-  error: string | null
+  error: string | null,
+  taskId?: string | null
 ): Promise<{ id: string; durationMs: number; costUsd: number }> {
   const finishedAt = new Date();
   const durationMs = finishedAt.getTime() - startedAt;
@@ -72,6 +83,7 @@ async function persistRun(
       costUsd,
       output,
       error,
+      ...(taskId ? { taskId } : {}),
     },
   });
   await db.agent.update({
@@ -80,6 +92,125 @@ async function persistRun(
   });
   await updateAgentHealth(agentId, success, durationMs, run.id); // F-113: loại run vừa tạo khỏi P50
   return { id: run.id, durationMs, costUsd };
+}
+
+/* ═══ K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.2): cập nhật AgentTask sau run ═══ */
+
+/** Dữ liệu tối thiểu của AgentTask cần cho update sau run. */
+interface TaskForUpdate {
+  id: string;
+  title: string;
+  schedule: string | null;
+  failStreak: number;
+  agentName: string;
+}
+
+/** Ngưỡng kill-switch: 5 lỗi liên tiếp → tự tạm dừng + RiskAlert (§6.1). */
+const K3_FAIL_STREAK_LIMIT = 5;
+
+/** Snippet kết quả nhiệm vụ — output mới nhất, tối đa 4000 ký tự (§6.2). */
+function taskResultSnippet(output: string | null): string | null {
+  if (!output) return null;
+  return output.length > 4000 ? `${output.slice(0, 4000)}…` : output;
+}
+
+/**
+ * Cập nhật AgentTask khi run liên kết kết thúc (fail-soft TUYỆT ĐỐI — lỗi DB
+ * chỉ console.error, KHÔNG chặn AgentRun đã chạy xong):
+ *  - COMPLETED: lastRunAt=now · runCount++ · failStreak=0 · result=snippet ≤4000
+ *    · nextDueAt=computeNextDueAt(schedule) khi có lịch (slot đã tiêu thụ)
+ *    · status: định kỳ GIỮ PENDING (chạy lại theo lịch) / nhiệm vụ tay →
+ *    COMPLETED + completedAt (semantics cũ).
+ *  - FAILED: failStreak++ · nextDueAt vẫn dịch theo lịch (slot đã tiêu thụ)
+ *    · status: định kỳ GIỮ PENDING / nhiệm vụ tay → FAILED
+ *    · failStreak ≥ 5 → paused=true + RiskAlert WARNING K3_TASK_AUTOPAUSED
+ *    (message tiếng Việt nêu tên agent + nhiệm vụ) + AuditLog K3_TASK_AUTOPAUSED.
+ */
+async function updateTaskAfterRun(
+  task: TaskForUpdate,
+  success: boolean,
+  output: string | null
+): Promise<void> {
+  try {
+    const now = new Date();
+    const nextDueAt = task.schedule
+      ? computeNextDueAt(task.schedule, now)
+      : null;
+    const data: Record<string, unknown> = {
+      lastRunAt: now,
+      runCount: { increment: 1 },
+      failStreak: success ? 0 : { increment: 1 },
+      ...(task.schedule ? { nextDueAt } : {}),
+      // Nhiệm vụ tay (schedule null): một lần — COMPLETED/FAILED như semantics cũ;
+      // định kỳ: GIỮ PENDING để engine due-check tiếp nhịp sau.
+      ...(task.schedule
+        ? {}
+        : {
+            status: success ? "COMPLETED" : "FAILED",
+            completedAt: success ? now : null,
+          }),
+    };
+    if (success && output) {
+      data.result = taskResultSnippet(output);
+    }
+    // Kill-switch nhiệm vụ (§6.1): 5 lỗi liên tiếp → tự tạm dừng.
+    const newStreak = success ? 0 : task.failStreak + 1;
+    if (!success && newStreak >= K3_FAIL_STREAK_LIMIT) {
+      data.paused = true;
+    }
+    await db.agentTask.update({ where: { id: task.id }, data });
+
+    if (!success && newStreak >= K3_FAIL_STREAK_LIMIT) {
+      await db.riskAlert
+        .create({
+          data: {
+            severity: "WARNING",
+            code: "K3_TASK_AUTOPAUSED",
+            message: `Nhiệm vụ định kỳ "${task.title}" của agent ${task.agentName} tự tạm dừng sau ${K3_FAIL_STREAK_LIMIT} lần chạy lỗi liên tiếp — kiểm tra lại lịch hoặc nội dung nhiệm vụ rồi bật lại trong tab Nhiệm vụ.`,
+            metricKey: "agent_task.fail_streak",
+            metricValue: newStreak,
+            threshold: K3_FAIL_STREAK_LIMIT,
+          },
+        })
+        .catch((err) => console.error("[api/agents/[id]/run] RiskAlert K3_TASK_AUTOPAUSED:", err));
+      await db.auditLog
+        .create({
+          data: {
+            action: "K3_TASK_AUTOPAUSED",
+            entity: "AgentTask",
+            entityId: task.id,
+            after: JSON.stringify({
+              title: task.title,
+              agentName: task.agentName,
+              failStreak: newStreak,
+            }),
+          },
+        })
+        .catch((err) => console.error("[api/agents/[id]/run] audit K3_TASK_AUTOPAUSED:", err));
+      console.error(
+        `[api/agents/[id]/run] K3 kill-switch: nhiệm vụ "${task.title}" (${task.agentName}) tự tạm dừng sau ${newStreak} lỗi liên tiếp`
+      );
+    }
+  } catch (err) {
+    // fail-soft — nhiệm vụ có thể đã bị trader xoá giữa chừng (P2025) v.v.
+    console.error("[api/agents/[id]/run] updateTaskAfterRun fail-soft:", err);
+  }
+}
+
+/** Khối prompt nhiệm vụ — tiêm vào user-prompt theo cơ chế context sẵn có. */
+function buildTaskPromptBlock(
+  title: string,
+  description: string | null,
+  schedule: string | null
+): string {
+  const lines = [
+    `NHIỆM VỤ ĐỊNH KỲ: ${title}`,
+    description ?? "(không có mô tả thêm)",
+  ];
+  if (schedule) {
+    lines.push("(Nhiệm vụ định kỳ — trả lời đúng trọng tâm nhiệm vụ trên.)");
+  }
+  return lines.join("\n");
 }
 
 interface ParsedAgentOutput {
@@ -161,12 +292,23 @@ export async function POST(
   try {
     const { id } = await params;
 
-    // Body {} hoặc { note?: string } — chấp nhận body rỗng
-    const body = (await req.json().catch(() => ({}))) as { note?: unknown };
+    // Body {} hoặc { note?: string, taskId?: string } — chấp nhận body rỗng.
+    // K3 (#94): taskId — chạy agent THEO một nhiệm vụ (engine due-check hoặc
+    // nút "Chạy ngay" trong tab Nhiệm vụ).
+    const body = (await req.json().catch(() => ({}))) as {
+      note?: unknown;
+      taskId?: unknown;
+    };
     const note = typeof body.note === "string" ? body.note.trim() : "";
     if (note.length > 500) {
       return NextResponse.json(
         { error: "Ghi chú quá dài (tối đa 500 ký tự)." },
+        { status: 400 }
+      );
+    }
+    if (body.taskId !== undefined && typeof body.taskId !== "string") {
+      return NextResponse.json(
+        { error: "taskId phải là chuỗi id nhiệm vụ." },
         { status: 400 }
       );
     }
@@ -192,6 +334,17 @@ export async function POST(
       return NextResponse.json(
         { error: "Agent đang chạy một tác vụ khác." },
         { status: 400 }
+      );
+    }
+
+    // ── K3 (#94 §6.2): nạp nhiệm vụ khi có taskId — phải thuộc agent này ──
+    const task = body.taskId
+      ? await db.agentTask.findUnique({ where: { id: body.taskId } })
+      : null;
+    if (body.taskId && (!task || task.agentId !== agent.id)) {
+      return NextResponse.json(
+        { error: "Không tìm thấy nhiệm vụ của agent này." },
+        { status: 404 }
       );
     }
 
@@ -243,8 +396,18 @@ export async function POST(
           0,
           0,
           JSON.stringify({ mode: "single", ...result.output }),
-          null
+          null,
+          task?.id
         );
+        // K3 (#94 §6.2): cập nhật AgentTask sau run (fail-soft) — service agent
+        // cũng đếm runCount/dịch nextDueAt như LLM agent.
+        if (task) {
+          await updateTaskAfterRun(
+            { id: task.id, title: task.title, schedule: task.schedule, failStreak: task.failStreak, agentName: agent.name },
+            true,
+            result.content
+          );
+        }
         const message = await db.agentMessage.create({
           data: {
             fromAgentId: agent.id,
@@ -267,6 +430,7 @@ export async function POST(
               tokensOut: 0,
               costUsd: 0,
               durationMs: run.durationMs,
+              ...(task ? { taskId: task.id } : {}),
             }),
           },
         });
@@ -287,6 +451,7 @@ export async function POST(
               durationMs: run.durationMs,
               taskStatus: "COMPLETED",
             },
+            ...(task ? { task: { id: task.id, title: task.title } } : {}),
           })
         );
       } catch (err) {
@@ -300,8 +465,17 @@ export async function POST(
           0,
           0,
           null,
-          errorMessage
+          errorMessage,
+          task?.id
         ).catch(() => null);
+        // K3: thất bại cũng cập nhật nhiệm vụ (failStreak++ / kill-switch) — fail-soft.
+        if (task) {
+          await updateTaskAfterRun(
+            { id: task.id, title: task.title, schedule: task.schedule, failStreak: task.failStreak, agentName: agent.name },
+            false,
+            null
+          );
+        }
         return NextResponse.json(
           { error: `Agent dịch vụ lỗi: ${errorMessage}` },
           { status: 500 }
@@ -317,11 +491,18 @@ export async function POST(
     // block chưa bao giờ tới LLM nào).
     let sentPromptText: string | null = null;
     try {
-      // Prompt theo vai (block chọn lọc như run route) + ghi chú tuỳ chọn của trader
+      // Prompt theo vai (block chọn lọc như run route) + khối nhiệm vụ K3 (nếu
+      // chạy theo nhiệm vụ) + ghi chú tuỳ chọn của trader — đúng cơ chế context
+      // sẵn có (cùng chỗ tiêm GHI CHÚ, sau buildSingleRunPrompt).
       const { system, user } = await buildSingleRunPrompt(agent.code);
-      const userPrompt = note
-        ? `${user}\n\nGHI CHÚ CỦA TRADER:\n${note}`
-        : user;
+      const parts: string[] = [user];
+      if (task) {
+        parts.push(buildTaskPromptBlock(task.title, task.description, task.schedule));
+      }
+      if (note) {
+        parts.push(`GHI CHÚ CỦA TRADER:\n${note}`);
+      }
+      const userPrompt = parts.join("\n\n");
       sentPromptText = `${system}\n\n${userPrompt}`;
 
       const { raw, tokensIn, tokensOut } = await callLlmWithRetry(system, userPrompt);
@@ -343,8 +524,19 @@ export async function POST(
         tokensIn,
         tokensOut,
         JSON.stringify({ mode: "single", content, reasoning, sentiment }),
-        null
+        null,
+        task?.id
       );
+
+      // K3 (#94 §6.2): cập nhật AgentTask sau run (fail-soft) — runCount+1,
+      // failStreak=0, result=snippet, nextDueAt dịch theo lịch.
+      if (task) {
+        await updateTaskAfterRun(
+          { id: task.id, title: task.title, schedule: task.schedule, failStreak: task.failStreak, agentName: agent.name },
+          true,
+          content
+        );
+      }
 
       const message = await db.agentMessage.create({
         data: {
@@ -369,6 +561,7 @@ export async function POST(
             tokensOut,
             costUsd: run.costUsd,
             durationMs: run.durationMs,
+            ...(task ? { taskId: task.id } : {}),
           }),
         },
       });
@@ -390,6 +583,7 @@ export async function POST(
             durationMs: run.durationMs,
             taskStatus: "COMPLETED",
           },
+          ...(task ? { task: { id: task.id, title: task.title } } : {}),
         })
       );
     } catch (err) {
@@ -408,8 +602,18 @@ export async function POST(
         tokensInEstimate,
         0,
         null,
-        errorMessage
+        errorMessage,
+        task?.id
       ).catch(() => null);
+      // K3: thất bại cũng cập nhật nhiệm vụ (failStreak++ / kill-switch 5 lỗi
+      // → paused + RiskAlert) — fail-soft tuyệt đối.
+      if (task) {
+        await updateTaskAfterRun(
+          { id: task.id, title: task.title, schedule: task.schedule, failStreak: task.failStreak, agentName: agent.name },
+          false,
+          null
+        );
+      }
       await db.auditLog
         .create({
           data: {

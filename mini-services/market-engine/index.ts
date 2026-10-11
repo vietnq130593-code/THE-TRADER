@@ -43,6 +43,13 @@
  *        MẶC ĐỊNH HẬU PHƯƠNG từ K2 #86: chỉ hiệu lực khi AppSetting "k-run"
  *        CHƯA TỪNG được tạo; key tồn tại (kể cả enabled=false) → AppSetting
  *        thắng tuyệt đối (due-check k2 bên dưới quản, env interval nhường quyền).
+ *      - k3TaskDueCheck (tick 60s — K3 #94, AUTONOMY_BLUEPRINT §6.3): đôn đốc
+ *        NHIỆM VỤ ĐỊNH KỲ của agents — GET /api/agents/tasks/due lấy tối đa 10
+ *        nhiệm vụ due (schedule≠null && !paused && nextDueAt≤now); agent đang
+ *        RUNNING → PATCH deferMinutes:5 (hoãn, không chồng run); agent rảnh →
+ *        POST /api/agents/[agentId]/run {taskId} (route tự cập nhật AgentTask:
+ *        runCount/nextDueAt/failStreak/kill-switch 5 lỗi tự paused). Engine chỉ
+ *        đôn đốc — KHÔNG tự viết kết quả; fail-soft tuyệt đối.
  *   3. P0-5 (phiên #57 — DATA_PLATFORM_BLUEPRINT §4.2): schedule STATE vào
  *      DB qua /api/market/engine-state (DataSourceStatus.meta key
  *      "engine-state") — boot đọc lại (đã-sync-ngày + backoff intl không còn
@@ -212,6 +219,14 @@ const stats = {
   k2KeyExists: false,
   k2Enabled: false,
   k2IntervalMinutes: 0,
+  // K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.3): due-check nhiệm vụ định kỳ
+  lastK3CheckAt: null as string | null,
+  lastK3DispatchAt: null as string | null,
+  lastK3DeferAt: null as string | null,
+  lastK3Error: null as string | null,
+  k3Checks: 0,
+  k3Dispatched: 0,
+  k3Defers: 0,
   clients: 0,
 };
 
@@ -653,6 +668,119 @@ async function k2CheckAndRun(): Promise<void> {
   }
 }
 
+/** K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.3): due-check NHIỆM VỤ ĐỊNH KỲ.
+ *
+ * Mỗi tick 60s (pattern k2CheckAndRun): GET /api/agents/tasks/due (timeout
+ * 10s — tối đa 10 nhiệm vụ: schedule≠null && !paused && nextDueAt ≤ now).
+ * Với mỗi nhiệm vụ due:
+ *   - agent đang RUNNING (hoặc đang trong chu kỳ 23 — chu kỳ đánh dấu toàn
+ *     bộ agents RUNNING) → PATCH deferMinutes:5 (nextDueAt += 5 phút kể từ
+ *     mốc lớn hơn) — KHÔNG chồng run (§6.3);
+ *   - agent rảnh → POST /api/agents/[agentId]/run {taskId} (timeout 110s <
+ *     maxDuration route 120s). Route TỰ cập nhật AgentTask khi run kết thúc
+ *     (runCount++, nextDueAt dịch theo lịch, failStreak, kill-switch 5 lỗi
+ *     tự paused) — engine chỉ đôn đốc, KHÔNG tự viết kết quả.
+ *
+ * Guard in-flight THEO NHIỆM VỤ (F-481-01 pattern): run LLM 10-60s trong
+ * khi nextDueAt chỉ dịch lúc run KẾT THÚC → tick 60s kế không bắn POST kép
+ * cho cùng nhiệm vụ; các nhiệm vụ due khác vẫn chạy song song (mỗi agent có
+ * claim riêng + rate-limit 60s ở route). Lỗi POST (429 cooldown / 400 agent
+ * bận / 502 LLM) → KHÔNG dịch nextDueAt → tick sau tự thử lại (fail-soft,
+ * không dồn cục; failStreak do route đếm trên AgentRun thật). */
+interface K3DueTask {
+  taskId: string;
+  agentId: string;
+  agentCode: string;
+  agentName: string;
+  agentStatus: string;
+  title: string;
+  schedule: string;
+  nextDueAt: string | null;
+}
+const k3InFlight = new Set<string>();
+const K3_GET_TIMEOUT_MS = 10_000;
+const K3_RUN_POST_TIMEOUT_MS = 110_000;
+const K3_DEFER_PATCH_TIMEOUT_MS = 15_000;
+const K3_DEFER_MINUTES = 5;
+async function k3DeferBusyTask(t: K3DueTask): Promise<void> {
+  try {
+    const res = await fetch(
+      `${APP_URL}/api/agents/${t.agentId}/tasks/${t.taskId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deferMinutes: K3_DEFER_MINUTES }),
+        signal: AbortSignal.timeout(K3_DEFER_PATCH_TIMEOUT_MS),
+      }
+    );
+    if (res.ok) {
+      stats.k3Defers++;
+      stats.lastK3DeferAt = new Date().toISOString();
+      log(
+        "k3",
+        `hoãn "${t.title}" (${t.agentCode}) +${K3_DEFER_MINUTES} phút — agent đang bận (${t.agentStatus})`
+      );
+    } else {
+      log("k3", `hoãn "${t.title}" (${t.agentCode}) HTTP ${res.status} — tick sau thử lại`);
+    }
+  } catch (err) {
+    log("k3", `hoãn "${t.title}" (${t.agentCode}) lỗi: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+async function k3DispatchTask(t: K3DueTask): Promise<void> {
+  k3InFlight.add(t.taskId);
+  try {
+    const data = await postJson(`/api/agents/${t.agentId}/run`, { taskId: t.taskId }, {
+      timeoutMs: K3_RUN_POST_TIMEOUT_MS,
+    });
+    stats.k3Dispatched++;
+    stats.lastK3DispatchAt = new Date().toISOString();
+    const durationMs = (data as { run?: { durationMs?: number } }).run?.durationMs;
+    log(
+      "k3",
+      `nhiệm vụ "${t.title}" (${t.agentCode}) hoàn tất${durationMs != null ? ` — ${durationMs}ms` : ""}`
+    );
+  } catch (err) {
+    // 429 cooldown / 400 agent bận / 502 LLM — route sẽ đếm failStreak trên
+    // AgentRun THẬT; lỗi bắn-đi không dịch nextDueAt → tick sau thử lại.
+    log("k3", `nhiệm vụ "${t.title}" (${t.agentCode}) bỏ qua (thử lại tick sau): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    k3InFlight.delete(t.taskId);
+  }
+}
+async function k3TaskDueCheck(): Promise<void> {
+  stats.k3Checks++;
+  stats.lastK3CheckAt = new Date().toISOString();
+  let tasks: K3DueTask[] = [];
+  try {
+    const res = await fetch(`${APP_URL}/api/agents/tasks/due?take=10`, {
+      signal: AbortSignal.timeout(K3_GET_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { tasks?: K3DueTask[] };
+      if (Array.isArray(data.tasks)) tasks = data.tasks;
+    } else {
+      stats.lastK3Error = `HTTP ${res.status} từ /api/agents/tasks/due`;
+      log("k3", `đọc nhiệm vụ due: ${stats.lastK3Error} — giữ nguyên tick trước`);
+      return;
+    }
+  } catch (err) {
+    stats.lastK3Error = err instanceof Error ? err.message : String(err);
+    log("k3", `đọc nhiệm vụ due lỗi (${stats.lastK3Error}) — tick sau thử lại`);
+    return;
+  }
+  if (tasks.length === 0) return;
+  for (const t of tasks) {
+    if (typeof t.taskId !== "string" || typeof t.agentId !== "string") continue;
+    if (t.agentStatus === "RUNNING") {
+      void k3DeferBusyTask(t);
+      continue;
+    }
+    if (k3InFlight.has(t.taskId)) continue; // run chưa xong — không bắn kép
+    void k3DispatchTask(t);
+  }
+}
+
 /** A1 (#79) — kết toán bandit theo lịch (16:15 ICT hằng ngày, sau eod-sync):
  *  POST /api/ml/settle → broadcast "settle". Thuần thuật toán ~1-2s, 0 LLM.
  *  F-481-01 pattern: guard in-flight chống due-check 60s bắn POST chồng
@@ -861,7 +989,7 @@ http.listen(PORT, () => {
     "boot",
     `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
-    } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run")`
+    } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
   // P0-5 (phiên #57): hydrate state từ DB TRƯỚC khi chạy boot-sync — restart
   // không quên "hôm nay đã sync EOD" (nghiệm thu: kill engine → restart →
@@ -903,6 +1031,12 @@ http.listen(PORT, () => {
       // không được phép ném uncaught exception giết event loop).
       void k2CheckAndRun().catch((err) => {
         log("k2", `LỖI k2CheckAndRun: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      // K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.3): due-check nhiệm vụ định kỳ —
+      // cùng try/catch chung + .catch riêng (lỗi 1 lịch không giết cả khối;
+      // engine chỉ đôn đốc, kết quả do route ghi trên AgentTask).
+      void k3TaskDueCheck().catch((err) => {
+        log("k3", `LỖI k3TaskDueCheck: ${err instanceof Error ? err.message : String(err)}`);
       });
     } catch (err) {
       log("sched", `LỖI scheduler 60s: ${err instanceof Error ? err.message : String(err)}`);

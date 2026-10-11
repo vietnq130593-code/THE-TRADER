@@ -8,23 +8,30 @@ import {
   MLP_TUNING_FIELDS,
   RAG_TUNING_DEFAULT,
   RAG_TUNING_FIELDS,
+  effectiveMlTuning,
   logMlAudit,
   readMlTuning,
   sanitizeTuningInput,
   writeMlTuning,
   type MlTuning,
+  type MlpTuning,
 } from "@/lib/ml/tuning";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * GET/POST /api/ml/tuning (phiên #89 — tab "Tinh chỉnh" module Học máy).
+ * GET/POST /api/ml/tuning (phiên #89 → #94 · Task 3 — tab "Tinh chỉnh" +
+ * trình chỉnh sửa kiến trúc ở tab "Mạng thần kinh").
  *
- * GET  → cấu hình đang lưu + giá trị HIỆU LỰC (merge mặc định) + phạm vi
- *        hợp lệ từng trường (UI render ô nhập + validate).
- * POST → body (mọi phần tuỳ chọn, semantic partial — gửi {h1:28} giữ lr cũ):
- *   { mlp?: {h1?, h2?, epochs?, patience?, batchSize?, lr?},
+ * GET  → cấu hình đang lưu + giá trị HIỆU LỰC (merge mặc định — migrations
+ *        h1/h2 → hidden[] chạy trong readMlTuning) + phạm vi hợp lệ từng
+ *        trường (UI render ô nhập + validate).
+ * POST → body (mọi phần tuỳ chọn, semantic partial — gửi {lr: 0,005} giữ
+ *        nguyên hidden đã lưu):
+ *   { mlp?: {hidden?: number[], activations?: ("relu"|"tanh"|"sigmoid")[],
+ *            lossWeights?: [number, number, number],
+ *            epochs?, patience?, batchSize?, lr?, l2?, valFraction?, seed?},
  *     rag?: {topK?, k1?, b?, wRecency?},
  *     resetMlp?: boolean, resetRag?: boolean,
  *     gruEnabled?: boolean,          // kill-switch giọng thứ ba — hiệu lực tức thì
@@ -36,16 +43,30 @@ export const runtime = "nodejs";
  */
 
 function buildPayload(saved: MlTuning) {
+  const effective = effectiveMlTuning(saved);
   return {
     saved,
-    effective: {
-      mlp: { ...MLP_TUNING_DEFAULT, ...saved.mlp },
-      rag: { ...RAG_TUNING_DEFAULT, ...saved.rag },
-    },
+    effective,
     defaults: { mlp: MLP_TUNING_DEFAULT, rag: RAG_TUNING_DEFAULT },
     ranges: { mlp: MLP_TUNING_FIELDS, rag: RAG_TUNING_FIELDS },
     updatedAt: saved.updatedAt ?? null,
   };
+}
+
+/**
+ * Hoà giải activations về đúng độ dài hidden SAU KHI merge (pad relu / cắt) —
+ * chỉ chạy khi hidden có mặt; hidden thay đổi mà không gửi activations →
+ * phần thiếu tự bổ "relu" (trình chỉnh sửa luôn gửi kèm nhau nên hiếm khi xảy ra).
+ */
+function reconcileMlpSection(section: Partial<MlpTuning>): Partial<MlpTuning> {
+  if (section.hidden == null) return section;
+  const acts: MlpTuning["activations"] = [];
+  const src = section.activations ?? [];
+  for (let i = 0; i < section.hidden.length; i++) {
+    const v = src[i];
+    acts.push(v === "tanh" || v === "sigmoid" || v === "relu" ? v : "relu");
+  }
+  return { ...section, activations: acts };
 }
 
 export async function GET() {
@@ -92,7 +113,24 @@ export async function POST(req: Request) {
     );
   }
   if (sanitized.mlp != null) {
-    next.mlp = { ...next.mlp, ...sanitized.mlp } as MlTuning["mlp"];
+    const merged: Partial<MlpTuning> = { ...next.mlp, ...sanitized.mlp };
+    // Chặn lệch độ dài sau merge (gửi activations mà không gửi hidden khớp).
+    if (
+      merged.hidden != null &&
+      merged.activations != null &&
+      merged.hidden.length !== merged.activations.length
+    ) {
+      return NextResponse.json(
+        {
+          error: "Giá trị tinh chỉnh không hợp lệ.",
+          fields: [
+            `mlp.activations: phải cùng độ dài với mlp.hidden (${merged.hidden.length} lớp — nhận ${merged.activations.length} activation)`,
+          ],
+        },
+        { status: 422 }
+      );
+    }
+    next.mlp = reconcileMlpSection(merged) as MlTuning["mlp"];
     changed = true;
     applied.push("MLP");
   }
