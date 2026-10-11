@@ -59,3 +59,7 @@ yarn-error.log*
 next-env.d.ts
 dev-engine.log
 .audit-tmp/
+
+# #91 — PGlite Postgres dev engine data (mini-services/pg-service) — local only
+/db/pglite/
+/pg-service.log

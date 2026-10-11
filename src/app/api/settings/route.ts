@@ -15,6 +15,8 @@ import {
 import { getNotifySettings, saveNotifySettings, notifyStatus } from "@/lib/notify";
 import { getVnHolidayOverlay, saveVnHolidayOverlay, upcomingHolidays } from "@/lib/vn-calendar";
 import { getRiskQuantLimitsStatus, resetRiskQuantLimits } from "@/lib/risk/engine";
+// #91 việc 2 — tự động dừng cơ chế thử nghiệm khi lưu cấu hình VNDIRECT thật
+import { pauseSandboxForRealTrading } from "@/lib/k-sandbox";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -258,7 +260,32 @@ export async function PUT(req: Request): Promise<NextResponse> {
       await setMarketDataMode(mode);
     }
     if (vnd) {
+      // #91 việc 2 — phát hiện chuyển trạng thái "chưa cấu hình → đã cấu hình
+      // VNDIRECT thật": đọc TRƯỚC khi lưu để biết mốc chuyển đổi (chỉ auto-pause
+      // cơ chế thử nghiệm đúng lúc trader KẾT NỐI THẬT lần đầu — lưu lại creds
+      // khi đã configured từ trước không pause thêm, đã pause cũng không đụng).
+      const before = await getVndirectSettings();
+      const wasConfigured = isVndirectConfigured(before);
       await saveVndirectSettings(vnd);
+      const after = await getVndirectSettings();
+      const nowConfigured = isVndirectConfigured(after);
+      let sandboxAutoPaused = false;
+      if (!wasConfigured && nowConfigured) {
+        // Hiệu lệnh trader #91: "khi Lưu cấu hình VNDIRECT thật → cơ chế
+        // Thử nghiệm tự động dừng". Fail-soft bên trong — lỗi DB sandbox
+        // KHÔNG làm hỏng luồng lưu Settings.
+        const res = await pauseSandboxForRealTrading();
+        sandboxAutoPaused = res.paused;
+        if (sandboxAutoPaused) {
+          console.log(
+            "[api/settings:PUT] VNDIRECT thật vừa cấu hình — cơ chế thử nghiệm K1 tự động tạm dừng (pause §5.2, audit K1_SANDBOX_AUTO_PAUSED_FOR_REAL)"
+          );
+        }
+      }
+      const base = await buildSettingsResponse();
+      // field transient chỉ PUT trả (không thêm vào GET — client đọc ngay
+      // response để toast đúng sự thật đã auto-pause hay không)
+      return NextResponse.json({ ...base, sandboxAutoPaused });
     }
     // P2-1/#62 — lưu cấu hình kênh thông báo S1
     if (notify) {

@@ -3,10 +3,18 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FlaskConical, Wallet } from "lucide-react";
+import { FlaskConical, Loader2, RotateCcw, Wallet } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -20,7 +28,7 @@ import {
 } from "@/components/ui/table";
 import { apiGet, apiPost } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
-import { usePortfolioWorld } from "@/hooks/use-portfolio-world";
+import { usePortfolioWorld, useResetPaperWorld } from "@/hooks/use-portfolio-world";
 import { AllocationDonut } from "@/components/dashboard/allocation-donut";
 import {
   changeColor,
@@ -60,9 +68,22 @@ export function PortfolioSection() {
   // thì coi tiền chế độ đó là tiền chính để đầu tư giả định" — trước đây mặc
   // định Giấy 452tr demo nên trader thấy "vẫn giữ giá trị demo cũ"). Query key
   // gắn accountType → mọi world tự invalidate theo prefix ["portfolio"] như cũ.
-  const { viewAccountType, sandboxAvailable, sandboxState: kSandbox, setWorld: setAccountType } =
-    usePortfolioWorld();
+  // PHIÊN #91 — paperLabel "Giấy"→"Thực tế" khi VNDIRECT thật đã cấu hình
+  // (việc 2) + useResetPaperWorld "Đặt lại thế giới Giấy về 0" (việc 1).
+  const {
+    viewAccountType,
+    sandboxAvailable,
+    sandboxState: kSandbox,
+    setWorld: setAccountType,
+    paperLabel,
+    vndirectConfigured,
+  } = usePortfolioWorld();
   const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
+
+  // #91 việc 1 — reset thế giới Giấy: Dialog xác nhận tường minh (pattern #90
+  // sandbox-card) — một lần bấm không đủ & dễ hiểu nhầm là đã xong.
+  const resetPaper = useResetPaperWorld();
+  const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
 
   const portfolioQuery = useQuery({
     queryKey: ["portfolio", viewAccountType],
@@ -93,45 +114,77 @@ export function PortfolioSection() {
             <Wallet className="size-4 text-muted-foreground" aria-hidden="true" />
             Danh mục đầu tư
           </span>
-          {/* K1 (#87 §5.6-Q3): bộ lọc tài khoản Giấy/Thử nghiệm — segmented control */}
-          <div
-            className="flex items-center gap-1 rounded-lg border border-border/60 p-1"
-            role="group"
-            aria-label="Chọn thế giới tài khoản hiển thị"
-          >
-            <button
-              type="button"
-              onClick={() => setAccountType("paper")}
-              aria-pressed={viewAccountType === "paper"}
-              className={cn(
-                "rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40",
-                viewAccountType === "paper"
-                  ? "bg-secondary text-secondary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
+          {/* K1 (#87 §5.6-Q3): bộ lọc tài khoản Giấy/Thử nghiệm — segmented control.
+              #91 việc 2 — nhãn "Giấy" → "Thực tế" khi VNDIRECT thật đã cấu hình
+              (paperLabel từ usePortfolioWorld — một nguồn cho cả Header chip). */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              className="flex items-center gap-1 rounded-lg border border-border/60 p-1"
+              role="group"
+              aria-label="Chọn thế giới tài khoản hiển thị"
             >
-              Giấy
-            </button>
-            <button
-              type="button"
-              onClick={() => sandboxAvailable && setAccountType("sandbox")}
-              disabled={!sandboxAvailable}
-              aria-pressed={viewAccountType === "sandbox"}
-              title={
-                sandboxAvailable
-                  ? "Tài khoản thử nghiệm — agents tự giao dịch (K1)"
-                  : "Chưa kích hoạt cơ chế thử nghiệm (Cài đặt → Cơ chế thử nghiệm)"
-              }
-              className={cn(
-                "flex min-h-8 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50",
-                viewAccountType === "sandbox"
-                  ? "bg-primary/15 text-primary"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              <FlaskConical className="size-3" aria-hidden="true" />
-              Thử nghiệm
-            </button>
+              <button
+                type="button"
+                onClick={() => setAccountType("paper")}
+                aria-pressed={viewAccountType === "paper"}
+                title={
+                  vndirectConfigured
+                    ? "Thế giới THỰC TẾ — tài khoản VNDIRECT thật đã kết nối (lệnh vẫn qua duyệt của bạn)"
+                    : "Thế giới Giấy (paper) — mô phỏng, chưa kết nối VNDIRECT thật"
+                }
+                className={cn(
+                  "flex min-h-8 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40",
+                  viewAccountType === "paper"
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {vndirectConfigured && (
+                  <span
+                    className="size-1.5 shrink-0 rounded-full bg-up"
+                    aria-hidden="true"
+                    title="VNDIRECT thật đã kết nối"
+                  />
+                )}
+                {paperLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => sandboxAvailable && setAccountType("sandbox")}
+                disabled={!sandboxAvailable}
+                aria-pressed={viewAccountType === "sandbox"}
+                title={
+                  sandboxAvailable
+                    ? "Tài khoản thử nghiệm — agents tự giao dịch (K1)"
+                    : "Chưa kích hoạt cơ chế thử nghiệm (Cài đặt → Cơ chế thử nghiệm)"
+                }
+                className={cn(
+                  "flex min-h-8 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50",
+                  viewAccountType === "sandbox"
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <FlaskConical className="size-3" aria-hidden="true" />
+                Thử nghiệm
+              </button>
+            </div>
+            {/* #91 việc 1 — Đặt lại thế giới Giấy về 0 (chỉ khi đang xem Giấy/
+                Thực tế; Thử nghiệm có công cụ riêng ở Settings). */}
+            {!isSandbox && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-8 gap-1.5 text-xs"
+                disabled={resetPaper.isPending}
+                onClick={() => setResetDialogOpen(true)}
+                aria-label="Đặt lại thế giới Giấy về 0 — xoá toàn bộ dữ liệu demo"
+                title="Xoá toàn bộ dữ liệu demo cũ của thế giới Giấy: lệnh · vị thế · giao dịch · đường cong — tiền về đúng 0 ₫"
+              >
+                <RotateCcw className="size-3.5" aria-hidden="true" />
+                Đặt lại dữ liệu
+              </Button>
+            )}
           </div>
         </CardTitle>
         <CardDescription>
@@ -141,11 +194,13 @@ export function PortfolioSection() {
                   ? "Tài khoản thử nghiệm K1 — agents tự giao dịch qua cổng đồng thuận"
                   : `Tài khoản ${p.account.broker} · ${p.account.accountNumber} · ${
                       p.account.accountType === "margin" ? "Ký quỹ (margin)" : "Thường"
-                    }`
+                    }${vndirectConfigured ? " · ĐÃ KẾT NỐI THẬT — thế giới Thực tế" : ""}`
               }${isSandbox && kSandbox?.paused ? " · đang tạm dừng lệnh mới" : ""}`
             : isSandbox
               ? "Tài khoản thử nghiệm (K1)"
-              : "Tài khoản VNDIRECT"}
+              : vndirectConfigured
+                ? "Tài khoản VNDIRECT — thế giới Thực tế"
+                : "Tài khoản VNDIRECT"}
           {isSandbox && (
             <button
               type="button"
@@ -434,6 +489,69 @@ export function PortfolioSection() {
         </div>
         </div>
       </CardContent>
+
+      {/* #91 việc 1 — Dialog xác nhận "Đặt lại thế giới Giấy về 0" (pattern
+          #90 sandbox-card: tường minh thay nút 1-bấm dễ hiểu nhầm đã xong). */}
+      <Dialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Đặt lại thế giới {paperLabel} về 0 — xoá toàn bộ dữ liệu demo?
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Xoá sạch quá khứ giao dịch của{" "}
+                  <span className="font-medium">toàn bộ tài khoản {paperLabel.toLowerCase()}</span>{" "}
+                  (mô phỏng — chưa/không phải tiền thật):
+                </p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>mọi lệnh (kể cả chờ khớp) · vị thế · giao dịch đã khớp</li>
+                  <li>đường cong tiền/equity (CashSnapshot)</li>
+                  <li>
+                    tiền mặt &amp; tổng tài sản về{" "}
+                    <span className="font-semibold text-foreground">0 ₫ tròn trĩnh</span>
+                  </li>
+                </ul>
+                <p>
+                  <span className="font-medium text-foreground">Không đụng tới:</span> tài khoản
+                  Thử nghiệm (một đồng không đổi) · tín hiệu đề xuất · bài học &amp; bộ nhớ học
+                  tập của agents — {" "}
+                  {(ordersQuery.data?.orders.length ?? 0) > 0
+                    ? `hiện có ${ordersQuery.data?.orders.length} lệnh sẽ bị xoá.`
+                    : "thế giới này hiện không còn lệnh nào (đã sạch)."}
+                </p>
+                <p>
+                  Tổng kết lãi/lỗ vòng cũ được lưu vào audit trước khi xoá (minh bạch — không
+                  biến mất âm thầm).
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetDialogOpen(false)}>
+              Huỷ
+            </Button>
+            <Button
+              variant="destructive"
+              className="gap-2"
+              disabled={resetPaper.isPending}
+              onClick={() => {
+                resetPaper.mutate(undefined, {
+                  onSuccess: () => setResetDialogOpen(false),
+                });
+              }}
+            >
+              {resetPaper.isPending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RotateCcw className="size-4" aria-hidden="true" />
+              )}
+              Xoá hết &amp; về 0
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

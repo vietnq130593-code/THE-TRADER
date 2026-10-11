@@ -1,0 +1,13 @@
+{
+  "name": "pg-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Trader — Postgres dev engine (PGlite WASM + TCP socket :5432) cho sandbox reset mất Supabase pooler; dữ liệu bền trong db/pglite",
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11"
+  }
+}

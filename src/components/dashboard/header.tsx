@@ -117,7 +117,8 @@ export function Header() {
   // lệnh "kích hoạt thử nghiệm thì coi tiền chế độ đó là tiền chính"), bấm
   // "Giấy" trong Danh mục thì chip theo về tài khoản giấy. Query key
   // ["portfolio", world] invalidate theo prefix như cũ.
-  const { viewAccountType, portfolioUrl } = usePortfolioWorld();
+  // PHIÊN #91 — paperLabel: VNDIRECT thật đã cấu hình → "THỰC TẾ" (việc 2).
+  const { viewAccountType, portfolioUrl, paperLabel, vndirectConfigured } = usePortfolioWorld();
   const { data: portfolio } = useQuery({
     queryKey: ["portfolio", viewAccountType],
     queryFn: () => apiGet<PortfolioResponse>(portfolioUrl),
@@ -333,7 +334,7 @@ export function Header() {
                     <p className="font-mono text-[11px] text-muted-foreground">
                       {isSandboxView
                         ? `THỬ NGHIỆM · ${portfolio?.account.accountNumber ?? "SANDBOX-K1"}`
-                        : `VNDIRECT · ${portfolio?.account.accountNumber ?? "—"}`}
+                        : `${vndirectConfigured ? "THỰC TẾ · " : ""}VNDIRECT · ${portfolio?.account.accountNumber ?? "—"}`}
                     </p>
                     <p className="tabular-nums text-sm font-semibold">
                       {portfolio ? formatVnd(portfolio.account.equity) : "— ₫"}
@@ -346,8 +347,15 @@ export function Header() {
                   <p className="text-xs leading-relaxed">
                     Tiền ảo của <b>cơ chế thử nghiệm (K1)</b> — agents tự giao dịch qua cổng
                     đồng thuận. Xem chi tiết: Danh mục → Thử nghiệm · quản lý vốn: Cài đặt →
-                    Cơ chế thử nghiệm. Bấm “Giấy” trong Danh mục để chip này quay về tài khoản
-                    giấy VNDIRECT.
+                    Cơ chế thử nghiệm. Bấm “{paperLabel}” trong Danh mục để chip này quay về
+                    tài khoản {vndirectConfigured ? "THỰC TẾ" : "giấy"} VNDIRECT.
+                    {vndirectConfigured &&
+                      " Cơ chế này đã TỰ ĐỘNG tạm dừng vì VNDIRECT thật đã kết nối."}
+                  </p>
+                ) : vndirectConfigured ? (
+                  <p className="text-xs leading-relaxed">
+                    Tài khoản VNDIRECT <b>THẬT</b> của trader — đã kết nối (creds đầy đủ). Lệnh
+                    thật vẫn qua duyệt từng lệnh của bạn; agents tiếp tục đề xuất như thường.
                   </p>
                 ) : (
                   <p className="text-xs leading-relaxed">Tài khoản giấy VNDIRECT của trader.</p>

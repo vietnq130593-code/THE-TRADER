@@ -154,6 +154,7 @@ export function SettingsWorkspace() {
 function VndirectCard({ settings }: { settings: SettingsResponse }) {
   const update = useUpdateSettings();
   const test = useTestConnection();
+  const queryClient = useQueryClient();
 
   const [form, setForm] = React.useState<VndirectForm>(EMPTY_FORM);
   const [reveal, setReveal] = React.useState<Record<string, boolean>>({});
@@ -193,10 +194,25 @@ function VndirectCard({ settings }: { settings: SettingsResponse }) {
     update.mutate(
       { vndirect: creds },
       {
-        onSuccess: () => {
-          toast.success("Đã lưu cấu hình VNDIRECT", {
-            description: `${Object.keys(creds).length} trường được cập nhật (hiển thị đã che).`,
-          });
+        onSuccess: (res) => {
+          // #91 việc 2 — lưu cấu hình VNDIRECT THẬT: cơ chế thử nghiệm tự
+          // dừng phía backend (pause §5.2 + audit K1_SANDBOX_AUTO_PAUSED_FOR_REAL),
+          // thế giới Giấy đổi tên Thực tế. Invalidate ["k-sandbox"] +
+          // ["portfolio"] để chips/segmented control toàn app cập nhật ngay.
+          void queryClient.invalidateQueries({ queryKey: ["k-sandbox"] });
+          void queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+          if (res.sandboxAutoPaused) {
+            toast.success("Đã lưu cấu hình VNDIRECT — kết nối THẬT hoạt động", {
+              description:
+                "Cơ chế Thử nghiệm đã TỰ ĐỘNG TẠM DỪNG (lệnh mới dừng, vị thế cũ giữ + vẫn kết toán). " +
+                "Thế giới Giấy đổi tên thành THỰC TẾ — mọi bài học từ thử nghiệm lẫn thực tế đều có giá trị như nhau.",
+              duration: 10_000,
+            });
+          } else {
+            toast.success("Đã lưu cấu hình VNDIRECT", {
+              description: `${Object.keys(creds).length} trường được cập nhật (hiển thị đã che).`,
+            });
+          }
           setForm(EMPTY_FORM);
         },
         onError: (err: Error) => toast.error(err.message || "Không lưu được cấu hình."),

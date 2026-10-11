@@ -476,6 +476,57 @@ export async function setSandboxPaused(
   return { ok: true };
 }
 
+/**
+ * #91 việc 2 — TỰ ĐỘNG dừng cơ chế thử nghiệm khi trader LƯU cấu hình
+ * VNDIRECT thật (hiệu lệnh: "khi Lưu cấu hình VNDIRECT thật → cơ chế
+ * Thử nghiệm tự động dừng, chuyển sang cơ chế Giấy — đổi tên 'Giấy' thành
+ * 'Thực tế'").
+ *
+ * Ngữ nghĩa = pause §5.2 (KHÔNG reset): dừng lệnh MỚI của agents, vị thế
+ * cũ vẫn giữ + vẫn kết toán equity hằng ngày — lịch sử & bài học vòng thử
+ * nghiệm không mất ("mọi bài học từ dữ liệu thử nghiệm hay Thực tế đều có
+ * giá trị như nhau"). Audit action riêng K1_SANDBOX_AUTO_PAUSED_FOR_REAL
+ * để phân biệt với pause tay của trader.
+ *
+ * Fail-soft hoàn toàn: sandbox chưa bật / đã pause / DB lỗi → im lặng trả
+ * trạng thái (không bao giờ làm hỏng luồng lưu Settings).
+ */
+export async function pauseSandboxForRealTrading(): Promise<{
+  /** Có thực sự chuyển sang pause trong lần gọi này không. */
+  paused: boolean;
+  /** Cơ chế thử nghiệm có đang bật không (trước thao tác). */
+  wasEnabled: boolean;
+}> {
+  try {
+    const s = await getKSandbox();
+    if (!s.enabled || s.paused) {
+      return { paused: false, wasEnabled: s.enabled };
+    }
+    const next: KSandboxStored = { ...s, paused: true };
+    await writeKSandbox(next);
+    const userId = await getActiveUserId();
+    try {
+      await db.auditLog.create({
+        data: {
+          userId,
+          action: "K1_SANDBOX_AUTO_PAUSED_FOR_REAL",
+          entity: "AppSetting",
+          entityId: K_SANDBOX_KEY,
+          after: JSON.stringify({
+            note: "tự động dừng vì VNDIRECT THẬT đã được cấu hình (kết nối tài khoản thật) — dừng lệnh MỚI, vị thế cũ giữ + vẫn kết toán equity; thế giới Giấy đổi tên Thực tế",
+          }),
+        },
+      });
+    } catch (err) {
+      console.error("[lib/k-sandbox] audit auto-pause fail-soft:", err);
+    }
+    return { paused: true, wasEnabled: true };
+  } catch (err) {
+    console.error("[lib/k-sandbox] pauseSandboxForRealTrading fail-soft:", err);
+    return { paused: false, wasEnabled: false };
+  }
+}
+
 /** Đặt lại: ghi snapshot tổng kết vào AuditLog TRƯỚC, rồi xoá sạch (§5.2 reset). */
 export async function resetSandbox(): Promise<
   { ok: true; summary: { equity: number; realisedPnl: number } } | { ok: false; status: number; error: string }

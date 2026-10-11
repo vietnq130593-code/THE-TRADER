@@ -438,6 +438,22 @@ export interface KSandboxState {
   snapshots: { cash: number; equity: number; createdAt: string }[];
 }
 
+/** #91 việc 1 — POST /api/portfolio/reset-paper "Đặt lại thế giới Giấy về 0". */
+export interface PaperWorldResetResponse {
+  ok: true;
+  summary: {
+    accounts: number;
+    orders: number;
+    trades: number;
+    positions: number;
+    snapshots: number;
+    /** Tổng equity thế giới giấy TRƯỚC khi xoá (snapshot tổng kết audit). */
+    equityBefore: number;
+    /** Tổng tiền mặt TRƯỚC khi xoá. */
+    cashBefore: number;
+  };
+}
+
 export interface WatchlistResponse {
   watchlist: {
     id: string;
@@ -647,6 +663,13 @@ export interface VnHolidaysView {
 
 export interface SettingsResponse {
   vndirect: VndirectSettings;
+  /**
+   * #91 việc 2 — CHỈ PUT /api/settings trả về (GET không có): true khi lần
+   * lưu này chuyển VNDIRECT từ chưa cấu hình → đã cấu hình thật VÀ cơ chế
+   * thử nghiệm K1 vừa tự động tạm dừng (audit K1_SANDBOX_AUTO_PAUSED_FOR_REAL).
+   * UI dùng để toast đúng sự thật "Thử nghiệm đã tự dừng, Giấy → Thực tế".
+   */
+  sandboxAutoPaused?: boolean;
   marketData: {
     mode: MarketDataMode;
     /** Mode thực tế sau fallback (vd: realtime-vndirect nhưng credential hỏng → real-eod). */

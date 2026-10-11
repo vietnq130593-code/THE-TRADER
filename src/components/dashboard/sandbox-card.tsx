@@ -31,6 +31,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPostJson } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
+// #91 — đọc trạng thái VNDIRECT thật (dùng chung cache ["settings"] với
+// Settings workspace) để ghi chú "đã TỰ ĐỘNG tạm dừng vì VNDIRECT thật kết nối".
+import { useSettings } from "@/hooks/use-settings";
 import { changeColor, formatDateTime, formatPct, formatSigned, formatVnd } from "@/lib/format";
 import type { KSandboxState } from "@/lib/types";
 
@@ -218,6 +221,9 @@ export function SandboxCard() {
   const queryClient = useQueryClient();
   const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
   const setPortfolioWorld = useUiStore((s) => s.setPortfolioWorld);
+  // #91 việc 2 — VNDIRECT thật đã cấu hình? (dùng chung cache ["settings"])
+  const { data: settingsData } = useSettings();
+  const vndirectConfigured = settingsData?.vndirect?.configured === true;
   const [activateRaw, setActivateRaw] = React.useState("");
   const [cashRaw, setCashRaw] = React.useState("");
   const [topupRaw, setTopupRaw] = React.useState("");
@@ -545,9 +551,21 @@ export function SandboxCard() {
             </div>
             {data?.paused && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Đang tạm dừng: chu kỳ sau <span className="font-medium">0 lệnh mới</span>, vị thế
-                cũ vẫn giữ và vẫn kết toán equity hằng ngày. Ô Đặt lại tiền mặt / Nạp thêm tạm
-                khoá tới khi tiếp tục lại.
+                {vndirectConfigured ? (
+                  <>
+                    <span className="font-medium">Đã TỰ ĐỘNG tạm dừng</span> vì VNDIRECT thật đã
+                    được kết nối (lưu cấu hình trong Cài đặt) — dừng lệnh mới, vị thế cũ vẫn giữ
+                    và vẫn kết toán equity hằng ngày. Muốn chạy tiếp vòng thử nghiệm: bấm
+                    “Tiếp tục” bên cạnh (tự chịu trách nhiệm).
+                  </>
+                ) : (
+                  <>
+                    Đang tạm dừng: chu kỳ sau{" "}
+                    <span className="font-medium">0 lệnh mới</span>, vị thế cũ vẫn giữ và vẫn
+                    kết toán equity hằng ngày. Ô Đặt lại tiền mặt / Nạp thêm tạm khoá tới khi
+                    tiếp tục lại.
+                  </>
+                )}
               </p>
             )}
 
