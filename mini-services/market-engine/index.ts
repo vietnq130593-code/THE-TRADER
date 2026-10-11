@@ -39,7 +39,10 @@
  *        A4 #79, cùng cửa sổ reprobe B14 — không thêm cửa sổ vận hành mới):
  *        POST /api/ml/train {"force": false} — route tự skip khi windowHash
  *        không đổi (không có bar mới) nên tuần không dữ liệu là $0.
- *      - AGENT_CYCLE_MINUTES (0=off): chu kỳ phân tích đa agent tự động
+ *      - AGENT_CYCLE_MINUTES (0=off): chu kỳ phân tích đa agent tự động —
+ *        MẶC ĐỊNH HẬU PHƯƠNG từ K2 #86: chỉ hiệu lực khi AppSetting "k-run"
+ *        CHƯA TỪNG được tạo; key tồn tại (kể cả enabled=false) → AppSetting
+ *        thắng tuyệt đối (due-check k2 bên dưới quản, env interval nhường quyền).
  *   3. P0-5 (phiên #57 — DATA_PLATFORM_BLUEPRINT §4.2): schedule STATE vào
  *      DB qua /api/market/engine-state (DataSourceStatus.meta key
  *      "engine-state") — boot đọc lại (đã-sync-ngày + backoff intl không còn
@@ -54,6 +57,22 @@ import { createServer } from "node:http";
 import { Server } from "socket.io";
 
 const PORT = 3003;
+
+// F-861-01 (Fixbug #86 Vòng 1 — P1) [verify 04:44]: bun --hot re-evaluate module này mỗi lần
+// edit file → scheduler ĐĂNG KÝ TRÙNG (đo thật 2026-10-11T04:29:56Z: 3 lần boot
+// trong 1 giây → news bắn ×3 cùng lúc, hydrate state ×3). globalThis sống qua
+// reload nên flag dưới phát hiện re-evaluation — cảnh báo ỒNG để operator restart
+// (kill + double-fork) thay vì để engine chạy với lịch trùng. Về sau nếu muốn
+// hot-reload thật sự an toàn: chuyển đăng ký scheduler vào guard này (hiện tại
+// giữ đăng ký bình thường để hành vi boot lạnh không đổi).
+const gEngine = globalThis as { __traderEngineEvalAt?: number };
+if (gEngine.__traderEngineEvalAt) {
+  console.error(
+    `[${new Date().toISOString()}] [RELOAD] engine module vừa bị re-evaluate (bun --hot sau edit lúc ${new Date(gEngine.__traderEngineEvalAt).toISOString()}) — CÁC SCHEDULER CŨ VẪN CHẠY, scheduler mới ĐĂNG KÌ TRÙNG. RESTART engine ngay (kill PID + double-fork) để tránh lịch chồng!`
+  );
+}
+gEngine.__traderEngineEvalAt = Date.now();
+
 // Phiên #57 — sandbox: "localhost" phân giải ::1 (refused) — app lắng nghe
 // 127.0.0.1; engine kết nối thẳng qua IPv4 loopback
 const APP_URL = process.env.APP_URL ?? "http://127.0.0.1:3000";
@@ -174,6 +193,14 @@ const stats = {
   mlTrainRuns: 0,
   lastCycleAt: null as string | null,
   cycles: 0,
+  // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chế độ chạy liên tục
+  lastK2CheckAt: null as string | null,
+  lastK2CycleAt: null as string | null,
+  lastK2Error: null as string | null,
+  k2Cycles: 0,
+  k2KeyExists: false,
+  k2Enabled: false,
+  k2IntervalMinutes: 0,
   clients: 0,
 };
 
@@ -511,6 +538,15 @@ async function reprobeAndBroadcast(): Promise<void> {
 }
 
 async function runAgentCycleAndBroadcast(): Promise<void> {
+  // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): AppSetting "k-run" tồn tại →
+  // AppSetting thắng TUYỆT ĐỐI — env interval nhường quyền cho due-check k2
+  // (kể cả enabled=false: "tắt" nghĩa là dừng hẳn, không phải rơi về nhịp env).
+  // Flag do k2CheckAndRun() cập nhật mỗi tick 60s — race ≤ 60s giữa lúc tạo
+  // key và lần check kế bị cooldown 60s + guard 409 của route chặn thực tế.
+  if (kRunKeyExists) {
+    log("cycle", "env interval nhường quyền cho k-run (AppSetting thắng tuyệt đối) — bỏ qua");
+    return;
+  }
   try {
     const data = await postJson("/api/agents/run");
     stats.lastCycleAt = new Date().toISOString();
@@ -519,6 +555,79 @@ async function runAgentCycleAndBroadcast(): Promise<void> {
     log("cycle", `chu kỳ agent hoàn tất (${data.durationMs ?? "?"}ms)`);
   } catch (err) {
     log("cycle", `LỖI: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chế độ chạy liên tục.
+ *
+ * Mỗi tick 60s: GET /api/k/run (timeout 10s — 1 request/phút, nhẹ hơn tick giá
+ * 10s/lần) → cập nhật flag kRunKeyExists (env interval đọc flag này để nhường
+ * quyền) → nếu enabled và đã qua nextCycleAt → POST /api/agents/run (timeout
+ * 280s < maxDuration route 300s). Route TỰ cập nhật k-run.lastCycleAt+
+ * cyclesRun sau MỖI chu kỳ (kể cả tay) → nextCycleAt tự dịch chuyển.
+ *
+ * Guard in-flight (pattern F-481-01): chu kỳ k2 đang chạy → tick 60s không
+ * bắn thêm. Thất bại POST (429 cooldown / 409 single-run / app chậm) → KHÔNG
+ * dịch nextCycleAt (route chỉ ghi mốc khi chu kỳ thật sự bắt đầu) → tick sau
+ * tự thử lại — fail-soft, không dồn cục. */
+let kRunKeyExists = false;
+let k2CycleInFlight = false;
+const K2_CYCLE_POST_TIMEOUT_MS = 280_000;
+const K2_GET_TIMEOUT_MS = 10_000;
+async function k2CheckAndRun(): Promise<void> {
+  // 1) Đọc state k-run (GET — route fail-soft trả mặc định exists:false)
+  interface K2State {
+    exists: boolean;
+    enabled: boolean;
+    intervalMinutes: number;
+    nextCycleAt: string | null;
+  }
+  let state: K2State | null = null;
+  try {
+    const res = await fetch(`${APP_URL}/api/k/run`, {
+      signal: AbortSignal.timeout(K2_GET_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      state = (await res.json()) as K2State;
+    } else {
+      log("k2", `đọc /api/k/run HTTP ${res.status} — giữ state tick trước`);
+    }
+  } catch (err) {
+    log("k2", `đọc /api/k/run lỗi (${err instanceof Error ? err.message : String(err)}) — giữ state tick trước`);
+  }
+  stats.lastK2CheckAt = new Date().toISOString();
+  if (!state || typeof state.exists !== "boolean") return;
+
+  // 2) Flag nhường quyền env — cập nhật MỖI tick (kể cả disabled)
+  kRunKeyExists = state.exists;
+  stats.k2KeyExists = state.exists;
+  stats.k2Enabled = state.enabled;
+  stats.k2IntervalMinutes = state.intervalMinutes ?? 0;
+
+  if (!state.exists || !state.enabled) return;
+  if (k2CycleInFlight) return;
+
+  // 3) Due-check theo nextCycleAt server tính (max(lastCycleAt, startedAt)+nhịp)
+  const dueMs = state.nextCycleAt ? Date.parse(state.nextCycleAt) : NaN;
+  if (!Number.isFinite(dueMs)) return; // route gặp sự cố format — bỏ qua an toàn
+  if (Date.now() < dueMs) return;
+
+  // 4) Chạy chu kỳ — route tự ghi lastCycleAt (mọi đường: tay/k2)
+  k2CycleInFlight = true;
+  try {
+    const data = await postJson("/api/agents/run", undefined, {
+      timeoutMs: K2_CYCLE_POST_TIMEOUT_MS,
+    });
+    stats.lastK2CycleAt = new Date().toISOString();
+    stats.k2Cycles++;
+    stats.lastK2Error = null;
+    io.emit("cycle", data);
+    log("k2", `chu kỳ k2 hoàn tất (${data.durationMs ?? "?"}ms) — nextCycleAt dịch theo lastCycleAt mới`);
+  } catch (err) {
+    stats.lastK2Error = err instanceof Error ? err.message : String(err);
+    log("k2", `bỏ qua (thử lại tick 60s sau): ${stats.lastK2Error}`);
+  } finally {
+    k2CycleInFlight = false;
   }
 }
 
@@ -677,7 +786,7 @@ http.listen(PORT, () => {
     "boot",
     `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
-    }`
+    } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run")`
   );
   // P0-5 (phiên #57): hydrate state từ DB TRƯỚC khi chạy boot-sync — restart
   // không quên "hôm nay đã sync EOD" (nghiệm thu: kill engine → restart →
@@ -711,6 +820,12 @@ http.listen(PORT, () => {
       // (due-check mới nhất trong try/catch chung — lỗi 1 lịch không giết cả khối)
       if (settleDue()) void settleAndBroadcast();
       if (mlTrainDue()) void mlTrainAndBroadcast();
+      // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chạy liên tục —
+      // async + .catch bổ sung theo nguyên tắc vàng Fixbug #2 (timer callback
+      // không được phép ném uncaught exception giết event loop).
+      void k2CheckAndRun().catch((err) => {
+        log("k2", `LỖI k2CheckAndRun: ${err instanceof Error ? err.message : String(err)}`);
+      });
     } catch (err) {
       log("sched", `LỖI scheduler 60s: ${err instanceof Error ? err.message : String(err)}`);
     }

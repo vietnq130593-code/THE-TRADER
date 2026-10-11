@@ -249,6 +249,8 @@ Xem bảng đo §0.4. Ba hệ quả kiến trúc:
 | 5 | B3 — GRU gated + shadow 60 phiên + kill-switch | ✅ **DUYỆT** | K1 chính là "thử nghiệm có kiểm soát" — GRU gated cùng triết lý. **Điểm tích hợp tương lai:** khi K1 hoạt động, hiệu suất giọng GRU trong sandbox (P&L/đóng góp) trở thành tín hiệu bổ sung cho kill-switch/thăng giọng bên cạnh Brier |
 
 > **Ghi chú kiến trúc cho 4 kế hoạch (ghi lại đây để các phiên tương lai đối chiếu):** K2/K3/K4 đều cần một "chủ lịch" chung — engine scheduler (mini-service :3003) là ứng viên tự nhiên (đã có pattern kiểm 60s + state P0-5 + fail-soft, sẽ được mở rộng qua A1/A4); model `AgentTask` có sẵn trong schema là nền cho K3/K4; cơ chế tiền ảo K1 nên dùng `BrokerAccount` loại sandbox + AuditLog faucet để tách bạch khỏi paper account hiện tại.
+>
+> **Cập nhật #86:** 4 kế hoạch K1–K4 đã được trader duyệt đầy đủ 8/8 quyết định trong [AUTONOMY_BLUEPRINT.md](./AUTONOMY_BLUEPRINT.md) v1.1 (Q2 **CÓ TRỘN** P&L sandbox vào vòng học — 2 kênh reward cộng dồn posterior Beta). **K2 đã TRIỂN KHAI xong #86** (AppSetting `k-run` + due-check engine 60s + toggle Header "Liên tục" + `GET/POST /api/k/run` — quyền điều khiển chu kỳ 240ph đã chuyển từ env sang AppSetting/nút UI đúng cam kết Q3). K1 → K3 → K4 xếp hàng theo thứ tự đã duyệt.
 
 ## §9. Changelog
 

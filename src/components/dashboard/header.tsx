@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import {
   Loader2,
@@ -16,13 +16,21 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPostJson } from "@/lib/api";
 import { useRunAgents } from "@/hooks/use-run-agents";
 import { useUiStore, type Workspace } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { formatVnd, isMarketOpen, vnClock, vnDate } from "@/lib/format";
-import type { PortfolioResponse } from "@/lib/types";
+import type { KRunState, PortfolioResponse } from "@/lib/types";
 
 /** Nhãn module hiện tại — hiển thị cạnh logo để định vị khi sidebar đóng. */
 const WORKSPACE_LABELS: Record<Workspace, string> = {
@@ -36,6 +44,34 @@ const WORKSPACE_LABELS: Record<Workspace, string> = {
 };
 
 const emptySubscribe = () => () => {};
+
+/** K2 (AUTONOMY_BLUEPRINT v1.1 §4.1 — §8-Q4 duyệt): bộ nhịp chu kỳ liên tục
+ *  ∈ {60, 120, 240, 480} phút. Mirror hằng K_RUN_INTERVALS của src/lib/k-run.ts
+ *  (server là nguồn validate) — không import trực tiếp vì lib/k-run kéo theo
+ *  Prisma client (server-only), client chỉ cần danh sách hiển thị. */
+const K2_INTERVALS = [60, 120, 240, 480] as const;
+
+const K2_INTERVAL_LABELS: Record<(typeof K2_INTERVALS)[number], string> = {
+  60: "Mỗi giờ",
+  120: "Mỗi 2 giờ",
+  240: "Mỗi 4 giờ",
+  480: "Mỗi 8 giờ",
+};
+
+/** Nhãn đếm ngược tới chu kỳ kế (K2) — "≈ 2g15p nữa" / "≈ 45 phút nữa" /
+ *  "sắp chạy" khi tới hạn (engine tick 60s sẽ bắt trong ≤60s). */
+function k2CountdownLabel(nextCycleAt: string | null, now: Date | null): string | null {
+  if (!nextCycleAt || !now) return null;
+  const dueMs = Date.parse(nextCycleAt);
+  if (!Number.isFinite(dueMs)) return null;
+  const diffMs = dueMs - now.getTime();
+  if (diffMs <= 0) return "sắp chạy";
+  const mins = Math.ceil(diffMs / 60_000);
+  if (mins < 60) return `≈ ${mins} phút nữa`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return `≈ ${hours}g${rem > 0 ? `${rem}p` : ""} nữa`;
+}
 
 /** true only after hydration (avoids theme icon flash + hydration mismatch) */
 function useMounted(): boolean {
@@ -78,6 +114,43 @@ export function Header() {
     queryFn: () => apiGet<PortfolioResponse>("/api/portfolio"),
     staleTime: 60_000,
   });
+
+  // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.4): trạng thái chế độ chạy liên tục —
+  // query riêng refetch 60s (đồng hồ đếm ngược nhích mỗi lần refetch; nhãn phút
+  // không cần tick giây nên không thêm tải). exists=false → env hậu phương.
+  const { data: kRun } = useQuery({
+    queryKey: ["k-run"],
+    queryFn: () => apiGet<KRunState>("/api/k/run"),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  const kRunMutation = useMutation({
+    mutationKey: ["k-run-toggle"],
+    mutationFn: (vars: { action: "start" | "stop" | "interval"; intervalMinutes?: number }) =>
+      apiPostJson<KRunState>("/api/k/run", vars),
+    onSuccess: (res, vars) => {
+      queryClient.setQueryData(["k-run"], res);
+      if (vars.action === "start") {
+        toast.success("Đã bật chế độ chạy liên tục", {
+          description: `Chu kỳ 23 agents tự chạy mỗi ${res.intervalMinutes} phút — tắt bất cứ lúc nào bằng đúng nút này.`,
+        });
+      } else if (vars.action === "stop") {
+        toast.success("Đã tắt chế độ chạy liên tục", {
+          description: "Hiệu lực từ chu kỳ kế tiếp — chu kỳ đang chạy (nếu có) vẫn hoàn tất an toàn.",
+        });
+      } else {
+        toast.success(`Đã đổi nhịp chu kỳ liên tục: mỗi ${res.intervalMinutes} phút`);
+      }
+    },
+    onError: (err) => {
+      toast.error("Không cập nhật được chế độ chạy liên tục", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    },
+  });
+
+  const k2Countdown = k2CountdownLabel(kRun?.nextCycleAt ?? null, now);
 
   // PHIÊN #46 — công bố chiều cao header THẬT qua biến CSS --header-h
   // (header flex-wrap ở mobile nên cao thay đổi) để AppSidebar neo BÊN DƯỚI
@@ -313,6 +386,104 @@ export function Header() {
               </>
             )}
           </Button>
+
+          {/* K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.4): chế độ chạy liên tục.
+           * Bật → chu kỳ 23 agents tự chạy theo nhịp cho tới khi trader tắt.
+           * Tắt hiệu lực từ chu kỳ kế (không giết giữa dòng). Khi key k-run
+           * tồn tại, AppSetting thắng tuyệt đối — env AGENT_CYCLE_MINUTES chỉ
+           * còn là mặc định hậu phương (exists=false). */}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className="flex min-h-9 items-center gap-2 rounded-lg border border-border/60 px-3"
+                  aria-label="Chế độ chạy agent liên tục"
+                >
+                  <Switch
+                    size="sm"
+                    checked={!!kRun?.enabled}
+                    disabled={kRunMutation.isPending || !kRun}
+                    onCheckedChange={(checked) =>
+                      kRunMutation.mutate({
+                        action: checked ? "start" : "stop",
+                        intervalMinutes: kRun?.intervalMinutes ?? 240,
+                      })
+                    }
+                    aria-label={
+                      kRun?.enabled
+                        ? "Tắt chế độ chạy agent liên tục"
+                        : "Bật chế độ chạy agent liên tục"
+                    }
+                  />
+                  <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+                    Liên tục
+                  </span>
+                  {kRun?.enabled && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="rounded px-1 text-xs font-semibold tabular-nums text-primary outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/40"
+                          aria-label={`Nhịp chu kỳ hiện tại: mỗi ${kRun.intervalMinutes} phút — bấm để đổi`}
+                        >
+                          {kRun.intervalMinutes}ph
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-36">
+                        <DropdownMenuRadioGroup
+                          value={String(kRun.intervalMinutes)}
+                          onValueChange={(v) =>
+                            kRunMutation.mutate({
+                              action: "interval",
+                              intervalMinutes: Number(v),
+                            })
+                          }
+                        >
+                          {K2_INTERVALS.map((m) => (
+                            <DropdownMenuRadioItem key={m} value={String(m)}>
+                              {K2_INTERVAL_LABELS[m]} ({m} phút)
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-72 text-left">
+                <p className="mb-1 text-xs font-semibold">Chế độ chạy liên tục (K2)</p>
+                <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                  <li>Bật: chu kỳ 23 agents tự chạy lặp theo nhịp đã chọn.</li>
+                  <li>Tắt: dừng từ chu kỳ kế tiếp — không giắt giữa dòng.</li>
+                  <li>
+                    Đã chạy tích luỹ: {kRun?.cyclesRun ?? 0} chu kỳ
+                    {kRun?.enabled && k2Countdown ? ` · kế tiếp ${k2Countdown}` : ""}
+                  </li>
+                  {!kRun?.exists && (
+                    <li className="pt-1 text-amber-600 dark:text-amber-400">
+                      Chưa từng bật — nhịp env AGENT_CYCLE_MINUTES đang hiệu lực.
+                    </li>
+                  )}
+                </ul>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+          {/* Badge đếm ngược chu kỳ kế — desktop only (mobile hTooltip đã có) */}
+          {kRun?.enabled && k2Countdown && (
+            <Badge
+              variant="outline"
+              className="hidden items-center gap-1.5 px-2.5 py-1 text-[10px] tabular-nums text-muted-foreground md:inline-flex"
+              title={
+                kRun.nextCycleAt
+                  ? `Chu kỳ kế tiếp: ${vnDate(new Date(kRun.nextCycleAt))}`
+                  : "Chu kỳ kế tiếp đang chờ tính lại"
+              }
+            >
+              <Radio className="size-3 animate-pulse text-primary" aria-hidden="true" />
+              {k2Countdown}
+            </Badge>
+          )}
 
           {/* Theme toggle */}
           <Button

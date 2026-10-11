@@ -1,8 +1,8 @@
 # AUTONOMY BLUEPRINT — 4 KẾ HOẠCH K1–K4: TIỀN ẢO THỬ NGHIỆM · CHẾ ĐỘ CHẠY LIÊN TỤC · NHIỆM VỤ ĐỊNH KỲ · BAN ĐIỀU HÀNH GIAO VIỆC
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (VNDIRECT)
-> **Document:** `docs/AUTONOMY_BLUEPRINT.md` · **Version:** 1.0 · **Created:** 2026-10-11 (phiên #85)
-> **Status:** **SOẠN XONG — CHỜ TRADER DUYỆT §8** (trả lời các câu hỏi mở → chốt thứ tự → triển khai từng giai đoạn + Fixbug giao thức như mọi blueprint)
+> **Document:** `docs/AUTONOMY_BLUEPRINT.md` · **Version:** 1.1 · **Created:** 2026-10-11 (phiên #85) · **Updated:** 2026-10-11 (phiên #86 — trader trả lời §8: **8/8 DUYỆT**; Q2 **CÓ TRỘN** → §5.5 thiết kế lại 2-kênh-reward cộng dồn cùng posterior)
+> **Status:** **8/8 DUYỆT — TRIỂN KHAI BẬC 1 (K2) PHIÊN #86** · K1/K3/K4 xếp hàng theo thứ tự đã duyệt §3
 > **Nguồn gốc:** trader tiết lộ 4 kế hoạch tương lai tại §8 [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) v1.1 (phiên #79) kèm ghi chú kiến trúc; hiệu lệnh soạn blueprint này: *"Trước hết viết Blueprint triển khai K1-K4 cho tôi"* (phiên #85).
 > **Cross-refs:** [ML_OPS_BLUEPRINT.md](./ML_OPS_BLUEPRINT.md) (§8 — 5/5 DUYỆT nền tảng) · [ML_LEARNING_BLUEPRINT.md](./ML_LEARNING_BLUEPRINT.md) (cổng L1–L5 — K1 cấp dữ liệu cho L5/GRU) · [EXECUTION_OPS_BLUEPRINT.md](./EXECUTION_OPS_BLUEPRINT.md) (TWAP E-P1-2 · ExecutionPlan · committed view) · [PHASE3_BLUEPRINT.md](./PHASE3_BLUEPRINT.md) (§4.5/§4.9 — chu kỳ KHÔNG tự tạo lệnh) · [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) · [DB_SCHEMA.md](./DB_SCHEMA.md) · [Fixbug.md](../Fixbug.md)
 
@@ -107,14 +107,12 @@ chu kỳ 23 agents (K2 duy trì nhịp liên tục)
 
 | Bậc | Giai đoạn | Lý do vị trí | Phụ thuộc kỹ thuật |
 |---|---|---|---|
-| 1 | **K2 — Chế độ chạy liên tục** (~1 ngày) | Nhỏ nhất, giải phóng sớm quyền điều khiển; từ đó mọi dữ liệu học (đồng hồ 30 ngày L3 · shadow 60 phiên GRU · equity curve K1) **trôi liên tục không cần đợi trader bấm nút từng lần** | Không phụ thuộc ai — dùng scheduler + AppSetting sẵn |
+| 1 | **K2 — Chế độ chạy liên tục** (~1 ngày) 🔄 **đang triển khai #86** | Nhỏ nhất, giải phóng sớm quyền điều khiển; từ đó mọi dữ liệu học (đồng hồ 30 ngày L3 · shadow 60 phiên GRU · equity curve K1) **trôi liên tục không cần đợi trader bấm nút từng lần** | Không phụ thuộc ai — dùng scheduler + AppSetting sẵn |
 | 2 | **K1 — Tiền ảo thử nghiệm** (~2–2,5 ngày) | Trung tâm tầm nhìn trader ("sự tăng/giảm của số tiền = quá trình học"); triển khai sớm để đồng hồ học bắt đầu trôi sớm nhất | Không phụ thuộc cứng K2 (chạy được trên nhịp env 240ph hiện có) — nhưng giá trị tối đa khi K2 đã bật |
 | 3 | **K3 — Nhiệm vụ định kỳ** (~1,5–2 ngày) | Nâng cấp AgentTask + due-check engine — vừa là nền bắt buộc của K4 | Dùng scheduler + single-run route `[id]/run` sẵn (#83) |
 | 4 | **K4 — Ban ĐH giao việc** (~1–1,5 ngày) | Dựng trên hạ tầng nhiệm vụ K3; chỉ thêm lớp "người tạo là Chủ tịch" + validate + UI | **Phụ thuộc K3** (bắt buộc) |
 
-**Phương án B** (theo thứ tự số K1→K2→K3→K4): khả thi — K1 không phụ thuộc K2; chấp nhận mất vài ngày "chạy liên tục" trước khi K1 tích luỹ đều. Chọn B nếu trader muốn thấy module Cài đặt tiền ảo trước tiên (§8-Q7).
-
-**Tổng: ~6–7 ngày công · 0 ₫ chi phí vận hành thêm.** Mỗi giai đoạn hoàn tất → chạy **Fixbug giao thức** (Fixbug.md) trên đúng scope rồi mới sang giai đoạn sau — như mọi blueprint trước.
+**Thứ tự K2 → K1 → K3 → K4: ĐÃ DUYỆT (§8-Q7).** **Tổng: ~6–7 ngày công · 0 ₫ chi phí vận hành thêm.** Mỗi giai đoạn hoàn tất → chạy **Fixbug giao thức** (Fixbug.md) trên đúng scope rồi mới sang giai đoạn sau — như mọi blueprint trước.
 
 ---
 
@@ -136,28 +134,32 @@ Không tồn tại key → env `AGENT_CYCLE_MINUTES` hiệu lực như hiện t�
 
 ### 4.2 API
 
-- `POST /api/k/run` — body `{action: "start"|"stop"|"cycle-now", intervalMinutes?}`:
-  - `start`: validate nhịp ∈ bộ cho phép → upsert k-run `{enabled:true, startedAt:now}` (giữ lastCycleAt cũ nếu có) + AuditLog `K2_RUN_STARTED`.
-  - `stop`: `enabled:false` + AuditLog `K2_RUN_STOPPED`. **Hiệu lực từ chu kỳ kế tiếp** — nếu chu kỳ đang chạy thì cho chạy hết (route hoàn tất tự nhiên).
-  - `cycle-now`: gọi nội bộ đúng luồng nút "Chạy agent" (không nhân đôi code — tôn trọng cooldown 60s của route).
-- GET: gộp vào `/api/settings` payload `kRun` (enabled · nhịp · nextCycleAt dự kiến · cyclesRun).
+- `POST /api/k/run` — body `{action: "start"|"stop", intervalMinutes?}`:
+  - `start`: validate nhịp ∈ bộ cho phép → upsert k-run `{enabled:true, startedAt:now}` (giữ lastCycleAt/cyclesRun cũ nếu có) + AuditLog `K2_RUN_STARTED`.
+  - `stop`: upsert `{enabled:false}` + AuditLog `K2_RUN_STOPPED`. **Hiệu lực từ chu kỳ kế tiếp** — nếu chu kỳ đang chạy thì cho chạy hết (route hoàn tất tự nhiên). **Tắt khi key chưa từng tạo vẫn tạo key `enabled:false`** — AppSetting thắng tuyệt đối kể từ lúc tồn tại → env interval bị nhường quyền → chu kỳ dừng hẳn (đúng "chỉ ngừng khi trader tự tay bấm tắt").
+  - Không cần `cycle-now`: nhịp due-check engine tự POST `/api/agents/run`; chạy ngay = nút "Chạy agent" sẵn (1 nguồn luồng).
+- `GET /api/k/run` (v1.1 — **endpoint riêng**, không phình `/api/settings`): trả `KRunState {exists, enabled, intervalMinutes, startedAt, lastCycleAt, cyclesRun, nextCycleAt}` — engine due-check + Header query riêng refetch 60s. Key chưa từng tồn tại → `exists:false` + giá trị mặc định (env fallback hiệu lực).
 
-### 4.3 Engine — due-check `k2RunDue` (thêm vào tick 60s, fail-soft)
+### 4.3 Engine — due-check `k2` (thêm vào tick 60s, fail-soft)
 
 ```
 mỗi tick 60s:
-  k = đọc AppSetting k-run (1 query/60s — nhẹ; cache TTL 60s nếu đo thấy cần)
-  nếu !k?.enabled → trả về (env fallback do interval cũ quản — KHÔNG đụng)
-  nếu now − max(k.lastCycleAt, k.startedAt) ≥ k.intervalMinutes:
-    nếu chu kỳ đang in-flight (guard pattern intl #48 — biến module-scope) → skip
-    POST /api/agents/run (route tự có cooldown 60s + full guard sẵn)
-    xong (dù ok/lỗi) → cập nhật k-run.lastCycleAt = giờ chu kỳ bắt đầu, cyclesRun++
+  GET /api/k/run (timeout 10s — 1 request/phút, nhẹ hơn tick giá 10s)
+  kRunKeyExists = exists   ← flag module-scope: env interval callback đọc flag này
+  nếu !exists → trả về (env fallback do interval cũ quản — KHÔNG đụng)
+  nếu !enabled → trả về (key tồn tại → env ĐÃ bị nhường quyền → im lặng)
+  nếu now < nextCycleAt → trả về
+  nếu k2 chu kỳ đang in-flight (guard pattern #48) → trả về
+  POST /api/agents/run (timeout 280s < maxDuration route 300s)
+  → route TỰ cập nhật k-run.lastCycleAt + cyclesRun++ (mỗi chu kỳ, kể cả tay)
+  → nextCycleAt tự dịch chuyển; broadcast WS "cycle" như sẵn có
 ```
-Engine broadcast WS `cycle` như sẵn có + thêm sự kiện `k-run-state` khi đọc thấy enabled đổi so với tick trước (UI nhiều tab đồng bộ).
+
+**Nhường quyền env → AppSetting:** callback của `setInterval` env kiểm flag `kRunKeyExists` — key tồn tại thì **skip và log** (AppSetting thắng tuyệt đối, kể cả enabled=false). Race ≤ 60s giữa lúc tạo key và flag cập nhật được cooldown 60s + guard 409 single-run của route chặn thực tế (không xảy ra chu kỳ kép).
 
 ### 4.4 UI (Header)
 
-- Nút "Chạy agent" **giữ nguyên** (1 lần). Thêm cạnh đó: `Switch` nhãn **"Liên tục"** + `Select` nhịp (60/120/240/480 phút) hiện khi bật; badge trạng thái `⬤ Liên tục · 240ph · chu kỳ kế ≈ 2g15p nữa` (đếm ngược từ kRun.nextCycleAt — refetch qua `/api/settings` polling 60s đã có hoặc WS).
+- Nút "Chạy agent" **giữ nguyên** (1 lần). Thêm cạnh đó: `Switch` nhãn **"Liên tục"** + chọn nhịp (60/120/240/480 phút — dropdown) hiện khi bật; badge trạng thái `⬤ Liên tục · 240ph · chu kỳ kế ≈ 2g15p nữa` (đếm ngược từ `nextCycleAt` — query riêng `GET /api/k/run` refetch 60s).
 - Mobile 390px: Switch thu gọn còn biểu tượng + nhãn ngắn "Liên tục".
 
 ### 4.5 Nghiệm thu K2 (cổng kết thúc giai đoạn)
@@ -204,10 +206,22 @@ Engine broadcast WS `cycle` như sẵn có + thêm sự kiện `k-run-state` khi
 - Cuối tuần/Lễ: guard theo vn-calendar overlay sẵn (chặn như settle A1 — không có EOD mới).
 - Prune snapshot > 365 ngày (K1 giữ dài hơn 90 ngày của paper — đường cong học dài hạn; dung lượng ~365 dòng/năm là không đáng kể).
 
-### 5.5 Vòng học — ranh giới rõ (chống 2 nguồn reward xung đột)
+### 5.5 Vòng học — **TRỘN 2 KÊNH REWARD theo quyết định trader (§8-Q2 v1.1)**
 
-- Bandit settle (16:15) **giữ nguyên như hiện tại** — reward theo realized rổ, không trộn P&L sandbox (tránh 2 nguồn sự thật về "đúng/sai").
-- P&L sandbox là **tầng tín hiệu bổ sung**: (a) hiển thị trực tiếp cho trader; (b) ghi vào telemetry k-sandbox (P&L theo tín hiệu/source agent) — đầu vào tương lai cho GRU kill-switch (điểm tích hợp đã duyệt §8 ML_OPS dòng 5) và cổng L5 AgentLesson ("tín hiệu Chairman qua cổng nhưng sandbox lỗ N/N lần gần nhất…"). Không tự đổi giọng bandit/ensemble vì P&L sandbox ở v1 (§8-Q2).
+> Trader (nguyên văn): *"có trộn, mỗi lần chiến thắng, mỗi lựa chọn đúng từ sandbox dù sao cũng đồng nghĩa nếu là môi trường thực tế thì đấy là chiến thắng thật, tuy nhiên thất bại cũng là thất bại thật, riêng bài học thì lúc nào cũng là bài học thật"*
+
+→ 2 kênh reward **cộng dồn vào CÙNG posterior Beta** của mỗi arm (thắng sandbox = thắng thật → α tăng thật; thua = thua thật → β tăng thật):
+
+1. **Kênh 1 — dự đoán (giữ nguyên hoàn toàn):** settle 16:15 ICT theo realized rổ ±0,5% sau 5 phiên → `BanditEvent.reward` → α/β như hiện tại. Không đổi lịch, không đổi semantic.
+2. **Kênh 2 — thực thi sandbox (MỚI, gộp vào job 16:30):** mọi **Position sandbox ĐÃ ĐÓNG** trong phiên (realisedPnl ròng đã trừ phí 0,15% + thuế bán) quy về **tín hiệu gốc → agent tạo tín hiệu** ("lựa chọn" của ai thì thắng/thua của người đó):
+   - lãi > 0 → reward **1** · lỗ ≤ 0 → reward **0** (nhị phân hoá đúng thang Beta-Bernoulli)
+   - cộng THÊM vào `BanditArm` của agent đó (α+1/β+0 hoặc ngược, pulls+1, wins tương ứng) → **posterior Thompson Sampling = trộn 2 kênh**: arm dự đoán chuẩn mà giao dịch lỗ bị kéo xuống, arm giao dịch thắng được kéo lên — đúng "chiến thắng thật / thất bại thật".
+   - **Idempotent:** dedupe qua `AuditLog` action `K1_SANDBOX_EXEC_REWARD` (entity "Position", entityId = positionId) — chạy 2 lần không cộng kép.
+   - **KHÔNG ghi BanditEvent** cho kênh 2 (bảng đó là "phiếu bầu theo assessment" — unique [assessmentId, agentCode], kênh thực thi không có assessment; ghi thêm sẽ phá ngữ nghĩa + ràng buộc unique).
+3. **Phân tách phân tích (chống sai ngữ nghĩa khi trộn):** calibration/Brier/Wilson (B8) **chỉ tính trên BanditEvent** (kênh 1 — confidence là độ tự tin DỰ ĐOÁN, thực thi không có "confidence"); posterior trajectory hiển thị **3 đường**: dự đoán · thực thi · trộn (posterior arm thật). Header nhãn rõ từng đường.
+4. **Bài học thật (cấp dữ liệu mọi tầng học):** telemetry exec (P&L theo agent/tín hiệu — từ AuditLog + Position sandbox) → dữ liệu cổng **L5 AgentLesson** ("tín hiệu X của agent Y qua cổng nhưng sandbox lỗ N/N lần gần nhất…") + tín hiệu **GRU kill-switch/thăng giọng** (điểm tích hợp §8 ML_OPS đã duyệt) + hiển thị trực tiếp cho trader.
+
+**Thứ tự Job 16:30 (một route, bốn việc):** (a) settle-exec-reward kênh 2 như trên → (b) settle-equity CashSnapshot → (c) telemetry tổng hợp → (d) audit tổng kết. Chạy SAU settle 16:15 (kênh 1 xong trước, không tranh lock DB).
 
 ### 5.6 UI
 
@@ -323,20 +337,20 @@ Kill-switch nhiệm vụ: `failStreak ≥ 5` → route tự `paused = true` + Ri
 
 ---
 
-## §8. Câu hỏi mở — CHỜ TRADER DUYỆT TRƯỚC KHI TRIỂN KHAI
+## §8. Câu hỏi mở — **ĐÃ TRẢ LỜI 8/8 (phiên #86)**
 
-| # | Câu hỏi | Đề xuất kèm lý do |
-|---|---|---|
-| Q1 | **K1 phạm vi auto-convert:** mọi tín hiệu chu kỳ qua cổng đồng thuận B9 đều tự thực thi vào sandbox (trader vẫn duyệt lệnh paper từ cùng tín hiệu như cũ — 2 thế giới độc lập), hay chỉ tín hiệu điểm/độ tin cao nhất mỗi chu kỳ? | **Mọi tín hiệu qua cổng** — đơn giản, đo được, đủ nhanh tích luỹ P&L theo nguồn |
-| Q2 | **K1 vòng học:** P&L sandbox v1 chỉ hiển thị + làm dữ liệu cho cổng L5 & GRU kill-switch tương lai — KHÔNG tự đổi reward bandit/ensemble (tránh 2 nguồn sự thật "đúng/sai") | **Không trộn** — bandit giữ nguyên semantic realized rổ |
-| Q3 | **K1 xem danh mục:** thêm bộ lọc tài khoản (Giấy/Thử nghiệm) trên workspace Danh mục như §5.6, hay chỉ khối trong Cài đặt là đủ? | **Bộ lọc Danh mục** — trader cần thấy agents đang giữ gì |
-| Q4 | **K2 bộ nhịp:** {60 · 120 · 240 · 480} phút, mặc định 240 — chấp nhận? (giới hạn để bảo vệ quota free-tier Zen; chu kỳ ngắn hơn 60ph rủi ro 429) | **Duyệt bộ 4 nhịp** |
-| Q5 | **K3 schema:** `AgentRun.taskId` (additive) để lịch sử chạy nhiệm vụ truy vấn được — OK? | **Có** — 1 cột optional, 0 rủi ro |
-| Q6 | **K4 mức tự chủ:** nhiệm vụ Ban ĐH giao **tự động thực thi không cần trader duyệt từng nhiệm vụ** (chỉ giới hạn §7.2 + kill-switch tổng) — đúng ý "ban điều hành giao việc"? Hay cần hàng duyệt? | **Không duyệt từng nhiệm vụ** — đúng tinh thần uỷ quyền; trader luôn xoá/sửa được sau |
-| Q7 | **Thứ tự triển khai:** K2 → K1 → K3 → K4 (đề xuất §3) hay theo thứ tự số K1 → K2 → K3 → K4? | **K2 trước** — nhỏ, giải phóng sớm chế độ liên tục cho đồng hồ học |
-| Q8 | **K1 tiền mặc định:** trader tự nhập mỗi lần kích hoạt (không mặc định cứng) — đúng? | **Tự nhập** (gợi ý hiển thị 100.000.000 ₫ làm placeholder) |
+| # | Câu hỏi | Quyết định trader (2026-10-11) | Áp vào thiết kế |
+|---|---|---|---|
+| Q1 | K1 phạm vi auto-convert | **Theo đề xuất** — mọi tín hiệu qua cổng B9 | §5.3 giữ nguyên |
+| Q2 | K1 trộn P&L sandbox vào vòng học? | **CÓ TRỘN** — *"mỗi lần chiến thắng, mỗi lựa chọn đúng từ sandbox dù sao cũng đồng nghĩa nếu là môi trường thực tế thì đấy là chiến thắng thật, thất bại cũng là thất bại thật, riêng bài học thì lúc nào cũng là bài học thật"* | **§5.5 thiết kế lại hoàn toàn** (v1.0 "không trộn" bãi bỏ): 2 kênh reward cộng dồn cùng posterior Beta · kênh thực thi nhị phân hoá theo realisedPnl ròng · quy về agent tạo tín hiệu · idempotent qua AuditLog · calibration tách kênh dự đoán |
+| Q3 | K1 xem danh mục sandbox | **Có** — bộ lọc tài khoản | §5.6 giữ nguyên |
+| Q4 | K2 bộ nhịp | **Theo đề xuất** — {60·120·240·480}ph, mặc định 240 | §4.1 giữ nguyên |
+| Q5 | K3 AgentRun.taskId | **Theo đề xuất** — có | §6.2 giữ nguyên |
+| Q6 | K4 tự chủ giao việc | **Theo đề xuất** — không duyệt từng nhiệm vụ | §7.2 giữ nguyên |
+| Q7 | Thứ tự triển khai | **Theo đề xuất — K2 → K1 → K3 → K4** | §3 cập nhật: Bậc 1 K2 triển khai ngay phiên #86 |
+| Q8 | K1 tiền mặc định | **Tự nhập** mỗi lần kích hoạt | §5.2 giữ nguyên (placeholder 100.000.000 ₫) |
 
-> Trả lời §8 (có thể ngắn gọn "Q1: theo đề xuất, Q2: …") → chốt version 1.1 → triển khai bậc 1 + Fixbug → báo cáo → bậc tiếp theo.
+> ~~Trả lời §8…~~ **ĐÃ DUYỆT ĐẦY ĐỦ — chốt v1.1, triển khai Bậc 1 (K2) ngay phiên #86 + Fixbug giao thức, sau đó lần lượt K1 → K3 → K4.**
 
 ---
 
@@ -392,4 +406,5 @@ Kill-switch nhiệm vụ: `failStreak ≥ 5` → route tự `paused = true` + Ri
 
 | Version | Ngày | Thay đổi |
 |---|---|---|
+| 1.1 | 2026-10-11 (phiên #86) | Trader trả lời §8 **8/8 DUYỆT**: Q2 **CÓ TRỘN** → §5.5 thiết kế lại hoàn toàn (2 kênh reward cộng dồn cùng posterior Beta — kênh thực thi nhị phân hoá realisedPnl ròng, quy agent tạo tín hiệu, idempotent AuditLog, calibration tách kênh dự đoán, job 16:30 gộp 4 việc); Q7 chốt thứ tự K2→K1→K3→K4 — triển khai Bậc 1 (K2) ngay phiên #86; §4.2 tinh chỉnh API (GET riêng `/api/k/run`, bỏ `cycle-now` thừa — nút "Chạy agent" sẵn là 1 nguồn); §4.3 bổ sung cơ chế nhường quyền env→AppSetting qua flag + race-window ≤60s được cooldown route chặn. |
 | 1.0 | 2026-10-11 (phiên #85) | Soạn bản đầu — hoá 4 kế hoạch tương lai trader mô tả tại §8 ML_OPS_BLUEPRINT v1.1 thành lộ trình 4 bậc K2→K1→K3→K4 (đề xuất, §8-Q7): K1 tài khoản sandbox 0-migrate (BrokerAccount.accountType String) + faucet + auto-convert một-nguồn + settle-equity 16:30 + vòng học ranh giới rõ; K2 k-run AppSetting + due-check engine + toggle Header; K3 AgentTask schedule (grammar parseHhMm/parseWeekly tái dùng) + AgentRun.taskId + kill-switch failStreak; K4 Chủ tịch xuất JSON giao việc + validate fail-soft + 2 cấp đồ thị nhiệm vụ. Kèm hiện trạng nền đo trực tiếp §0.5 (7 file query brokerAccount cần quarantine) · 8 câu hỏi mở §8 chờ trader duyệt. |

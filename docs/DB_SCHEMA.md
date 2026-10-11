@@ -764,8 +764,8 @@ Bảng cấu hình **đổi được không cần restart** (mode dữ liệu ru
 | Field | Type | Constraints / Default | Mô tả |
 |---|---|---|---|
 | `id` | String | PK, `cuid()` | Định danh duy nhất |
-| `key` | String | **Unique** | `vndirect` \| `market-data` (\| `consensus` — tự sinh khi đủ 10 chu kỳ shadow, phiên #38 B9) |
-| `value` | String | — | JSON payload (creds mask · `{mode, realtimeOk, lastRealtimeAt}` · `{enforce, autoEnableAfter}`) |
+| `key` | String | **Unique** | `vndirect` \| `market-data` (\| `consensus` — tự sinh khi đủ 10 chu kỳ shadow, phiên #38 B9 \| `ml-gate`/`ml-gru` — B #81 \| **`k-run` — K2 #86: chế độ chạy liên tục, AUTONOMY_BLUEPRINT §4.1**) |
+| `value` | String | — | JSON payload (creds mask · `{mode, realtimeOk, lastRealtimeAt}` · `{enforce, autoEnableAfter}` · **k-run: `{enabled, intervalMinutes ∈ {60,120,240,480}, startedAt, lastCycleAt, cyclesRun}` — tồn tại key = AppSetting thắng tuyệt đối nhịp env AGENT_CYCLE_MINUTES; route /api/agents/run ghi `lastCycleAt`+`cyclesRun` mỗi chu kỳ**) |
 | `createdAt` / `updatedAt` | DateTime | `now()` / `@updatedAt` | Audit |
 
 **Relations:** standalone. **Indexes:** unique `key`. **Retention:** ghi đè theo key (singleton).

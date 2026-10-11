@@ -386,6 +386,23 @@ export interface RunCycleResponse {
 /** Back-compat alias (older single-agent response shape). */
 export type RunAgentResponse = RunCycleResponse;
 
+/** K2 — chế độ chạy liên tục (AUTONOMY_BLUEPRINT v1.1 §4.2): GET/POST /api/k/run.
+ *  `exists=false` → key "k-run" chưa từng được tạo trong AppSetting → env
+ *  AGENT_CYCLE_MINUTES vẫn hiệu lực (mặc định hậu phương); key tồn tại (kể cả
+ *  enabled=false) → AppSetting thắng tuyệt đối — env interval nhường quyền. */
+export interface KRunState {
+  exists: boolean;
+  enabled: boolean;
+  /** Nhịp chu kỳ (phút) ∈ {60, 120, 240, 480} — mặc định 240 (§8-Q4 duyệt). */
+  intervalMinutes: number;
+  startedAt: string | null;
+  /** Mốc chu kỳ gần nhất (kể cả chạy tay) — gốc tính nextCycleAt của engine. */
+  lastCycleAt: string | null;
+  cyclesRun: number;
+  /** now + nhịp tính từ lastCycleAt/startedAt (chỉ meaningful khi enabled). */
+  nextCycleAt: string | null;
+}
+
 export interface WatchlistResponse {
   watchlist: {
     id: string;

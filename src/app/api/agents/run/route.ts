@@ -5,6 +5,8 @@ import { updateAgentHealth } from "@/lib/health";
 import { callLlmWithRetry, estimateTokens, llmCostUsd } from "@/lib/llm";
 import { reapStaleAgentRuns } from "@/lib/agent-ratelimit";
 import { expireDueSignals } from "@/lib/signal-execution";
+// K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.1): ghi mốc chu kỳ cho due-check engine.
+import { markKRunCycle } from "@/lib/k-run";
 import {
   ROLE_PROMPTS,
   buildMarketBlock,
@@ -406,6 +408,15 @@ export async function POST() {
 
   // AUD-CODE #10: cooldown chỉ tính từ lúc chu kỳ THẬT SỰ bắt đầu (qua validate)
   lastCycleStartedAt = now;
+
+  // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.1): k-run tồn tại → ghi mốc chu kỳ MỖI
+  // lần chạy (kể cả tay) làm gốc nextCycleAt của engine. AWAIT (không void):
+  // đóng window ~100ms giữa lúc response về client và DB ghi xong — nếu engine
+  // tick 60s trúng window đó sẽ đọc lastCycleAt cũ → nextCycleAt quá khứ → bắn
+  // chu kỳ kép (chặn được bởi cooldown 60s nhưng vẫn 1 POST thừa). markKRunCycle
+  // fail-soft tuyệt đối bên trong (lỗi DB chỉ console.error); key chưa từng
+  // tạo → no-op — env AGENT_CYCLE_MINUTES fallback nguyên vẹn.
+  await markKRunCycle();
 
   // Mark every agent RUNNING while the cycle executes
   await db.agent.updateMany({

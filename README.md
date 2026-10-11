@@ -203,7 +203,7 @@ Biến cho mini-service `market-engine` (đặt trong môi trường shell hoặ
 | `EOD_SYNC_DISABLED` | `0` | `1` = tắt scheduler đồng bộ EOD thật trong market-engine |
 | `SETTLE_AT` | `16:15` | Giờ ICT hằng ngày gọi `POST /api/ml/settle` — kết toán bandit Thompson (A1 #79: sau eod-sync 15:45; chỉ khi EOD hôm đó đã sync + không T7/CN; lỗi → retry phút sau) |
 | `ML_TRAIN_AT` | `SUN:04:00` | Lịch hằng tuần gọi `POST /api/ml/train` `{force:false}` — retrain MLP + Q-learning (A4 #79: skip-guard windowHash — không có bar mới thì skip $0; cùng cửa sổ reprobe B14) |
-| `AGENT_CYCLE_MINUTES` | `240` | Chu kỳ agent tự động (0 = TẮT; #79 Q3 bật 240 phút = 4h làm nền K2 — đơn vị PHÚT) |
+| `AGENT_CYCLE_MINUTES` | `240` | Chu kỳ agent tự động (0 = TẮT; #79 Q3 bật 240 phút = 4h; **K2 #86: thành MẶC ĐỊNH HẬU PHƯƠNG** — khi AppSetting `k-run` tồn tại (toggle "Liên tục" trên Header) thì AppSetting thắng tuyệt đối, env nhường quyền — đơn vị PHÚT) |
 | `APP_URL` | `http://localhost:3000` | Địa chỉ app Next.js cho các cuộc gọi server-to-server |
 
 ---
