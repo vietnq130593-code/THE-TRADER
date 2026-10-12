@@ -937,3 +937,53 @@ model NotificationOutbox {
 
   @@index([status, createdAt(sort: Desc)])
 }
+
+// ─────────────────────────────────────────────────────────────────
+// 15. HỌC QUAN HỆ LIÊN THỊ TRƯỜNG (M2_RELATION_BLUEPRINT — phiên #103)
+// Cơ chế số 2: học từ tin tức & biến động GIÁ ĐÃ QUA để rút ra nhận định
+// về mối quan hệ ảnh hưởng qua lại giữa các phân đoạn thị trường.
+// ─────────────────────────────────────────────────────────────────
+
+// Một cặp quan hệ có hướng đã học: nguồn A(t) → đích B(t+lag).
+// kind "price" = giá→giá (lead-lang Pearson + xác suất điều kiện);
+// kind "news"  = sentiment tin ngày t → lợi suất segment ngày t+lag.
+// Mọi con số kèm obs (số quan sát) + cửa sổ windowFrom→windowTo —
+// hồi cứu được, KHÔNG phỏng đoán. Upsert theo (sourceKey, targetKey, lag, kind).
+model MarketRelation {
+  id          String   @id @default(cuid())
+  sourceKey   String // vn30 | banks | macro-news | market-news | ...
+  sourceLabel String // "Chỉ số VN30", "Ngân hàng", "Tin vĩ mô"...
+  targetKey   String
+  targetLabel String
+  lag         Int // 0 = cùng ngày · 1 = đích phản ứng ngày kế
+  kind        String // price | news
+  corr        Float // Pearson ∈ [−1, 1]
+  condUp      Float? // P(đích tăng | nguồn bật > +0,75%) — null nếu thiếu mẫu cú sốc
+  condDown    Float? // P(đích giảm | nguồn rơi < −0,75%)
+  obs         Int // số cặp quan sát dùng tính corr
+  shockUpN    Int // số mẫu cú sốc tăng (minh bạch cho condUp)
+  shockDownN  Int // số mẫu cú sốc giảm
+  strength    Float // |corr| × min(1, obs/250) — xếp hạng phục vụ
+  windowFrom  DateTime // ngày phiên đầu cửa sổ học
+  windowTo    DateTime // ngày phiên cuối cửa sổ học
+  computedAt  DateTime @default(now())
+
+  @@unique([sourceKey, targetKey, lag, kind])
+  @@index([strength(sort: Desc)])
+  @@index([kind])
+}
+
+// Nhận định tổng hợp định kỳ của LLM trên đỉnh quan hệ đã học (Lớp 2
+// M2 blueprint): 4–7 câu tiếng Việt dẫn số liệu + giới hạn mẫu trung thực.
+// Sinh 1 lần/tuần trong nhiệm vụ Chủ nhật 05:00 của learning-rag (A13),
+// hoặc ép chạy qua POST /api/market/relations/insight.
+model RelationInsight {
+  id             String   @id @default(cuid())
+  narrative      String // nhận định tiếng Việt (4–7 câu, dẫn số liệu)
+  model          String // id model LLM sinh nhận định
+  relationsCount Int // số quan hệ đang có lúc tổng hợp
+  statsJson      String // JSON: top quan hệ, độ phủ tin, cửa sổ
+  generatedAt    DateTime @default(now())
+
+  @@index([generatedAt(sort: Desc)])
+}

@@ -1181,3 +1181,70 @@ export interface CycleAssessmentSummary {
   evidenceCount: number;
   narrative: string;
 }
+
+// ── M2_RELATION_BLUEPRINT (phiên #103, cơ chế số 2) — Quan hệ liên thị trường ──
+
+/** Một cặp quan hệ thị trường đã học (GET /api/market/relations). */
+export interface MarketRelationView {
+  id: string;
+  sourceKey: string;
+  sourceLabel: string;
+  targetKey: string;
+  targetLabel: string;
+  lag: number; // 0 = cùng ngày · 1 = đích phản ứng ngày kế
+  kind: "price" | "news"; // price = giá→giá · news = tin→giá
+  corr: number; // Pearson ∈ [−1, 1]
+  condUp: number | null; // P(đích tăng | nguồn bật > +0,75%)
+  condDown: number | null; // P(đích giảm | nguồn rơi < −0,75%)
+  obs: number;
+  shockUpN: number;
+  shockDownN: number;
+  strength: number;
+  windowFrom: string;
+  windowTo: string;
+  computedAt: string;
+}
+
+/** Nhận định LLM tổng hợp (RelationInsight bản mới nhất). */
+export interface RelationInsightView {
+  narrative: string;
+  model: string;
+  generatedAt: string;
+  relationsCount: number;
+}
+
+/** GET /api/market/relations — card "Quan hệ thị trường". */
+export interface MarketRelationsResponse {
+  relations: MarketRelationView[];
+  insight: RelationInsightView | null;
+  meta: {
+    total: number;
+    price: number;
+    news: number;
+    refreshedNow: boolean;
+    computedAt: string | null;
+    windowFrom: string | null;
+    windowTo: string | null;
+  };
+}
+
+/** POST /api/market/relations/refresh — kết quả engine quant. */
+export interface XrelRefreshResponse {
+  result: {
+    segments: number;
+    priceRelations: number;
+    newsRelations: number;
+    newsDays: number;
+    newsNote: string | null;
+    windowFrom: string;
+    windowTo: string;
+    durationMs: number;
+  };
+}
+
+/** POST /api/market/relations/insight — nhận định mới. */
+export interface XrelInsightResponse {
+  insight: RelationInsightView;
+  created: boolean;
+  skippedReason?: string;
+}

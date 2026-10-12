@@ -52,6 +52,9 @@ import { maybeAutoEnableConsensus } from "@/lib/consensus";
 // L1 (ML_LEARNING_BLUEPRINT §2 — phiên #83): BM25 RAG — truy hồi tri thức
 // broadcast/tin cũ tiêm prompt 5 agent nghiên cứu + Chủ tịch + RetrievalLog.
 import { retrieveForCycle } from "@/lib/ml/rag";
+// M2 (M2_RELATION_BLUEPRINT — phiên #103, cơ chế số 2): quan hệ thị trường
+// đã học (lead-lag 750 phiên) tiêm prompt market-analyst · news-sentiment · Chủ tịch.
+import { buildXrelPromptBlock } from "@/lib/ml/xrel";
 import {
   runRiskQuantEngine,
   toRiskQuantView,
@@ -528,6 +531,14 @@ export async function POST() {
       );
     }
 
+    // ── M2 (#103) — QUAN HỆ THỊ TRƯỜNG ĐÃ HỌC (XREL): 1 lần/chu kỳ ──
+    // Lead-lag + xác suất điều kiện hồi cứu (750 phiên) tiêm cho A2 · A4 ·
+    // Chủ tịch. Fail-soft như RAG L1; cache in-process 60s nên ~0 chi phí DB.
+    const xrelBlock = await buildXrelPromptBlock().catch((xrelErr) => {
+      console.error("[api/agents/run] XREL M2 lỗi (chu kỳ chạy không khối quan hệ):", xrelErr);
+      return null;
+    });
+
     // ══ ĐỢT A · Nền tảng dữ liệu — 3 NHỊP CON (§3.3 blueprint v1.1 — #57) ══
     // Tránh phụ thuộc vòng trong cùng đợt song song: nhịp 1: S0 ∥ S2 →
     // nhịp 2: A9 (readiness do chính A9 tính qua FeatureContract — cùng thư
@@ -550,7 +561,7 @@ export async function POST() {
     const prompts: Record<string, { system: string; user: string }> = {
       "market-analyst": {
         system: ROLE_PROMPTS["market-analyst"].system,
-        user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       "fair-value": {
         system: ROLE_PROMPTS["fair-value"].system,
@@ -558,7 +569,7 @@ export async function POST() {
       },
       "news-sentiment": {
         system: ROLE_PROMPTS["news-sentiment"].system,
-        user: [marketBlock, newsBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, newsBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       liquidity: {
         system: ROLE_PROMPTS["liquidity"].system,
@@ -897,6 +908,8 @@ export async function POST() {
       `TÍN HIỆU ĐANG MỞ:\n${openSignalsBlock}`,
       // L1 (#83) — tri thức truy hồi cho Chủ tịch (ngữ cảnh đối chiếu, không phải bằng chứng)
       ...(ragBlock ? ["", ragBlock] : []),
+      // M2 (#103) — quan hệ thị trường đã học cho Chủ tịch (cùng cấp như RAG)
+      ...(xrelBlock ? ["", xrelBlock] : []),
       // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): khối GIAO VIỆC — CHỈ khi k4.enabled
       // (tắt → 0 token thêm, prompt y như trước K4). Đặt SAU RAG block đúng
       // thiết kế đã duyệt; yêu cầu Chairman kèm JSON assignTasks cuối output.

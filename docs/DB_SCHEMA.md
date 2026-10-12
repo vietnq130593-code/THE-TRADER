@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-The Trader lưu trữ toàn bộ trạng thái của một hệ thống giao dịch chứng khoán giấy (paper trading) điều khiển bởi **23 AI agent chia 5 nhóm** (research · control · executive · platform · ml — xem [TECHNICAL_BLUEPRINT.md §5.1](./TECHNICAL_BLUEPRINT.md)): dữ liệu thị trường (instrument / quote / bar), trạng thái đa agent (run / task / message), luồng tín hiệu → lệnh → khớp lệnh → vị thế, tầng rủi ro – tuân thủ (risk alert / audit log), và từ v0.3 thêm tầng dữ liệu ngoài: tin tức RSS (`NewsItem`) + trạng thái nguồn dữ liệu để stale marking (`DataSourceStatus`). Phiên #34 thêm cấu hình runtime (`AppSetting`) + nhận định Bayes (`MarketAssessment`); phiên #35 thêm 3 bảng học máy (`MlModel` · `BanditArm` · `BanditEvent`); **phiên #38 (MARKET_EXPANSION_BLUEPRINT) thêm dữ liệu tài chính cơ bản (`FinancialFundamental`) + mở rộng `Market` (US · HK) + `Instrument.currency` + `Signal.consensusGate/consensusRatio`**. Tổng cộng **33 model** (phiên #83 thêm 2 bảng L1+intraday: `IntradayBar` §6.31 · `RetrievalLog` §6.32; trước đó phiên #51 thêm `RiskQuantSnapshot` — đồng bộ số đếm theo cam kết §9.1 lúc triển khai P0 #57; **phiên #60 — DATA_PLATFORM_BLUEPRINT P1** thêm 3 bảng: `CorporateEvent` (§6.26 — sự kiện doanh nghiệp + auto-adjust split) · `ForeignFlow` (§6.27 — dòng khối ngoại persist mode simulated) · `DataQualityReport` (§6.28 — verdict A9 theo asOf); kèm cột additive `Bar.firstSeenAt/lastSyncedAt` (PIT) + `MlModel.meta` (window-hash SHA-256) — backup trước push ở `db/backup-pre-p1/`; **phiên #62 — DATA_PLATFORM_BLUEPRINT P2** thêm 2 bảng: `FeatureValue` (§6.29 — cache giá trị đặc trưng 2 lớp L1/L2) · `NotificationOutbox` (§6.30 — hộp thư đi S1 webhook/email pending-egress)).
+The Trader lưu trữ toàn bộ trạng thái của một hệ thống giao dịch chứng khoán giấy (paper trading) điều khiển bởi **23 AI agent chia 5 nhóm** (research · control · executive · platform · ml — xem [TECHNICAL_BLUEPRINT.md §5.1](./TECHNICAL_BLUEPRINT.md)): dữ liệu thị trường (instrument / quote / bar), trạng thái đa agent (run / task / message), luồng tín hiệu → lệnh → khớp lệnh → vị thế, tầng rủi ro – tuân thủ (risk alert / audit log), và từ v0.3 thêm tầng dữ liệu ngoài: tin tức RSS (`NewsItem`) + trạng thái nguồn dữ liệu để stale marking (`DataSourceStatus`). Phiên #34 thêm cấu hình runtime (`AppSetting`) + nhận định Bayes (`MarketAssessment`); phiên #35 thêm 3 bảng học máy (`MlModel` · `BanditArm` · `BanditEvent`); **phiên #38 (MARKET_EXPANSION_BLUEPRINT) thêm dữ liệu tài chính cơ bản (`FinancialFundamental`) + mở rộng `Market` (US · HK) + `Instrument.currency` + `Signal.consensusGate/consensusRatio`**. Tổng cộng **37 model** (phiên #83 thêm 2 bảng L1+intraday: `IntradayBar` §6.31 · `RetrievalLog` §6.32; trước đó phiên #51 thêm `RiskQuantSnapshot` — đồng bộ số đếm theo cam kết §9.1 lúc triển khai P0 #57; **phiên #60 — DATA_PLATFORM_BLUEPRINT P1** thêm 3 bảng: `CorporateEvent` (§6.26 — sự kiện doanh nghiệp + auto-adjust split) · `ForeignFlow` (§6.27 — dòng khối ngoại persist mode simulated) · `DataQualityReport` (§6.28 — verdict A9 theo asOf); kèm cột additive `Bar.firstSeenAt/lastSyncedAt` (PIT) + `MlModel.meta` (window-hash SHA-256) — backup trước push ở `db/backup-pre-p1/`; **phiên #62 — DATA_PLATFORM_BLUEPRINT P2** thêm 2 bảng: `FeatureValue` (§6.29 — cache giá trị đặc trưng 2 lớp L1/L2) · `NotificationOutbox` (§6.30 — hộp thư đi S1 webhook/email pending-egress); **phiên #103 — M2_RELATION_BLUEPRINT (cơ chế số 2)** thêm 2 bảng học quan hệ liên thị trường: `MarketRelation` (§6.34 — lead-lag + xác suất điều kiện 750 phiên) · `RelationInsight` (§6.35 — nhận định LLM tổng hợp định kỳ)).
 
 Schema được thiết kế theo chuẩn **financial-grade**:
 
@@ -1059,6 +1059,59 @@ model SweepRun {
 - AppSetting liên quan: **`ml-sweep`** `{enabled, budgetCandidates (mặc định 16), seed (20261012), deltaSwap (0,01), maxParamFactor (2), lastRunAt}` — kill-switch từng đợt (§1.6 ML_AUTOML).
 - Đo thật #99: sweep budget 3 → 28.061ms · champion 16-32-16-3 valAcc 0,423 · swap v5→v9 + AuditLog ML_SWEEP_SWAP 2026-10-11T21:06:58Z.
 
+### 6.34 `MarketRelation` — Quan hệ liên thị trường đã học (phiên #103 — M2_RELATION_BLUEPRINT, cơ chế số 2)
+
+Bảng quan hệ có hướng **học từ dữ liệu ĐÃ QUA**: nguồn A(t) → đích B(t+lag). Hai loại: `kind "price"` = lợi suất segment (VN30/VN100 ETF proxy + 10 ngành HOSE equal-weight, 750 phiên) lead-lag Pearson + xác suất điều kiện cú sốc ±0,75%; `kind "news"` = sentiment lexicon trung bình theo ngày ICT (macro/market) đối chiếu lợi suất segment cùng ngày & ngày kế (event-study — cần ≥15 ngày có tin). **Trung thực mẫu**: mọi row kèm `obs` + `shockUpN/shockDownN` + cửa sổ `windowFrom→windowTo`; không đủ ngưỡng → KHÔNG lưu (kho tin ngắn → lớp news tự báo "đang tích luỹ"). Bảng = trạng thái học HIỆN TẠI — refresh thay toàn bộ (deleteMany + createMany ≤ 60 row, idempotent).
+
+```prisma
+model MarketRelation {
+  id          String   @id @default(cuid())
+  sourceKey   String // vn30 | banks | macro-news | ...
+  sourceLabel String // "Chỉ số VN30", "Ngân hàng", "Tin vĩ mô"...
+  targetKey   String
+  targetLabel String
+  lag         Int // 0 = cùng ngày · 1 = đích phản ứng ngày kế
+  kind        String // price | news
+  corr        Float // Pearson ∈ [−1, 1]
+  condUp      Float? // P(đích tăng | nguồn bật > +0,75%) — null nếu thiếu mẫu cú sốc
+  condDown    Float? // P(đích giảm | nguồn rơi < −0,75%)
+  obs         Int // số cặp quan sát dùng tính corr
+  shockUpN    Int
+  shockDownN  Int
+  strength    Float // |corr| × min(1, obs/250) — xếp hạng phục vụ
+  windowFrom  DateTime
+  windowTo    DateTime
+  computedAt  DateTime @default(now())
+
+  @@unique([sourceKey, targetKey, lag, kind])
+  @@index([strength(sort: Desc)])
+  @@index([kind])
+}
+```
+
+- Dùng bởi: `src/lib/ml/xrel.ts` (refreshRelations engine Lớp 1 · buildXrelPromptBlock tiêm prompt A2/A4/Chủ tịch) · `GET /api/market/relations` (lazy-refresh stale >12h) · `POST /api/market/relations/refresh` · service-run learning-rag (A13 — Chủ nhật 05:00) · UI card "Quan hệ thị trường" (module Thị trường).
+- Đo thật #103: 12 phân đoạn · 40 quan hệ giá→giá (Ngân hàng↔VN30 r=+0,77 n=749 · P(↓|↓)=82-88%) · cửa sổ 2023-10-06→2026-10-09 · engine 298ms.
+
+### 6.35 `RelationInsight` — Nhận định LLM tổng hợp quan hệ liên thị trường (phiên #103 — M2 Lớp 2)
+
+Nhận định tiếng Việt 4–7 câu do LLM tổng hợp trên đỉnh quan hệ đã học (dẫn số liệu + 1 câu trung thực giới hạn mẫu + hàm ý theo dõi). Sinh 1 lần/tuần trong nhiệm vụ Chủ nhật 05:00 của learning-rag (bản cũ <6 ngày → skip tiết kiệm token) hoặc ép chạy qua nút UI/`POST /api/market/relations/insight`. Không có quan hệ → KHÔNG gọi LLM (narrative trung thực "chưa đủ dữ liệu"). Prune giữ 50 bản gần nhất; `statsJson` lưu top quan hệ + tokens để truy vết.
+
+```prisma
+model RelationInsight {
+  id             String   @id @default(cuid())
+  narrative      String
+  model          String // id model LLM sinh nhận định
+  relationsCount Int
+  statsJson      String // JSON: top quan hệ, cửa sổ, tokens
+  generatedAt    DateTime @default(now())
+
+  @@index([generatedAt(sort: Desc)])
+}
+```
+
+- Dùng bởi: `src/lib/ml/xrel.ts` synthesizeRelationInsight · GET /api/market/relations (bản mới nhất cho UI) · service-run learning-rag.
+- Đo thật #103: 2 bản sinh qua nút UI — model space-bunny-free · 24,8s · dẫn đúng r/P/n từ bảng.
+
 ---
 
 ## 7. Enum Dictionary
@@ -1155,6 +1208,7 @@ Seed **delete toàn bộ dữ liệu cũ trước khi ghi** (clean slate) — ch
 
 | Ngày | Thay đổi |
 |---|---|
+| 2026-10-12 | **v0.9.3 — Phiên #103 M2_RELATION_BLUEPRINT (35 → 37 model, 2 model mới additive, 0 cột đổi, 0 mất dữ liệu):** (1) **§6.34 `MarketRelation`** MỚI — quan hệ liên thị trường ĐÃ HỌC có hướng `{sourceKey/targetKey/lag/kind unique, corr, condUp/condDown (P đích|cú sốc ±0,75%), obs, shockUpN/DownN, strength, windowFrom/To}` + 2 index — engine `src/lib/ml/xrel.ts` học 12 phân đoạn (VN30/VN100 ETF + 10 ngành HOSE equal-weight) trên 750 phiên: lead-lag Pearson lag {0,1} + xác suất điều kiện, top-40 giá→giá (đo thật: Ngân hàng↔VN30 r=+0,77 n=749, P(↓|↓)=82-88%, 298ms) + top-20 tin→giá event-study (ngưỡng trung thực ≥15 ngày có tin — kho tin đang 4 ngày nên lớp này tự báo "đang tích luỹ"); (2) **§6.35 `RelationInsight`** MỚI — nhận định LLM 4-7 câu dẫn số liệu, sinh 1 lần/tuần trong nhiệm vụ SUN:05:00 learning-rag (A13 mở rộng, bản cũ <6 ngày skip) + nút tay UI; không đủ quan hệ → không gọi LLM; (3) serving: khối prompt "QUAN HỆ THỊ TRƯỜNG ĐÃ HỌC" top-10 dòng ≤900 ký tự tiêm market-analyst · news-sentiment · portfolio-strategist (chu kỳ + single-run + chat) fail-soft như RAG L1; (4) API mới: `GET /api/market/relations` (lazy-refresh stale >12h) · `POST .../refresh` · `POST .../insight`; (5) UI card "Quan hệ thị trường" module Thị trường (badge loại · A→B · lag · r + thanh sức mạnh · P điều kiện tooltip · n=· nhận định LLM truy vết · 2 nút Học lại/Tổng hợp nhận định); nghiệm thu: E2E browser 0 console error · mobile 390 sw=cw=390 · insight thật 24,8s dẫn đúng r/P/n · lint/tsc 0 lỗi src. |
 | 2026-10-12 | **v0.9.2 — Phiên #99 (ML_AUTOML_BLUEPRINT v1.1 — 35 model, 1 model mới additive, 0 cột đổi, 0 mất dữ liệu):** (1) **§6.33 `SweepRun`** MỚI — lịch sử đợt sweep AutoML L1 deterministic (windowHash · featureSet mặc định v2-lag16 · candidates/evaluated · seed · status running/done/failed · championJson cổng 4 điều kiện · logJson toàn bộ ứng viên kể cả thua · `@@index([startedAt(sort: Desc)])` cho UI lịch sử); (2) **§6.23 `MlModel.meta`** thêm trường additive `sweepRunId` + `sweepIndex` trên các bản do sweep train (mọi ứng viên archived — chỉ champion qua cổng mới serving + AuditLog `ML_SWEEP_SWAP`); twin lag-10 baseline của gate tự lành ghi `meta {featureSet "v1-lag10", twin:true, twinOf}`; (3) **§6.20 AppSetting** thêm key **`ml-sweep`** `{enabled, budgetCandidates, seed, deltaSwap, maxParamFactor, lastRunAt}` — kill-switch từng đợt; key `ml-gate` được ghi lại bởi gate tự lành (verdict FAIL + measuredAt + twin baseline — đo 2026-10-11T20:15:31Z); (4) không bảng nào cho C2-pipeline (đo coverage tin tức đọc `NewsItem` trực tiếp — 0 bảng mới); nghiễm thu: `bun run db:push` additive sạch · sweep thật budget 3 → SweepRun done + swap v5→v9 + audit · 15/15 verify PASS · lint/tsc 0. |
 | 2026-10-12 | **v0.9.1 — fixbug #95 (giao thức FB-1→FB-6, 34 model — 0 model mới, 0 cột mới, 1 index additive, 0 mất dữ liệu):** (1) **§6.7 `AgentRun`** bổ sung dòng `taskId` (cột có từ #94 nhưng thiếu trong bảng docs) + **`@@index([taskId])`** (F-K3-06 — tra cứu run theo nhiệm vụ cho verify V4 + guard route; index additive, không đổi cột); (2) **§6.8 `AgentTask.schedule`** chú thích **F-K4-02**: K4 giao việc BẮT BUỘC có lịch — engine due-check chỉ dispatch nhiệm vụ `schedule≠null`, nhiệm vụ "một lần" từ Chủ tịch là dead-letter chiếm hạn mức nên prompt yêu cầu lịch tường minh + validate từ chối; (3) các bug fixbug khác (F-K4-01 parser 2-khối JSON · F-K3-01 watchdog RUNNING · F-K3-02 DELETE 409 theo `Agent.status` · F-K4-03 $transaction lô create) không đổi schema — chi tiết chuỗi FB-1→FB-6 xem `worklog.md` + TECHNICAL_BLUEPRINT Changelog v1.8.1. Nghiệm thu `scripts/k3k4-verify.ts` 47/47 PASS (hermetic tự dọn). |
 | 2026-10-12 | **v0.9.0 — Phiên #94 K3 nhiệm vụ định kỳ + K4 Chủ tịch giao việc (34 model — 0 model mới, 8 cột additive, 0 mất dữ liệu):** (1) **§6.8 `AgentTask` +7 cột** — `schedule` (null \| "HH:MM" \| "DOW:HH:MM" — grammar chung `src/lib/schedule.ts`) · `nextDueAt` (index riêng cho engine due-check) · `lastRunAt` · `runCount` · `failStreak` (kill-switch 5 lỗi → tự paused + RiskAlert `K3_TASK_AUTOPAUSED`) · `paused` · `createdByAgentId` (K4 — null = trader tạo); (2) **`AgentRun.taskId`** (String nullable) — liên kết lịch sử chạy với nhiệm vụ; (3) API mới: `POST/GET /api/agents/[id]/tasks` (server tự tính nextDueAt theo ICT — chống lệch múi giờ client) · `PATCH/DELETE /api/agents/[id]/tasks/[taskId]` (pause/resume tính lại lịch; DELETE 409 khi đang RUNNING) · `GET/POST /api/k4` (setting + giới hạn); single-run `[id]/run` nhận `{taskId}` tiêm block NHIỆM VỤ ĐỊNH KỲ vào prompt + cập nhật AgentTask sau chạy; (4) engine `k3TaskDueCheck` tick 60s — task due → agent RUNNING thì defer +5 phút, ngược lại dispatch POST run {taskId}; (5) AppSetting key mới **`k4`** — `{enabled:false, maxOpenTasksPerAgent:3, maxTasksPerCycle:5}` — Chủ tịch (portfolio-strategist) giao việc trong chu kỳ 23 agents khi bật: JSON assignTasks validate fail-soft 8 luật (cấm nhóm executive · lịch ≥+4h · độ dài · hạn mức…), JSON rác bị bỏ không crash chu kỳ; (6) AuditLog action mới: `K3_TASK_CREATED/UPDATED/DELETED/PAUSED/RESUMED/AUTOPAUSED` · `K4_ENABLED/DISABLED/CONFIG_UPDATED/TASK_ASSIGNED`; (7) `ml-tuning` v2 MLP N-layer (hidden[] 1..5 lớp · activations relu/tanh/sigmoid từng lớp · lossWeights [DOWN,FLAT,UP] · l2 · valFraction · seed) — migration tự động từ h1/h2 cũ. Nghiệm thu `scripts/k3k4-verify.ts` 40/40 PASS (single-run LLM thật theo taskId 10s COMPLETED + engine dispatch thật 75s) + `scripts/ml-arch-verify.ts` 6/6 PASS. |

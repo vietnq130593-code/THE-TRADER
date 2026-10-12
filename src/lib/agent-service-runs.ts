@@ -59,6 +59,12 @@ import {
 } from "@/lib/ml/bandit";
 // L1 (#83): thống kê RAG (corpus + RetrievalLog 30 ngày) cho A13.
 import { ragStats } from "@/lib/ml/rag";
+// M2 (#103 — M2_RELATION_BLUEPRINT, cơ chế số 2): học quan hệ liên thị trường.
+import {
+  maybeRefreshIfStale as xrelMaybeRefresh,
+  synthesizeRelationInsight as xrelSynthesizeInsight,
+  relationStats as xrelStats,
+} from "@/lib/ml/xrel";
 import type { RiskQuantResult } from "@/lib/risk/engine";
 
 export interface ServiceRunResult {
@@ -923,10 +929,44 @@ function hoursAgo(at: Date): string {
   return h <= 0 ? "vừa xong" : `${h} giờ trước`;
 }
 
+/** M2 #103 — học quan hệ liên thị trường trong run A13: refresh engine quant
+ *  (chỉ khi stale >12h — chu kỳ 240ph không đọc lại DB không cần thiết) +
+ *  tổng hợp nhận định LLM (chỉ khi bản cũ >6 ngày → nhiệm vụ Chủ nhật 05:00
+ *  là nhịp sinh chính, chạy tay/lượt khác bỏ qua). Fail-soft tuyệt đối. */
+async function runXrelLearning(): Promise<{
+  summary: string;
+  output: Record<string, unknown>;
+} | null> {
+  const refreshed = await xrelMaybeRefresh(); // stale-guard bên trong
+  const insightRes = await xrelSynthesizeInsight(false).catch(() => null);
+  const s = await xrelStats();
+  const insightLine = insightRes
+    ? insightRes.insight.relationsCount > 0
+      ? `nhận định LLM gần nhất ${new Date(insightRes.insight.generatedAt)
+          .toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })}`
+      : "nhận định chưa đủ dữ liệu quan hệ"
+    : "nhận định lỗi (bỏ qua)";
+  return {
+    summary: `${s.total} quan hệ đã học (${s.price} giá→giá · ${s.news} tin→giá) trên cửa sổ 750 phiên — ${insightLine}${refreshed ? " · vừa học lại trong chuỗi này" : ""}.`,
+    output: {
+      refreshedNow: refreshed,
+      total: s.total,
+      price: s.price,
+      news: s.news,
+      lastComputedAt: s.lastComputedAt,
+      insight: s.insight,
+      insightGenerated: insightRes?.created ?? false,
+    },
+  };
+}
+
 /** A13 Learning & RAG — ký ức phân tích tích luỹ.
  *  L1 (#83 — ML_LEARNING_BLUEPRINT §2): giờ báo cáo CỔNG RAG thật — corpus
  *  (500 broadcast + 200 tin) + 30 ngày RetrievalLog (đo "RAG được nhìn thấy
- *  chưa" — cổng L3) thay vì chỉ đếm như trước. */
+ *  chưa" — cổng L3) thay vì chỉ đếm như trước.
+ *  M2 (#103 — M2_RELATION_BLUEPRINT, cơ chế số 2): thêm HỌC QUAN HỆ LIÊN THỊ
+ *  TRƯỜNG — refresh engine quant khi stale >12h + tổng hợp nhận định LLM khi
+ *  bản cũ >6 ngày (chuỗi Chủ nhật 05:00 nuôi knowledge exactly 1 lần/tuần). */
 async function runLearningRag(): Promise<ServiceRunResult> {
   // ragStats fail-soft nội bộ (lỗi DB → số 0) — A13 không bao giờ làm hỏng đợt.
   const [stats, broadcastCount, distinctAgents, newsTotal] = await Promise.all([
@@ -935,6 +975,8 @@ async function runLearningRag(): Promise<ServiceRunResult> {
     db.agentMessage.groupBy({ by: ["fromAgentId"], where: { broadcast: true } }),
     db.newsItem.count(),
   ]);
+  // M2 #103: học quan hệ liên thị trường — cả 2 lớp fail-soft tuyệt đối.
+  const xrel = await runXrelLearning().catch(() => null);
   const agents = distinctAgents.length;
   const usage =
     stats.usageRate30d == null
@@ -945,9 +987,13 @@ async function runLearningRag(): Promise<ServiceRunResult> {
     : "chưa từng";
 
   return {
-    content: `Ký ức đội agent: ${broadcastCount.toLocaleString("vi-VN")} tin broadcast từ ${agents} agent + ${newsTotal.toLocaleString("vi-VN")} tin tức đã nạp. Truy hồi RAG (BM25 + recency, L1): corpus đang lập chỉ mục ${stats.corpusMessages} tin + ${stats.corpusNews} tin; 30 ngày qua ${stats.retrievals30d} lần truy hồi — ${stats.usedInPrompt30d} lần được tiêm vào prompt (tỉ lệ ${usage}); lần cuối ${lastAt}. Top-8 tri thức liên quan đã nối vào prompt 5 agent nghiên cứu + Chủ tịch mỗi chu kỳ.`,
+    content: `Ký ức đội agent: ${broadcastCount.toLocaleString("vi-VN")} tin broadcast từ ${agents} agent + ${newsTotal.toLocaleString("vi-VN")} tin tức đã nạp. Truy hồi RAG (BM25 + recency, L1): corpus đang lập chỉ mục ${stats.corpusMessages} tin + ${stats.corpusNews} tin; 30 ngày qua ${stats.retrievals30d} lần truy hồi — ${stats.usedInPrompt30d} lần được tiêm vào prompt (tỉ lệ ${usage}); lần cuối ${lastAt}. Top-8 tri thức liên quan đã nối vào prompt 5 agent nghiên cứu + Chủ tịch mỗi chu kỳ.${
+      xrel
+        ? ` Quan hệ liên thị trường (M2 #103): ${xrel.summary}`
+        : ""
+    }`,
     reasoning:
-      "Đếm AgentMessage broadcast + NewsItem; đọc corpus RAG + RetrievalLog 30 ngày (L1).",
+      "Đếm AgentMessage broadcast + NewsItem; đọc corpus RAG + RetrievalLog 30 ngày (L1). M2 #103: refresh quan hệ liên thị trường (khi stale) + nhận định LLM (khi cũ >6 ngày).",
     sentiment: null,
     output: {
       broadcastCount,
@@ -962,6 +1008,7 @@ async function runLearningRag(): Promise<ServiceRunResult> {
         usageRate30d: stats.usageRate30d,
         lastRetrievalAt: stats.lastRetrievalAt?.toISOString() ?? null,
       },
+      xrel: xrel?.output ?? null,
     },
   };
 }

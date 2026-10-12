@@ -15,6 +15,10 @@ import {
 // L1 (#83 — ML_LEARNING_BLUEPRINT §2): BM25 RAG cho single-run của 5 agent
 // nghiên cứu + Chủ tịch (chu kỳ tiêm ở api/agents/run — cùng 1 thư viện).
 import { retrieveForCycle } from "@/lib/ml/rag";
+// M2 (#103 — M2_RELATION_BLUEPRINT, cơ chế số 2): quan hệ thị trường đã học
+// (lead-lag + xác suất điều kiện trên 750 phiên) tiêm cho 3 agent nghiên cứu
+// trọng tâm quan hệ liên thị trường — fail-soft như RAG L1.
+import { buildXrelPromptBlock } from "@/lib/ml/xrel";
 
 /**
  * Khối ngữ cảnh + role-prompt DÙNG CHUNG cho single-run & chat
@@ -818,17 +822,20 @@ export async function buildSingleRunPrompt(
   // RetrievalLog). Fail-soft: lỗi → block null → prompt y như trước L1.
   const rag = await retrieveForCycle(true).catch(() => null);
   const ragBlock = rag?.block ?? null;
+  // M2 (#103): quan hệ thị trường đã học cho market-analyst · news-sentiment
+  // · portfolio-strategist — fail-soft, cache in-process 60s.
+  const xrelBlock = await buildXrelPromptBlock().catch(() => null);
   switch (code) {
     case "market-analyst":
     case "risk-manager":
       return {
         system: role.system,
-        user: [market.block, flows, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+        user: [market.block, flows, ...(ragBlock ? [ragBlock] : []), ...(code === "market-analyst" && xrelBlock ? [xrelBlock] : [])].join("\n\n"),
       };
     case "news-sentiment":
       return {
         system: role.system,
-        user: [market.block, news, flows, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+        user: [market.block, news, flows, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : [])].join("\n\n"),
       };
     case "fair-value":
       return {
@@ -854,6 +861,7 @@ export async function buildSingleRunPrompt(
           liquidity,
           `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
           ...(ragBlock ? [ragBlock] : []),
+          ...(xrelBlock ? [xrelBlock] : []),
           ...(weights ? ["", weights] : []),
         ].join("\n\n"),
       };
@@ -886,15 +894,29 @@ export async function buildChatUserPrompt(code: string, question: string): Promi
 async function buildChatContextBlock(code: string): Promise<string> {
   switch (code) {
     case "news-sentiment": {
-      const [market, news] = await Promise.all([buildMarketBlock(), buildNewsBlock()]);
-      return [market.compact, news].join("\n\n");
+      const [market, news, xrel] = await Promise.all([
+        buildMarketBlock(),
+        buildNewsBlock(),
+        buildXrelPromptBlock().catch(() => null),
+      ]);
+      return [market.compact, news, ...(xrel ? [xrel] : [])].join("\n\n");
+    }
+    case "market-analyst": {
+      // M2 #103: chat với A2 được cấp quan hệ thị trường đã học — đúng chuyên
+      // môn "tương quan liên thị trường" của scanner.
+      const [market, xrel] = await Promise.all([
+        buildMarketBlock(),
+        buildXrelPromptBlock().catch(() => null),
+      ]);
+      return [market.compact, ...(xrel ? [xrel] : [])].join("\n\n");
     }
     case "portfolio-strategist": {
-      const [market, openSignals] = await Promise.all([
+      const [market, openSignals, xrel] = await Promise.all([
         buildMarketBlock(),
         buildOpenSignalsBlock(),
+        buildXrelPromptBlock().catch(() => null),
       ]);
-      return [market.compact, `TÍN HIỆU ĐANG MỞ:\n${openSignals}`].join("\n\n");
+      return [market.compact, `TÍN HIỆU ĐANG MỞ:\n${openSignals}`, ...(xrel ? [xrel] : [])].join("\n\n");
     }
     case "fair-value": {
       const [market, valuation] = await Promise.all([buildMarketBlock(), buildValuationBlock()]);
