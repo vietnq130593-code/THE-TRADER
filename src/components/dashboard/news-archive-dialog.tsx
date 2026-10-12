@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpenText,
+  CalendarRange,
+  ChevronDown,
   ExternalLink,
   Library,
   Scale,
@@ -20,8 +22,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { NewsRangeCalendar, type NewsDayRange } from "@/components/dashboard/news-range-calendar";
 import { apiGet } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -33,11 +35,14 @@ import type { NewsArchiveResponse, NewsArchiveItem } from "@/lib/types";
  *   · A4      — nằm trong 10 tin mới nhất News & Sentiment đọc mỗi chu kỳ
  *   · RAG     — nằm trong corpus 200 tin BM25 truy hồi cho prompt nghiên cứu
  *   · Lexicon — điểm cảm xúc quant (~75 thuật ngữ VN) −1..+1
- * Nguồn truthful thứ 4 (bandit theo NGUỒN, không theo tin) giải thích ở legend.
+ * Vòng phản hồi học thứ 4 (bandit chấm 6 tay dự báo qua biến động thật,
+ * arm news-sentiment = giá trị nhận định từ tin tức) giải thích ở legend.
+ *
+ * #102 — 2 ô "Từ/Đến ngày" gom thành MỘT nút: bấm mở lịch đôi 2 bảng
+ * tháng, chọn khoảng bằng ĐÚNG 2 CLICK (click đôi 1 ngày → chỉ xem ngày đó).
  */
 
 const PAGE_SIZE = 30;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** "YYYY-MM-DD" theo ICT của thời điểm hiện tại (client-only — gọi trong state lazy). */
 function ictToday(): string {
@@ -59,6 +64,12 @@ function ictDaysAgo(days: number): string {
   }).format(d);
 }
 
+/** "2026-10-06" → "06/10/2026" (withYear) hoặc "06/10". */
+function fmtViLabel(iso: string, withYear = true): string {
+  const [y, m, d] = iso.split("-");
+  return withYear ? `${d}/${m}/${y}` : `${d}/${m}`;
+}
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -67,19 +78,18 @@ interface Props {
 export function NewsArchiveDialog({ open, onOpenChange }: Props) {
   // Mặc định 7 ngày gần nhất — lazy initializer (client chạy khi mount;
   // dialog đóng chưa render DOM nên không lệch hydration).
-  const [from, setFrom] = React.useState<string>(() => ictDaysAgo(6));
-  const [to, setTo] = React.useState<string>(() => ictToday());
-  const [applied, setApplied] = React.useState<{ from: string; to: string }>(() => ({
+  const [range, setRange] = React.useState<NewsDayRange>(() => ({
     from: ictDaysAgo(6),
     to: ictToday(),
   }));
+  const [calOpen, setCalOpen] = React.useState(false);
   const [page, setPage] = React.useState(0);
 
   const archiveQuery = useQuery({
-    queryKey: ["news-archive", applied.from, applied.to, page],
+    queryKey: ["news-archive", range.from, range.to, page],
     queryFn: () =>
       apiGet<NewsArchiveResponse>(
-        `/api/news/archive?from=${applied.from}&to=${applied.to}&take=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`
+        `/api/news/archive?from=${range.from}&to=${range.to}&take=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`
       ),
     enabled: open,
     staleTime: 60_000,
@@ -91,19 +101,11 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
   const first = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const last = Math.min(total, (page + 1) * PAGE_SIZE);
 
-  const applyRange = () => {
-    if (from && to && DATE_RE.test(from) && DATE_RE.test(to) && from <= to) {
-      setApplied({ from, to });
-      setPage(0);
-    }
-  };
-  const preset = (days: number) => {
-    const f = days === 0 ? meta?.bounds.min?.slice(0, 10) ?? ictDaysAgo(365) : ictDaysAgo(days - 1);
-    const t = ictToday();
-    setFrom(f);
-    setTo(t);
-    setApplied({ from: f, to: t });
+  /** Khoảng đủ 2 click (hoặc preset) → áp dụng NGAY + đóng lịch. */
+  const applyRange = (r: NewsDayRange) => {
+    setRange(r);
     setPage(0);
+    setCalOpen(false);
   };
 
   return (
@@ -120,58 +122,49 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        {/* ── Bộ lọc từ ngày → đến ngày ── */}
+        {/* ── MỘT nút khoảng ngày → mở lịch đôi 2 bảng, chọn bằng 2 click ── */}
         <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-              Từ ngày
-              <Input
-                type="date"
-                value={from ?? ""}
-                min={meta?.bounds.min?.slice(0, 10)}
-                max={meta?.bounds.max?.slice(0, 10)}
-                onChange={(e) => setFrom(e.target.value)}
-                className="h-9 bg-background text-sm"
-                aria-label="Từ ngày"
+          <Button
+            variant="outline"
+            className="h-9 w-full justify-between gap-2 font-normal sm:w-auto"
+            aria-expanded={calOpen}
+            aria-haspopup="dialog"
+            aria-controls="news-range-calendar"
+            onClick={() => setCalOpen((v) => !v)}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <CalendarRange className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              <span className="truncate text-sm" suppressHydrationWarning>
+                {range.from === range.to
+                  ? `Xem ngày ${fmtViLabel(range.from, true)}`
+                  : `Từ ${fmtViLabel(range.from, range.from.slice(0, 4) !== range.to.slice(0, 4))} → ${fmtViLabel(range.to, true)}`}
+              </span>
+            </span>
+            <ChevronDown
+              className={cn("size-4 shrink-0 text-muted-foreground transition-transform", calOpen && "rotate-180")}
+              aria-hidden="true"
+            />
+          </Button>
+          {calOpen && (
+            <div id="news-range-calendar">
+              <NewsRangeCalendar
+                key={`${range.from}:${range.to}`}
+                value={range}
+                minDay={meta?.bounds.min?.slice(0, 10) ?? null}
+                maxDay={ictToday()}
+                onSelect={applyRange}
+                presets={[
+                  { label: "Hôm nay", range: { from: ictToday(), to: ictToday() } },
+                  { label: "7 ngày", range: { from: ictDaysAgo(6), to: ictToday() } },
+                  { label: "30 ngày", range: { from: ictDaysAgo(29), to: ictToday() } },
+                  {
+                    label: "Toàn bộ",
+                    range: { from: meta?.bounds.min?.slice(0, 10) ?? ictDaysAgo(365), to: ictToday() },
+                  },
+                ]}
               />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-              Đến ngày
-              <Input
-                type="date"
-                value={to ?? ""}
-                min={meta?.bounds.min?.slice(0, 10)}
-                max={meta?.bounds.max?.slice(0, 10)}
-                onChange={(e) => setTo(e.target.value)}
-                className="h-9 bg-background text-sm"
-                aria-label="Đến ngày"
-              />
-            </label>
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Button size="sm" variant="outline" className="h-8" onClick={() => preset(1)}>
-              Hôm nay
-            </Button>
-            <Button size="sm" variant="outline" className="h-8" onClick={() => preset(7)}>
-              7 ngày
-            </Button>
-            <Button size="sm" variant="outline" className="h-8" onClick={() => preset(30)}>
-              30 ngày
-            </Button>
-            <Button size="sm" variant="outline" className="h-8" onClick={() => preset(0)}>
-              Toàn bộ
-            </Button>
-            <Button
-              size="sm"
-              className="ml-auto h-8"
-              onClick={applyRange}
-              disabled={
-                !from || !to || !DATE_RE.test(from) || !DATE_RE.test(to) || from > to || (applied?.from === from && applied?.to === to)
-              }
-            >
-              Áp dụng
-            </Button>
-          </div>
+            </div>
+          )}
         </div>
 
         {/* ── Thống kê khoảng ── */}
@@ -210,7 +203,7 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
           </p>
         ) : items.length === 0 ? (
           <p className="rounded-md border border-border/60 px-3 py-6 text-center text-sm text-muted-foreground">
-            Không có tin nào trong khoảng {applied?.from} → {applied?.to}. Thử
+            Không có tin nào trong khoảng {fmtViLabel(range.from)} → {fmtViLabel(range.to)}. Thử
             mở rộng phạm vi ngày hoặc bấm <strong>Toàn bộ</strong>.
           </p>
         ) : (
@@ -254,7 +247,7 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
 
         {/* ── Legend 4 đường tiêu thụ ── */}
         <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
-          <p className="mb-1 font-medium text-foreground">Tin làm giàu tri thức agents qua 4 đường:</p>
+          <p className="mb-1 font-medium text-foreground">Tin làm giàu tri thức agents — 3 đường tiêu thụ + 1 vòng phản hồi học:</p>
           <p>
             <Badge variant="outline" className="mr-1 border-up/40 px-1 py-0 text-[9px] text-up">A4</Badge>
             10 tin mới nhất được agent News &amp; Sentiment đọc mỗi chu kỳ →
@@ -272,8 +265,10 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
           </p>
           <p>
             <Badge variant="outline" className="mr-1 px-1 py-0 text-[9px]">Bandit</Badge>
-            Học theo <em>nguồn</em> (không theo từng tin) — Beta-Bernoulli tự
-            chín độ tin cậy từng báo qua settle 16:15.
+            Vòng phản hồi học: 6 tay dự báo (5 agent nghiên cứu + ML Forecast)
+            bị chấm điểm bằng biến động THẬT rổ top-10 sau 5 phiên → trọng số
+            phiếu tự nâng/hạ. Arm News &amp; Sentiment = giá trị nhận định
+            từ tin tức (hiện Beta(1,1) trung tính — chờ settle chín đầu tiên).
           </p>
         </div>
       </DialogContent>
