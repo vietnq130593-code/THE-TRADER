@@ -150,7 +150,8 @@ async function loadPriceSegments(): Promise<PriceSegment[]> {
     select: { id: true, symbol: true, sector: true, market: true },
   });
 
-  // Gom thành viên theo segment: ETF proxy trước, rồi sector HOSE (≥2 mã).
+  // Gom thành viên theo segment: ETF proxy trước, rồi sector HOSE — sector
+  // chấp nhận cả 1 mã (blueprint §1: health = DHG) vì half = max(1, ⌈n/2⌉.
   const byKey = new Map<string, { key: string; label: string; members: string[] }>();
   for (const i of instruments) {
     const proxy = ETF_PROXIES[i.symbol];

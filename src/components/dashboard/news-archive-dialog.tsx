@@ -54,6 +54,15 @@ function ictToday(): string {
   }).format(new Date());
 }
 
+/** "YYYY-MM-DD" theo NGÀY ICT của một mốc UTC (publishedAt lưu UTC — ranh giới
+ *  lọc của API archive là ngày ICT +07:00, nên bounds cũng phải quy đổi sang
+ *  ICT trước khi đưa vào lịch, tránh lệch 1 ngày với tin đăng sau 17:00Z). */
+function ictDayOfIso(iso: string): string {
+  return new Date(new Date(iso).getTime() + 7 * 3_600_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 function ictDaysAgo(days: number): string {
   const d = new Date(Date.now() - days * 86_400_000);
   return new Intl.DateTimeFormat("en-CA", {
@@ -150,7 +159,7 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
               <NewsRangeCalendar
                 key={`${range.from}:${range.to}`}
                 value={range}
-                minDay={meta?.bounds.min?.slice(0, 10) ?? null}
+                minDay={meta?.bounds.min ? ictDayOfIso(meta.bounds.min) : null}
                 maxDay={ictToday()}
                 onSelect={applyRange}
                 presets={[
@@ -159,7 +168,10 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
                   { label: "30 ngày", range: { from: ictDaysAgo(29), to: ictToday() } },
                   {
                     label: "Toàn bộ",
-                    range: { from: meta?.bounds.min?.slice(0, 10) ?? ictDaysAgo(365), to: ictToday() },
+                    range: {
+                      from: meta?.bounds.min ? ictDayOfIso(meta.bounds.min) : ictDaysAgo(365),
+                      to: ictToday(),
+                    },
                   },
                 ]}
               />

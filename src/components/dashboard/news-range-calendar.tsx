@@ -29,7 +29,7 @@ interface Preset {
 interface Props {
   /** Khoảng đang áp dụng — đóng khung highlight + tháng mở khởi đầu. */
   value: NewsDayRange;
-  /** Ngày nhỏ nhất cho phép (bounds kho tin) — null → fallback 1 năm. */
+  /** Ngày nhỏ nhất cho phép (bounds kho tin) — null → không giới hạn dưới. */
   minDay?: string | null;
   /** Ngày lớn nhất cho phép — caller cap ở hôm nay ICT. */
   maxDay?: string | null;

@@ -57,6 +57,16 @@ function lagLabel(lag: number): string {
   return lag === 0 ? "cùng ngày" : "ngày kế";
 }
 
+/** Narrative LLM thỉnh thoảng chứa markdown **đậm** — render thành <strong>
+ *  thay vì hiển thị thô dấu sao (P2 #104 — F-1041-02). An toàn: không HTML
+ *  thô, chỉ tách chuỗi quanh cặp ** **. */
+function renderNarrative(text: string): React.ReactNode[] {
+  const parts = text.split(/\*\*([\s\S]+?)\*\*/g);
+  return parts.map((part, i) =>
+    i % 2 === 1 ? <strong key={i}>{part}</strong> : <React.Fragment key={i}>{part}</React.Fragment>
+  );
+}
+
 function kindLabel(kind: MarketRelationView["kind"]): string {
   return kind === "price" ? "Giá → Giá" : "Tin → Giá";
 }
@@ -301,7 +311,7 @@ export function RelationsCard() {
                   </span>
                 </div>
                 <p className="max-h-96 overflow-y-auto custom-scrollbar whitespace-pre-line text-sm leading-relaxed">
-                  {insightData.narrative}
+                  {renderNarrative(insightData.narrative)}
                 </p>
               </div>
             )}
