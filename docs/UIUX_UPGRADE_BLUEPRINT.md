@@ -3,6 +3,8 @@
 > Phiên #106 · yêu cầu trader: *"dựa vào chấm điểm UI/UX tôi cần 1 file .md nâng cấp thiết kế dựa trên những gì bạn đã phân tích về UI/UX"*.
 >
 > Nguồn: bảng chấm điểm 9 view phiên #105 (VLM glm-5v-turbo + rà code) — điểm tổng **~6.0/10 "functional but fatiguing"**. Phiên #105 đã triển khai GIAI ĐOẠN 0 (hệ màu emerald-teal + header 3 vùng + bộ chọn khoảng thời gian); tài liệu này là kế hoạch **các giai đoạn kế tiếp** cho từng module, từng dialog, từng cách hiển thị — kèm chỉ tiêu nghiệm thu đo được.
+>
+> **Hiệu chỉnh v1.1 (#107)** theo làm rõ của trader: bỏ toàn bộ UI "thí nghiệm phân bổ" (E-ALLOC #106 — vẽ rắn thêm chân; khoản tiền thử nghiệm sandbox LÀ thí nghiệm). Module Hội đồng còn và chỉ còn: KPI tài khoản + đường cong equity + **vị thế nhóm theo thị trường** + sổ phán quyết. M4.4/M4.6/M4.8/M4.9 đã cập nhật; các mục khác bảo toàn.
 
 ---
 
@@ -86,25 +88,26 @@
 ### M4.4 Tổng quan 6.5 → 7.5
 1. Tier-1 "bảng chốt phiên": 3 số (VN30 hướng + % · tín hiệu mới nhất + hướng · P&L hội đồng hôm nay) — P&L hội đồng giờ có thật từ #106 D-LEDGER.
 2. Tin nhanh chỉ 5 tiêu đề + chip nguồn/điểm lexicon; nhận định Bayes thành 1 thẻ có posterior bar (pUp/pDown) thay chữ mô tả.
-3. Cột phải (xl+): "Việc cần làm" gom: tín hiệu chờ duyệt · lệnh chờ khớp + nextOpenLabel (#96) · nhiệm vụ K3 sắp đến · thí nghiệm hội đồng đang chạy (#106).
+3. Cột phải (xl+): "Việc cần làm" gom: tín hiệu chờ duyệt · lệnh chờ khớp + nextOpenLabel (#96) · nhiệm vụ K3 sắp đến · vị thế hội đồng đang nắm kèm lãi/lỗ từng mã (D-LEDGER #106).
 
 ### M4.5 Thị trường 6.5 → 7.5
 1. Card Đa rổ #106 đã vào — nâng cấp: thêm sparkline 30 phiên mỗi rổ (SVG pattern #106) + click rổ → lọc quotes-table theo nhóm đó.
 2. Bảng giá: giữ nhóm sàn + 3 nhóm mới #106; thêm chế độ "giọn" (6 cột) mặc định mobile, "đầy đủ" qua toggle (giữ quotesExpanded).
 3. Giá vàng/dầu/forex hiển thị đúng đơn vị FX_RATE/центs #106 — kiểm tra formatUnitPrice mọi nơi xuất hiện (bảng + chart tooltip).
 
-### M4.6 Hội đồng (mới #106 — thiết kế sẵn theo chuẩn này)
-- Đã dựng theo đúng 3 tầng: KPI tài khoản + đường cong + sổ phán quyết + thí nghiệm. Nâng cấp tiếp: dialog chi tiết thí nghiệm (đường từng rổ đóng góp); badge "hội đồng thấy tài khoản" đầu card nhắc quyền năng mới.
+### M4.6 Hội đồng (mới #106 · hiệu chỉnh #107 — bỏ toàn bộ phần thí nghiệm phân bổ)
+- 3 tầng GIỮ: hàng KPI tài khoản (equity · cash · P&L từ kích hoạt · biến động ngày) + đường cong equity (SVG sparkline K1-daily) + sổ phán quyết D-LEDGER (verdict badge · peak/trough · Σ P&L).
+- Nâng cấp: bảng **VỊ THẾ NHÓM THEO THỊ TRƯỜNG** (CP VN · CP quốc tế · trái phiếu · forex · hàng hoá — mỗi nhóm chip tổng giá trị + lãi/lỗ; tài sản USD kèm chip quy đổi USD→VND và tách lãi giá / lãi tỷ giá); badge "hội đồng thấy tài khoản" đầu card nhắc quyền năng; khi E-EXEC (#107 blueprint §5) vào thì thêm chip phiên đánh dấu nguồn giá close thị trường đó. **KHÔNG còn** card thí nghiệm · dialog tạo thí nghiệm · dòng bài học thí nghiệm.
 
 ### M4.7 Tổng hợp 7.0 → 7.5
 - Tab active đã pill /60 (#105); tiếp: mỗi tab ML thêm "1 dòng đọc nhanh" đầu tab (kết luận + 3 số) trước khối chi tiết kỹ thuật; sơ đồ mạng thần kinh thêm chú giải cạnh (đã có tooltip W) — giữ.
 
 ### M4.8 Cài đặt 6.0 → 7.0
 - Input affordance: mọi ô cấu hình thêm label nổi + placeholder ví dụ thật + nút "Kiểm tra" nơi có thể (pattern VNDIRECT đã có Test); nhóm card theo trình tự hành động (Kết nối → Chạy agent → Thử nghiệm → Phân bổ) với số bước 1-2-3.
-- Khối Cơ chế thử nghiệm + Khối Hội đồng (mới: mô tả 3 job 16:35/16:45/CN 05:50 + link sang module Hội đồng).
+- Khối Cơ chế thử nghiệm + Khối Hội đồng (mô tả job đánh giá quyết định 16:45 hằng ngày · nguồn dữ liệu đa thị trường 06:15/15:45 · link sang module Hội đồng).
 
-### M4.9 Dialog chuẩn hoá (kho tin + tạo thí nghiệm + chi tiết agent)
-- Mọi dialog: max-w nhất quán (sm:max-w-lg vừa · 3xl lớn), tiêu đề động từ hành động, footer luôn Huỷ + hành động chính DISABLED-CÓ-LÝ-DO (tooltip vì sao chưa bấm được — pattern dialog tạo thí nghiệm #106).
+### M4.9 Dialog chuẩn hoá (kho tin + chi tiết agent + form tạo nhiệm vụ K3)
+- Mọi dialog: max-w nhất quán (sm:max-w-lg vừa · 3xl lớn), tiêu đề động từ hành động, footer luôn Huỷ + hành động chính DISABLED-CÓ-LÝ-DO (tooltip vì sao chưa bấm được — pattern dialog kho tin #102).
 - Legend dài → popover "?" thay footnote dài dòng.
 
 ### M4.10 Mobile 5.5 → 7.0
