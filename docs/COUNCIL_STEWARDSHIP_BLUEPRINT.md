@@ -224,6 +224,14 @@ GC vàng 100 oz · SI bạc 5.000 oz · BZ Brent 1.000 thùng · CL WTI 1.000 th
 6. **Khớp phi-VN tại close đã sync** — không microstructure intraday ngoài VN (tick simulator chỉ VN, giữ nguyên).
 7. **Kế toán 1 tiền VND** — không sub-account USD: mọi tài sản quy VND tại close USD/VND. Chọn đơn giản đúng cho nghiên cứu; nếu sau này cần kế toán đa tiền thật thì nâng cấp có chủ đích.
 
+### §7.5a Tinh chỉnh thực thi P2 (code hoá #107 — khác văn bản gốc §5.2/§5.3, phục vụ đúng ý đồ)
+
+1. **Đơn vị danh nghĩa 1tr₫/đv cho hàng hoá + trái phiếu** (gốc §5.3 định nghĩa hợp đồng thật × hệ số — GC=F 100 oz ≈ 10,8 tỷ₫/hợp đồng, KHÔNG mua nổi trên tài khoản 100tr₫ no-margin full-value). Mỗi đơn vị = 1.000.000₫ triển khai, giá trị theo chỉ số VND của tài sản gốc (hàng hoá spot×fx · trái phiếu duration-model + fx) — tư duy “chứng chỉ danh nghĩa”.
+2. **CP Mỹ/HK tính đơn vị lẻ 0,01 cp** (fractional shares) — để định cỡ 5% NAV mua nổi cả mega-cap (AAPL ≈ 5,9tr₫/cp > 5%×96,7tr₫ nếu nguyên cp).
+3. **Forex lot nano 100 đv tiền gốc** (gốc nói 1.000 — với tài khoản 100tr₫, 1.000 EUR ≈ 28tr₫ = 28% NAV vượt mọi giới hạn sizing; 100 EUR ≈ 2,8tr₫ khớp khẩu vị 5%).
+4. **Trái phiếu BUY khớp khi yield ≥ giá đặt** (trái phiếu “rẻ” khi lợi suất cao — ngược chiều giá trị) — SELL khi yield ≤ giá đặt; các mức targetPrice/stopLoss của bond đều là LỢI SUẤT.
+5. **D-LEDGER nhánh SELL trái phiếu**: giá trị thu được = bondRet(y₀→y_vwap) (−D·Δy+carry) — cùng chiều “bán cao = tốt” như cổ phiếu.
+
 ---
 
 ## §8. Kế hoạch nghiệm thu v2 (khi triển khai code — chuẩn nhà)
@@ -251,3 +259,16 @@ GC vàng 100 oz · SI bạc 5.000 oz · BZ Brent 1.000 thùng · CL WTI 1.000 th
 
 - **v1.0 (#106)**: dựng 4 tầng C-VISION · D-LEDGER · X-MARKETS · E-ALLOC + toàn bộ code + ~9.700 bar thật + hội nghị LLM đo thật 44s. E-ALLOC khi đó diễn giải "rổ" thành 5 nguồn cố định + vốn giấy riêng 100tr₫.
 - **v2.0 (#107)**: trader làm rõ → bỏ E-ALLOC (vẽ rắn thêm chân), "rổ" = quyết định đầu tư mã cụ thể, khoản tiền thử nghiệm sandbox LÀ thí nghiệm, hội đồng phải thấy thị trường + tiền + vị thế + giá trị biến động. Giữ C-VISION/D-LEDGER/X-MARKETS; thêm E-EXEC (blueprint — CHƯA code, chờ duyệt §9.1).
+- **v2.1 (#107 triển khai)**: trader phê duyệt triển khai toàn bộ blueprint ("Tiến hành luôn cho tôi"). P1–P4 code hoá: tháo E-ALLOC sạch (2 bảng drop + 5 file xoá + 3 route xoá + 2 job engine tháo trước mốc CN 18/10) · E-EXEC core (market-rules.ts · matching tại close đa phiên · kế toán avgCostVND/openIdxUnits · sizing theo đơn vị thị trường · D-LEDGER bond/fx) · prompt VŨ TRỤ GIAO DỊCH 3 đường + vision mục 4 THỊ TRƯỜNG ĐA TÀI SẢN + bỏ hardcode VCB · UI Hội đồng v2 (vị thế nhóm thị trường + chip quy đổi). 4 tinh chỉnh thực thi ghi trung thực §7.5a (đơn vị danh nghĩa 1tr₫/đv cho hàng hoá + trái phiếu vì hợp đồng thật quá to cho tài khoản 100tr₫; cp Mỹ/HK tính đơn vị lẻ 1/100 cp; forex lot nano 100 đv). Nghiệm thu: scripts/p107-verify.ts 49/49 PASS + auto-convert E2E EURUSD=X (lệnh lot-100 → khớp phiên forex → avgCostVND chính xác 0,19₫ → realized chỉ mất phí spread → dọn sạch hermetic).
+
+---
+
+## §10. Phụ lục lịch sử — bài học thí nghiệm E-ALLOC (xuất từ DB trước khi drop bảng, #107)
+
+> Thí nghiệm duy nhất kết thúc đầy đủ trước khi E-ALLOC bị tháo theo phán định "vẽ rắn thêm chân". Bài học được bảo toàn làm bằng chứng lịch sử cho C-VISION.
+
+- **Tên**: "Khởi động: cân bằng 5 rổ (hồi tính 25 phiên)" · vốn 100.000.000₫ · chạy 07/09→12/10/2026 · createdBy seed.
+- **Trọng số**: 20%/rổ × 5 (VN_EQUITY · INTL_EQUITY · BOND · FOREX · COMMODITY).
+- **Kết quả**: return **−1,05%** · maxDD 2,38% · Sharpe −1,65 · đóng góp từng rổ: VN_EQUITY −0,92% · INTL_EQUITY +0,47% · BOND −0,70% · FOREX −0,10% · COMMODITY +0,22%.
+- **Bài học (LLM hội nghị tự viết)**: *"Cân bằng 20%/rổ cho kết quả −1,05%, Sharpe −1,65 và maxDD 2,38%: rổ thắng (COMMODITY, INTL_EQUITY) bị pha loãng bởi VN_EQUITY/BOND âm và FOREX biến động gần như bằng 0. Bài học: đa dạng hóa đều không thay thế được lựa chọn thiên lệch theo chất lượng và độ phủ dữ liệu của từng rổ."*
+- 2 thí nghiệm khác ("Bám dẫn đầu: hàng hoá + CP quốc tế" · "Phòng thủ: trái phiếu + hàng hoá") dừng ở trạng thái STOPPED ret 0 (chưa có snapshot) — không có dữ liệu đáng bảo toàn.

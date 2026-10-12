@@ -46,7 +46,7 @@ export async function apiPatchJson<T>(path: string, body: unknown): Promise<T> {
   return data;
 }
 
-/** PUT — #106 (dừng thí nghiệm phân bổ /api/council/experiments?id=…). */
+/** PUT tiện ích generic (hiện chưa có consumer sau #107 tháo E-ALLOC — giữ cho API PUT tương lai). */
 export async function apiPut<T>(path: string): Promise<T> {
   const res = await fetch(path, { method: "PUT" });
   const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;

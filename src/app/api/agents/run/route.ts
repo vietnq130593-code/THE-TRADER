@@ -26,6 +26,7 @@ import {
   buildValuationBlock,
   buildLiquidityBlock,
   buildPortfolioWeightsBlock,
+  buildTradableUniverseBlock,
 } from "@/lib/agent-context";
 // #106 C-VISION — tầm nhìn toàn cục hội đồng cho Chủ tịch (wave E)
 import { buildCouncilVisionBlock } from "@/lib/council/vision";
@@ -905,11 +906,17 @@ export async function POST() {
     // đề xuất phân bổ của Chủ tịch (currentPct không bịa — đo từ DB).
     const portfolioWeightsBlock = await buildPortfolioWeightsBlock().catch(() => null);
 
-    // #106 C-VISION — TÀI KHOẢN HỘI ĐỒNG (sandbox K1) + kết quả 7 quyết định
-    // gần nhất (D-LEDGER) + thí nghiệm phân bổ đang chạy: Chủ tịch đánh giá
-    // TOÀN CỘC lợi ích/tổn thất các quyết định đã đưa ra. Fail-soft như
-    // RAG/XREL — 3 đường parity (đây là đường chu kỳ; 2 đường kia ở
-    // agent-context.ts single-run + chat).
+    // #107 E-EXEC — VŨ TRỤ GIAO DỊCH ĐA THỊ TRƯỜNG: bảng mã PHI-VN đặt lệnh
+    // được kèm giá theo đơn vị DB (cùng đơn vị targetPrice phải dùng) — Chủ
+    // tịch tự quyết định đầu tư vào đâu ngoài CP VN (cp qtế/trái phiếu/forex/
+    // hàng hoá) từ chính dữ liệu này. Fail-soft như RAG/XREL/vision.
+    const tradableUniverseBlock = await buildTradableUniverseBlock().catch(() => null);
+
+    // #106 C-VISION + #107 — TÀI KHOẢN HỘI ĐỒNG (sandbox K1) + vị thế mọi
+    // thị trường + kết quả 7 quyết định gần nhất (D-LEDGER) + ảnh chụp thị
+    // trường đa tài sản: Chủ tịch đánh giá TOÀN CỘC lợi ích/tổn thất các quyết
+    // định đã đưa ra. Fail-soft như RAG/XREL — 3 đường parity (đây là đường
+    // chu kỳ; 2 đường kia ở agent-context.ts single-run + chat).
     const councilVisionBlock = await buildCouncilVisionBlock().catch(() => null);
 
     const strategistUserPrompt = [
@@ -919,6 +926,8 @@ export async function POST() {
       ...(ragBlock ? ["", ragBlock] : []),
       // M2 (#103) — quan hệ thị trường đã học cho Chủ tịch (cùng cấp như RAG)
       ...(xrelBlock ? ["", xrelBlock] : []),
+      // #107 E-EXEC — vũ trụ giao dịch phi-VN (mã cụ thể + giá đơn vị DB)
+      ...(tradableUniverseBlock ? ["", tradableUniverseBlock] : []),
       // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): khối GIAO VIỆC — CHỈ khi k4.enabled
       // (tắt → 0 token thêm, prompt y như trước K4). Đặt SAU RAG block đúng
       // thiết kế đã duyệt; yêu cầu Chairman kèm JSON assignTasks cuối output.
@@ -987,8 +996,19 @@ export async function POST() {
           ["LOW", "MEDIUM", "HIGH"].includes(s.confidence)
             ? (s.confidence as StrategistSignal["confidence"])
             : confidence;
+        const sigSymbol = s.symbol.trim().toUpperCase();
+        // #107 E-EXEC: đơn vị giá theo thị trường — VN làm tròn bội 100₫ như cũ;
+        // phi-VN (cents/FX_RATE/BOND_PCT) GIỮ NGUYÊN số nguyên DB native
+        // (round100 sẽ phá giá forex 10.852→10.900 / yield 425→400).
+        const sigInst = await db.instrument
+          .findUnique({ where: { symbol: sigSymbol }, select: { market: true } })
+          .catch(() => null);
+        const isVnInstrument =
+          sigInst == null || sigInst.market === "HOSE" || sigInst.market === "HNX" || sigInst.market === "UPCOM";
+        const priceRound = (v: number): number =>
+          isVnInstrument ? round100(v) : Math.max(1, Math.round(v));
         signal = {
-          symbol: s.symbol.trim().toUpperCase(),
+          symbol: sigSymbol,
           direction,
           confidence: conf,
           score,
@@ -998,15 +1018,15 @@ export async function POST() {
               : recommendation || summary,
           targetPrice:
             s.targetPrice != null && Number.isFinite(Number(s.targetPrice))
-              ? round100(Number(s.targetPrice))
+              ? priceRound(Number(s.targetPrice))
               : null,
           stopLoss:
             s.stopLoss != null && Number.isFinite(Number(s.stopLoss))
-              ? round100(Number(s.stopLoss))
+              ? priceRound(Number(s.stopLoss))
               : null,
           takeProfit:
             s.takeProfit != null && Number.isFinite(Number(s.takeProfit))
-              ? round100(Number(s.takeProfit))
+              ? priceRound(Number(s.takeProfit))
               : null,
         };
       }

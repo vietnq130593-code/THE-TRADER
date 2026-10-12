@@ -9,6 +9,7 @@ import {
   SESSION_PHASE_LABEL,
   vnDateIso,
   isTradingDay,
+  isForeignSessionOpen,
 } from "@/lib/market-session";
 import { invalidateFeatureCache, TOPBYADTV_CACHE_PREFIX } from "@/lib/feature-cache";
 import { getRealtimeRuntime, markRealtimeAttempt } from "@/lib/settings";
@@ -25,6 +26,19 @@ import {
 // đơn vị REV-2) — trước P0 FEE_RATE=0.0015/TAX_RATE=0.001 hardcode tại đây
 // (2/3 nguồn phí rải rác; nguồn thứ 3 là literal 0.0015 ở signal-execution.ts:391).
 import { FEE_RATE, TAX_RATE } from "@/lib/exec/constants";
+// #107 E-EXEC (COUNCIL_STEWARDSHIP_BLUEPRINT v2.0 §5.6): khớp lệnh sandbox
+// PHI-VN (cp Mỹ/HK · trái phiếu · forex · hàng hoá) tại GIÁ CLOSE đã sync
+// theo luật vi mô từng thị trường — không bịa microstructure intraday.
+import {
+  execRuleFor,
+  foreignPriceUnitValueVND,
+  foreignFeeVND,
+  notionalIdxLatest,
+  usdVndRate,
+  markPositionsVND,
+  NOTIONAL_UNIT_VND,
+  type InstrumentLite,
+} from "@/lib/exec/market-rules";
 // E-P0-2 (REV-7): guard hạn chờ ExecutionPlan — đếm tick TRONG phiên liên tục.
 // E-P1-2: guard lượt lát TWAP — chỉ khớp Order con khi tới afterTick của lát.
 import {
@@ -155,7 +169,10 @@ function expectedTicksPerDay(): number {
 
 type Tx = Prisma.TransactionClient;
 
-/** F-105: equity = tiền mặt + giá trị thị trường các vị thế mở (theo giá vừa tick). */
+/** F-105: equity = tiền mặt + giá trị thị trường các vị thế mở. #107 E-EXEC:
+ * superset đa thị trường — vị thế VN giữ nguyên giá tick (lastByInstrument);
+ * vị thế phi-VN đánh giá theo luật thị trường (avgCostVND quy VND / danh nghĩa
+ * idx) qua markPositionsVND — fail-soft giữ mv=0 khi thiếu dữ liệu định giá. */
 async function recomputeEquity(
   tx: Tx,
   brokerAccountId: string,
@@ -168,18 +185,34 @@ async function recomputeEquity(
     }),
     tx.position.findMany({
       where: { brokerAccountId, status: "OPEN" },
-      select: { instrumentId: true, quantity: true },
+      include: {
+        instrument: {
+          select: {
+            id: true,
+            symbol: true,
+            market: true,
+            type: true,
+            currency: true,
+            quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } },
+          },
+        },
+      },
     }),
   ]);
   if (!account) return;
-  let mv = BigInt(0);
-  for (const p of positions) {
-    const last = lastByInstrument.get(p.instrumentId);
-    if (last != null && last > 0) mv += BigInt(last * p.quantity);
-  }
+  const { mv } = await markPositionsVND(
+    positions.map((p) => ({
+      quantity: p.quantity,
+      avgPrice: p.avgPrice,
+      avgCostVND: p.avgCostVND,
+      openIdxUnits: p.openIdxUnits,
+      instrument: p.instrument,
+      lastNative: lastByInstrument.get(p.instrumentId) ?? p.instrument.quotes[0]?.last ?? null,
+    }))
+  ).catch(() => ({ mv: 0, upl: 0 }));
   await tx.brokerAccount.update({
     where: { id: brokerAccountId },
-    data: { equity: account.cashBalance + mv },
+    data: { equity: account.cashBalance + BigInt(Math.round(mv)) },
   });
 }
 
@@ -396,6 +429,387 @@ async function fillOrder(
   });
 }
 
+// ─────────────────────────────────────────────────────────────────
+// #107 E-EXEC — khớp lệnh sandbox PHI-VN tại giá close đã sync
+// ─────────────────────────────────────────────────────────────────
+
+/** Snapshot lệnh phi-VN (đối xứng FillSnapshot — không note/plan: TWAP chỉ VN). */
+interface ForeignFillSnapshot {
+  id: string;
+  userId: string;
+  brokerAccountId: string | null;
+  instrumentId: string;
+  side: "BUY" | "SELL";
+  price: number | null;
+  quantity: number;
+  filledQuantity: number;
+  avgFillPrice: number | null;
+  submittedAt: Date | null;
+  status: "PENDING" | "PARTIALLY_FILLED";
+}
+
+/**
+ * Khớp TOÀN PHẦN một lệnh sandbox PHI-VN tại giá close đã sync (blueprint
+ * §5.6 — không bịa microstructure intraday cho thị trường chỉ có bar ngày):
+ *  · PRICE (cp Mỹ/HK · forex): notional VND = qty × giáVND/đv; phí theo luật
+ *    thị trường; BUY hoà vốn avgCostVND (VND/đv, đã quy đổi tại lúc khớp),
+ *    SELL realized = proceeds − vốn avgCostVND.
+ *  · NOTIONAL (trái phiếu/hàng hoá): 1 đv = 1.000.000₫ danh nghĩa; BUY cộng
+ *    openIdxUnits += qty×10^12/idx (cơ sở cộng dồn CHÍNH XÁC — giá trị vị thế
+ *    = openIdxUnits×idx_nay/10^6), SELL pro-rata theo tỉ lệ lượng bán.
+ *  · Thuế 0 ngoài VN; phi-VN không băng trần/sàn.
+ */
+async function fillForeignOrder(
+  snapshot: ForeignFillSnapshot,
+  last: number,
+  now: Date,
+  inst: InstrumentLite,
+  fxRate: number | null,
+  lastByInstrument: Map<string, number>
+): Promise<boolean> {
+  const rule = execRuleFor(inst);
+  const price = snapshot.price;
+  const brokerAccountId = snapshot.brokerAccountId;
+  if (!rule || rule.assetKind === "VN_PRICE" || price == null || price <= 0 || brokerAccountId == null) {
+    return false;
+  }
+  const qty = snapshot.quantity - snapshot.filledQuantity;
+  if (qty <= 0) return false;
+
+  // Toán thị trường TRƯỚC transaction (fx/idx qua cache — không giữ lock):
+  // thiếu dữ liệu định giá thì CHƯA khớp (lệnh giữ nguyên, đợi sync ngày mới).
+  let idxNotional: number | null = null;
+  let unitValue: number | null = null;
+  if (rule.assetKind === "NOTIONAL") {
+    idxNotional = await notionalIdxLatest(inst.symbol);
+    if (idxNotional == null || idxNotional <= 0) return false;
+  } else {
+    unitValue = foreignPriceUnitValueVND(inst, last, fxRate);
+    if (unitValue == null || unitValue <= 0) return false;
+  }
+  // Phí tính trên cơ sở qty×đơn vị (đối xứng hai chiều — const cho NOTIONAL;
+  // unitValue đã guard khác null phía trên cho nhánh PRICE).
+  const feeBase =
+    rule.assetKind === "NOTIONAL" ? qty * NOTIONAL_UNIT_VND : Math.round(qty * (unitValue ?? 0));
+  const fee = foreignFeeVND(inst, rule, qty, feeBase, fxRate);
+
+  return db.$transaction(async (tx) => {
+    const posWhere: Prisma.PositionWhereUniqueInput = {
+      brokerAccountId_instrumentId: {
+        brokerAccountId,
+        instrumentId: snapshot.instrumentId,
+      },
+    };
+    // F-303 đối xứng: SELL không đủ lượng → REJECTED đúng MỘT lần
+    if (snapshot.side === "SELL") {
+      const sellPos = await tx.position.findUnique({ where: posWhere });
+      if (!sellPos || sellPos.status !== "OPEN" || sellPos.quantity < qty) {
+        const rejected = await tx.order.updateMany({
+          where: { id: snapshot.id, status: { in: ["PENDING", "PARTIALLY_FILLED"] } },
+          data: { status: "REJECTED" },
+        });
+        if (rejected.count > 0) {
+          await tx.auditLog.create({
+            data: {
+              userId: snapshot.userId,
+              action: "ORDER_REJECTED",
+              entity: "Order",
+              entityId: snapshot.id,
+              before: JSON.stringify({ status: snapshot.status, filledQuantity: snapshot.filledQuantity }),
+              after: JSON.stringify({
+                status: "REJECTED",
+                reason: "INSUFFICIENT_POSITION",
+                side: "SELL",
+                quantity: qty,
+                price,
+                mode: "sandbox-multimarket",
+              }),
+            },
+          });
+        }
+        return false;
+      }
+    }
+
+    // Claim lệnh → FILLED
+    const claimed = await tx.order.updateMany({
+      where: { id: snapshot.id, status: { in: ["PENDING", "PARTIALLY_FILLED"] } },
+      data: {
+        status: "FILLED",
+        filledQuantity: snapshot.quantity,
+        avgFillPrice: Math.round(last),
+        submittedAt: snapshot.submittedAt ?? now,
+        filledAt: now,
+        fee: BigInt(fee),
+      },
+    });
+    if (claimed.count === 0) return false;
+
+    const existing = await tx.position.findUnique({ where: posWhere });
+    const existingOpen = existing && existing.status === "OPEN" ? existing : null;
+    let positionId: string | null = null;
+    let cashDelta = 0;
+
+    if (rule.assetKind === "PRICE" && unitValue != null) {
+      const notional = Math.round(qty * unitValue);
+      if (snapshot.side === "BUY") {
+        const newQty = (existingOpen?.quantity ?? 0) + qty;
+        const prevCostTotal =
+          existingOpen?.avgCostVND != null ? Number(existingOpen.avgCostVND) * existingOpen.quantity : 0;
+        const newAvgCost = Math.round((prevCostTotal + notional) / newQty);
+        cashDelta = -(notional + fee);
+        if (existingOpen) {
+          await tx.position.update({
+            where: { id: existingOpen.id },
+            data: { quantity: newQty, avgPrice: Math.round(last), avgCostVND: BigInt(newAvgCost) },
+          });
+          positionId = existingOpen.id;
+        } else {
+          const pos = await tx.position.upsert({
+            where: posWhere,
+            create: {
+              brokerAccountId,
+              instrumentId: snapshot.instrumentId,
+              quantity: qty,
+              avgPrice: Math.round(last),
+              avgCostVND: BigInt(Math.round(notional / qty)),
+              status: "OPEN",
+              openedAt: now,
+            },
+            update: {
+              quantity: qty,
+              avgPrice: Math.round(last),
+              avgCostVND: BigInt(Math.round(notional / qty)),
+              openIdxUnits: null,
+              status: "OPEN",
+              openedAt: now,
+              closedAt: null,
+            },
+          });
+          positionId = pos.id;
+        }
+      } else {
+        if (!existingOpen || existingOpen.quantity < qty) throw new Error("INSUFFICIENT_POSITION");
+        const cost = existingOpen.avgCostVND != null ? Number(existingOpen.avgCostVND) * qty : 0;
+        const proceeds = notional - fee;
+        const realized = BigInt(Math.round(proceeds - cost));
+        const newQty = existingOpen.quantity - qty;
+        await tx.position.update({
+          where: { id: existingOpen.id },
+          data: {
+            quantity: newQty,
+            realizedPnl: existingOpen.realizedPnl + realized,
+            ...(newQty === 0 ? { status: "CLOSED" as const, closedAt: now } : {}),
+          },
+        });
+        positionId = existingOpen.id;
+        cashDelta = proceeds;
+      }
+    } else if (idxNotional != null) {
+      // NOTIONAL — idx > 0 đã guard phía trên
+      if (snapshot.side === "BUY") {
+        const notional = qty * NOTIONAL_UNIT_VND;
+        const unitsAdd = BigInt(Math.round((qty * 1e12) / idxNotional));
+        const prevUnits = existingOpen?.openIdxUnits ?? BigInt(0);
+        const newQty = (existingOpen?.quantity ?? 0) + qty;
+        cashDelta = -(notional + fee);
+        if (existingOpen) {
+          await tx.position.update({
+            where: { id: existingOpen.id },
+            data: {
+              quantity: newQty,
+              avgPrice: Math.round(last),
+              avgCostVND: BigInt(NOTIONAL_UNIT_VND),
+              openIdxUnits: prevUnits + unitsAdd,
+            },
+          });
+          positionId = existingOpen.id;
+        } else {
+          const pos = await tx.position.upsert({
+            where: posWhere,
+            create: {
+              brokerAccountId,
+              instrumentId: snapshot.instrumentId,
+              quantity: qty,
+              avgPrice: Math.round(last),
+              avgCostVND: BigInt(NOTIONAL_UNIT_VND),
+              openIdxUnits: unitsAdd,
+              status: "OPEN",
+              openedAt: now,
+            },
+            update: {
+              quantity: qty,
+              avgPrice: Math.round(last),
+              avgCostVND: BigInt(NOTIONAL_UNIT_VND),
+              openIdxUnits: unitsAdd,
+              status: "OPEN",
+              openedAt: now,
+              closedAt: null,
+            },
+          });
+          positionId = pos.id;
+        }
+      } else {
+        if (!existingOpen || existingOpen.quantity < qty) throw new Error("INSUFFICIENT_POSITION");
+        const openUnits =
+          existingOpen.openIdxUnits != null
+            ? Number(existingOpen.openIdxUnits)
+            : existingOpen.quantity * 1e6; // fallback gần đúng khi vị thế legacy thiếu cột
+        const valuePerUnit = (openUnits / existingOpen.quantity) * idxNotional / 1e6;
+        const proceeds = Math.round(qty * valuePerUnit - fee);
+        const realized = BigInt(proceeds - qty * NOTIONAL_UNIT_VND);
+        const newQty = existingOpen.quantity - qty;
+        const newUnits =
+          existingOpen.openIdxUnits != null
+            ? BigInt(Math.round(Number(existingOpen.openIdxUnits) * (1 - qty / existingOpen.quantity)))
+            : null;
+        await tx.position.update({
+          where: { id: existingOpen.id },
+          data: {
+            quantity: newQty,
+            realizedPnl: existingOpen.realizedPnl + realized,
+            ...(newUnits != null ? { openIdxUnits: newUnits } : {}),
+            ...(newQty === 0 ? { status: "CLOSED" as const, closedAt: now } : {}),
+          },
+        });
+        positionId = existingOpen.id;
+        cashDelta = proceeds;
+      }
+    } else {
+      return false; // không thể tới (đã guard) — chống gap type
+    }
+
+    // ── Tiền mặt (VND — kế toán 1 đồng tiền) ──
+    const account = await tx.brokerAccount.findUnique({
+      where: { id: brokerAccountId },
+      select: { cashBalance: true },
+    });
+    if (!account) throw new Error("ACCOUNT_MISSING");
+    await tx.brokerAccount.update({
+      where: { id: brokerAccountId },
+      data: { cashBalance: account.cashBalance + BigInt(Math.round(cashDelta)) },
+    });
+
+    // ── Trade: price native DB units · fee/tax VND ──
+    await tx.trade.create({
+      data: {
+        orderId: snapshot.id,
+        positionId,
+        instrumentId: snapshot.instrumentId,
+        side: snapshot.side,
+        quantity: qty,
+        price: Math.round(last),
+        fee: BigInt(fee),
+        tax: BigInt(0),
+        executedAt: now,
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        userId: snapshot.userId,
+        action: "ORDER_FILLED",
+        entity: "Order",
+        entityId: snapshot.id,
+        before: JSON.stringify({ status: snapshot.status, filledQuantity: snapshot.filledQuantity }),
+        after: JSON.stringify({
+          status: "FILLED",
+          price: Math.round(last),
+          quantity: qty,
+          fee,
+          tax: 0,
+          mode: "sandbox-multimarket",
+          market: inst.market,
+          unitValueVND: unitValue != null ? Math.round(unitValue) : null,
+          idx: idxNotional,
+          fxRate,
+        }),
+      },
+    });
+
+    // Equity superset (VN giữ giá tick — lastByInstrument; phi-VN theo luật)
+    await recomputeEquity(tx, brokerAccountId, lastByInstrument);
+    return true;
+  });
+}
+
+/**
+ * Lượt khớp lệnh sandbox PHI-VN (chỉ thế giới sandbox — paper giữ luật VN
+ * VNDIRECT): mỗi lệnh được xét khi PHIÊN thị trường của nó đang mở, điều kiện
+ * LIMIT trên giá close đã sync; trái phiếu ngược chiều (giá = lợi suất — BUY
+ * khớp khi yield ≥ giá đặt: trái phiếu "rẻ" khi lợi suất cao).
+ */
+async function matchForeignSandboxOrders(
+  now: Date,
+  lastByInstrument: Map<string, number>
+): Promise<number> {
+  let fills = 0;
+  try {
+    const fxRate = await usdVndRate();
+    const pending = (await db.order.findMany({
+      where: {
+        status: { in: ["PENDING", "PARTIALLY_FILLED"] },
+        price: { not: null },
+        brokerAccountId: { not: null },
+        brokerAccount: { accountType: "sandbox", deletedAt: null },
+        instrument: { market: { in: ["US", "HK", "BOND", "FOREX", "COMMODITY"] } },
+      },
+      orderBy: { createdAt: "asc" },
+      take: 30,
+      select: {
+        id: true,
+        userId: true,
+        brokerAccountId: true,
+        instrumentId: true,
+        side: true,
+        price: true,
+        quantity: true,
+        filledQuantity: true,
+        avgFillPrice: true,
+        submittedAt: true,
+        status: true,
+        instrument: {
+          select: {
+            symbol: true,
+            market: true,
+            type: true,
+            currency: true,
+            quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } },
+          },
+        },
+      },
+    })) as Array<ForeignFillSnapshot & { instrument: InstrumentLite & { quotes: Array<{ last: number | null }> } }>;
+
+    for (const order of pending) {
+      const inst = order.instrument;
+      const rule = execRuleFor(inst);
+      if (!rule || rule.assetKind === "VN_PRICE") continue;
+      if (rule.sessionKind !== "VN" && !isForeignSessionOpen(rule.sessionKind, now)) continue;
+      const last = inst.quotes[0]?.last;
+      if (last == null || last <= 0 || order.price == null) continue;
+      const isBond = inst.market === "BOND";
+      const crossed = isBond
+        ? order.side === "BUY"
+          ? last >= order.price
+          : last <= order.price
+        : order.side === "BUY"
+          ? last <= order.price
+          : last >= order.price;
+      if (!crossed) continue;
+      try {
+        const ok = await fillForeignOrder(order, last, now, inst, fxRate, lastByInstrument);
+        if (ok) fills++;
+      } catch (err) {
+        if (err instanceof Error && err.message === "INSUFFICIENT_POSITION") continue;
+        console.error("[api/market/tick:fillForeign]", order.id, err);
+      }
+    }
+  } catch (err) {
+    console.error("[api/market/tick:matchForeign]", err);
+  }
+  return fills;
+}
+
 /** AUD-CODE #18: thân tick gốc — chỉ chạy tuần tự qua tickMutex. */
 async function runTick(): Promise<NextResponse> {
   try {
@@ -428,11 +842,17 @@ async function runTick(): Promise<NextResponse> {
           },
         });
       }
+      // #107 E-EXEC: ngoài phiên VN, lệnh sandbox PHI-VN vẫn được xét khớp khi
+      // phiên thị trường của nó đang mở (Mỹ 21:30–04:00 · HK buổi sáng trùng
+      // giờ VN · forex/hàng hoá 24/5) — khớp tại giá close đã sync, KHÔNG sinh
+      // tick giá VN (giữ nguyên tắc không-bịa cho cả hai chiều).
+      const foreignFills = await matchForeignSandboxOrders(new Date(), new Map());
       const payload = await loadQuotesPayload();
       return NextResponse.json({
         ...payload,
         skipped: true,
         reason: `Ngoài phiên giao dịch (${SESSION_PHASE_LABEL[sessionPhase(new Date())]}) — MARKET_STRICT_SESSION=true`,
+        ...(foreignFills > 0 ? { foreignFills } : {}),
       });
     }
 
@@ -847,6 +1267,10 @@ async function runTick(): Promise<NextResponse> {
       });
     }
 
+    // ── #107 E-EXEC: khớp thêm lệnh sandbox PHI-VN trong phiên VN (HK mở trùng
+    // buổi sáng; Mỹ/forex theo lịch riêng — đóng thì lượt này bỏ qua, không lỗi) ──
+    const foreignFills = await matchForeignSandboxOrders(now, lastByInstrument);
+
     // ── Phiên #34: đánh dấu nguồn bảng giá theo mode thực sự dùng ──
     if (rt.active) {
       if (realtimeUsed > 0) {
@@ -912,6 +1336,7 @@ async function runTick(): Promise<NextResponse> {
       ticked,
       rolled,
       fills,
+      ...(foreignFills > 0 ? { foreignFills } : {}),
       intradayBarsWritten, // #83 — bar 5-phút đã ghi (bucket đóng/safety-flush)
       ...(rt.active ? { realtime: { used: realtimeUsed, fetchAttempted: rtFetchAttempted } } : {}),
     });

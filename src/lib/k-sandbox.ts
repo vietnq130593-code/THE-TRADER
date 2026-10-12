@@ -26,6 +26,8 @@
 
 import { db } from "@/lib/db";
 import { createPaperOrderFromSignal } from "@/lib/signal-execution";
+// #107 E-EXEC: định giá vị thế phi-VN (quy VND / danh nghĩa idx).
+import { markPositionVND } from "@/lib/exec/market-rules";
 // Import một chiều k-sandbox → signal-execution (không vòng: signal-execution
 // nhận world/sizePct qua opts — không import ngược lại k-sandbox).
 
@@ -167,7 +169,12 @@ async function getActiveUserId(): Promise<string | null> {
   }
 }
 
-/** Equity sandbox = cash + Σ(qty × Quote.last) — công thức F-102 như paper. */
+/**
+ * Equity sandbox = cash + GTTH vị thế mở — công thức F-102 như paper cho vị
+ * thế VN (giá Quote.last như cũ); #107 E-EXEC: vị thế PHI-VN đánh giá theo
+ * luật thị trường (cp qtế/forex: giá native quy VND qua USD/VND — avgCostVND;
+ * trái phiếu/hàng hoá: danh nghĩa idx) — markPositionVND fail-soft về công thức cũ.
+ */
 export async function computeSandboxEquity(accountId: string): Promise<{
   cash: number;
   positionsMv: number;
@@ -186,7 +193,13 @@ export async function computeSandboxEquity(accountId: string): Promise<{
         where: { brokerAccountId: accountId, status: "OPEN" },
         include: {
           instrument: {
-            select: { symbol: true, quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } } },
+            select: {
+              symbol: true,
+              market: true,
+              type: true,
+              currency: true,
+              quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } },
+            },
           },
         },
       }),
@@ -195,11 +208,26 @@ export async function computeSandboxEquity(accountId: string): Promise<{
     const lastPrices = new Map<string, number>();
     let positionsMv = 0;
     let unrealisedPnl = 0;
+    // #107 E-EXEC: đánh giá từng vị thế theo luật thị trường (1 lượt — fx/idx cache)
     for (const p of positions) {
       const last = p.instrument.quotes[0]?.last ?? p.avgPrice;
       lastPrices.set(p.instrument.symbol, last);
-      positionsMv += last * p.quantity;
-      unrealisedPnl += (last - p.avgPrice) * p.quantity;
+      const mark = await markPositionVND({
+        quantity: p.quantity,
+        avgPrice: p.avgPrice,
+        avgCostVND: p.avgCostVND,
+        openIdxUnits: p.openIdxUnits,
+        instrument: p.instrument,
+        lastNative: p.instrument.quotes[0]?.last ?? p.avgPrice,
+      }).catch(() => null);
+      if (mark) {
+        positionsMv += mark.valueVND;
+        if (mark.unrealisedVND != null) unrealisedPnl += mark.unrealisedVND;
+      } else {
+        // fail-soft: giữ công thức cũ (VN thuần)
+        positionsMv += last * p.quantity;
+        unrealisedPnl += (last - p.avgPrice) * p.quantity;
+      }
     }
     const cash = Number(account.cashBalance);
     return {

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
+// #107 E-EXEC: vị thế phi-VN (chỉ xuất hiện trong sandbox) đánh giá theo luật
+// thị trường — quy VND qua USD/VND (cp qtế/forex) hoặc danh nghĩa idx (bond/cmdty).
+import { markPositionVND, isForeignMarket } from "@/lib/exec/market-rules";
 
 /** Mask a broker account number for API responses (PII policy, blueprint §6). */
 function maskAccount(accountNumber: string): string {
@@ -59,30 +62,61 @@ export async function GET(req: Request) {
       );
     }
 
-    const positions = account.positions
-      .map((p) => {
-        const q = p.instrument.quotes[0];
-        const last = q?.last ?? p.avgPrice;
-        const marketValue = p.quantity * last;
-        const costBasis = p.quantity * p.avgPrice;
-        const unrealizedPnl = marketValue - costBasis;
-        return {
-          symbol: p.instrument.symbol,
-          name: p.instrument.name,
-          sector: p.instrument.sector ?? "",
-          quantity: p.quantity,
-          avgPrice: p.avgPrice,
-          last,
-          refPrice: q?.refPrice ?? null,
-          changePct: q?.changePct ?? 0,
-          marketValue,
-          costBasis,
-          unrealizedPnl,
-          unrealizedPnlPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,
-          realizedPnl: p.realizedPnl,
-        };
-      })
-      .sort((a, b) => b.marketValue - a.marketValue);
+    // #107 E-EXEC: đánh giá từng vị thế theo luật thị trường — VN giữ nguyên
+    // công thức cũ (giá quote VND); phi-VN quy VND (async tuần tự — fx/idx cache).
+    interface PortfolioPositionView {
+      symbol: string;
+      name: string;
+      sector: string;
+      market: string;
+      currency: string;
+      quantity: number;
+      avgPrice: number;
+      last: number;
+      refPrice: number | null;
+      changePct: number;
+      marketValue: number;
+      costBasis: number;
+      unrealizedPnl: number;
+      unrealizedPnlPct: number;
+      realizedPnl: bigint;
+    }
+    const positionViews: PortfolioPositionView[] = [];
+    for (const p of account.positions) {
+      const q = p.instrument.quotes[0];
+      const last = q?.last ?? p.avgPrice;
+      const mark = await markPositionVND({
+        quantity: p.quantity,
+        avgPrice: p.avgPrice,
+        avgCostVND: p.avgCostVND,
+        openIdxUnits: p.openIdxUnits,
+        instrument: p.instrument,
+        lastNative: last,
+      }).catch(() => null);
+      const marketValue = mark?.valueVND ?? p.quantity * last;
+      const costBasis = isForeignMarket(p.instrument.market)
+        ? p.quantity * Number(p.avgCostVND ?? 0)
+        : p.quantity * p.avgPrice;
+      const unrealizedPnl = mark?.unrealisedVND ?? marketValue - costBasis;
+      positionViews.push({
+        symbol: p.instrument.symbol,
+        name: p.instrument.name,
+        sector: p.instrument.sector ?? "",
+        market: p.instrument.market,
+        currency: p.instrument.currency ?? "VND",
+        quantity: p.quantity,
+        avgPrice: p.avgPrice,
+        last,
+        refPrice: q?.refPrice ?? null,
+        changePct: q?.changePct ?? 0,
+        marketValue,
+        costBasis,
+        unrealizedPnl,
+        unrealizedPnlPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,
+        realizedPnl: p.realizedPnl,
+      });
+    }
+    const positions = positionViews.sort((a, b) => b.marketValue - a.marketValue);
 
     const totalMarketValue = positions.reduce((s, p) => s + p.marketValue, 0);
     const totalCostBasis = positions.reduce((s, p) => s + p.costBasis, 0);

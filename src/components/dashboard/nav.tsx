@@ -86,7 +86,7 @@ const WORKSPACE_ITEMS: {
   {
     id: "council",
     label: "Hội đồng",
-    description: "Tài khoản toàn cục · sổ đánh giá quyết định · thí nghiệm phân bổ 5 rổ",
+    description: "Tài khoản toàn cục đa thị trường · sổ đánh giá quyết định",
     icon: Users,
   },
   {

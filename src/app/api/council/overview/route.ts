@@ -2,20 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { toPlain } from "@/lib/serialize";
 import { db } from "@/lib/db";
 import { getDecisionLedger } from "@/lib/council/decision-eval";
+// #107 E-EXEC: vị thế phi-VN đánh giá theo luật thị trường (quy VND / danh nghĩa idx).
+import { markPositionVND, execUnitLabel, isForeignMarket, usdVndRate } from "@/lib/exec/market-rules";
+import { unitKindOf } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/council/overview (#106 COUNCIL_STEWARDSHIP_BLUEPRINT §6).
+ * GET /api/council/overview (#106 COUNCIL_STEWARDSHIP_BLUEPRINT §6 · hiệu
+ * chỉnh v2.0 #107 — bỏ (3) thí nghiệm phân bổ E-ALLOC).
  *
  * Một cửa cho module "Hội đồng": (1) tài khoản sandbox K1 — equity/cash/
  * P&L từ lúc kích hoạt + đường cong CashSnapshot k1-daily + vị thế đang mở
- * với lãi/lỗ chưa thực hiện; (2) sổ đánh giá quyết định D-LEDGER (rows +
- * stats); (3) thí nghiệm phân bổ (đang chạy + đã đóng, kèm snapshot cho
- * sparkline và kết quả + bài học).
+ * MỌI THỊ TRƯỜNG với lãi/lỗ chưa thực hiện (quy VND; USD kèm tỷ giá quy đổi);
+ * (2) sổ đánh giá quyết định D-LEDGER (rows + stats).
  *
  * Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD — lọc sổ quyết định theo decidedAt
- * và thí nghiệm theo startedAt theo NGÀY ICT +07:00 (pattern #101/#105).
+ * theo NGÀY ICT +07:00 (pattern #101/#105).
  */
 
 function ictDayStart(date: string): Date {
@@ -73,25 +76,46 @@ export async function GET(req: NextRequest) {
       });
       const positions = await db.position.findMany({
         where: { status: "OPEN", brokerAccountId: account.id },
-        include: { instrument: { select: { id: true, symbol: true } } },
+        include: {
+          instrument: {
+            select: { id: true, symbol: true, market: true, type: true, currency: true },
+          },
+        },
       });
-      const positionViews = await Promise.all(
-        positions.map(async (p) => {
-          const lastBar = await db.bar.findFirst({
-            where: { instrumentId: p.instrument.id },
-            orderBy: { date: "desc" },
-            select: { close: true },
-          });
-          const last = lastBar?.close ?? null;
-          return {
-            symbol: p.instrument.symbol,
-            quantity: p.quantity,
-            avgPrice: p.avgPrice,
-            lastPrice: last,
-            unrealizedPnl: last != null ? (last - p.avgPrice) * p.quantity : null,
-          };
-        })
-      );
+      const fx = await usdVndRate().catch(() => null);
+      const positionViews = [];
+      for (const p of positions) {
+        const lastBar = await db.bar.findFirst({
+          where: { instrumentId: p.instrument.id },
+          orderBy: { date: "desc" },
+          select: { close: true },
+        });
+        const last = lastBar?.close ?? null;
+        // #107 E-EXEC: đánh giá theo luật thị trường — VN giữ công thức cũ,
+        // phi-VN quy VND (PRICE) / danh nghĩa idx (NOTIONAL).
+        const mark = await markPositionVND({
+          quantity: p.quantity,
+          avgPrice: p.avgPrice,
+          avgCostVND: p.avgCostVND,
+          openIdxUnits: p.openIdxUnits,
+          instrument: p.instrument,
+          lastNative: last ?? p.avgPrice,
+        }).catch(() => null);
+        const isForeign = isForeignMarket(p.instrument.market);
+        positionViews.push({
+          symbol: p.instrument.symbol,
+          market: p.instrument.market,
+          currency: p.instrument.currency ?? "VND",
+          unitKind: unitKindOf(p.instrument.market, p.instrument.type),
+          unitLabel: execUnitLabel(p.instrument),
+          quantity: p.quantity,
+          avgPrice: p.avgPrice,
+          lastPrice: last,
+          unrealizedPnl: mark?.unrealisedVND ?? (last != null ? (last - p.avgPrice) * p.quantity : null),
+          marketValue: mark?.valueVND ?? (last != null ? last * p.quantity : null),
+          fxRate: isForeign ? mark?.fxRate ?? fx : null,
+        });
+      }
       const equity = Number(account.equity);
       const cash = Number(account.cashBalance);
       const pnl = initial != null ? equity - initial : null;
@@ -119,83 +143,10 @@ export async function GET(req: NextRequest) {
     // ── (2) Sổ đánh giá quyết định ──
     const decisions = await getDecisionLedger(from, to, 60);
 
-    // ── (3) Thí nghiệm phân bổ ──
-    const expWhere = {
-      startedAt: {
-        ...(from ? { gte: from } : {}),
-        ...(to ? { lte: to } : {}),
-      },
-    };
-    const [runningExps, doneExps] = await Promise.all([
-      db.allocationExperiment.findMany({
-        where: { status: "RUNNING", ...expWhere },
-        orderBy: { startedAt: "desc" },
-        take: 10,
-        include: { snapshots: { orderBy: { date: "asc" } } },
-      }),
-      db.allocationExperiment.findMany({
-        where: { status: { in: ["DONE", "STOPPED"] }, ...expWhere },
-        orderBy: { endedAt: "desc" },
-        take: 10,
-        include: { snapshots: { orderBy: { date: "asc" } } },
-      }),
-    ]);
-    const toExperimentView = (e: (typeof runningExps)[number]) => ({
-      id: e.id,
-      name: e.name,
-      hypothesis: e.hypothesis,
-      weights: (() => {
-        try {
-          return JSON.parse(e.weightsJson);
-        } catch {
-          return [];
-        }
-      })(),
-      capitalVND: Number(e.capitalVND),
-      horizonDays: e.horizonDays,
-      startedAt: e.startedAt.toISOString(),
-      status: e.status,
-      createdBy: e.createdBy,
-      endedAt: e.endedAt?.toISOString() ?? null,
-      daysRun: e.snapshots.length,
-      latest: e.snapshots.length
-        ? {
-            date: e.snapshots[e.snapshots.length - 1].date.toISOString(),
-            equityVND: Number(e.snapshots[e.snapshots.length - 1].equityVND),
-            returnPct: e.snapshots[e.snapshots.length - 1].returnPct,
-          }
-        : null,
-      snapshots: e.snapshots.slice(-90).map((s) => ({
-        date: s.date.toISOString(),
-        returnPct: s.returnPct,
-      })),
-      result:
-        e.status === "DONE" || e.status === "STOPPED"
-          ? {
-              finalEquityVND: e.finalEquityVND != null ? Number(e.finalEquityVND) : null,
-              returnPct: e.returnPct,
-              maxDrawdownPct: e.maxDrawdownPct,
-              sharpe: e.sharpe,
-              perBasket: (() => {
-                try {
-                  return e.perBasketJson ? JSON.parse(e.perBasketJson) : null;
-                } catch {
-                  return null;
-                }
-              })(),
-              lesson: e.lesson,
-            }
-          : null,
-    });
-
     return NextResponse.json(
       toPlain({
         account: accountView,
         decisions,
-        experiments: {
-          running: runningExps.map(toExperimentView),
-          closed: doneExps.map(toExperimentView),
-        },
         meta: {
           range: { from: fromRaw ?? null, to: toRaw ?? null },
           evaluatedAt: new Date().toISOString(),

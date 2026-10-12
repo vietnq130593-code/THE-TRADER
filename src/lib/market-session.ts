@@ -143,6 +143,61 @@ export function shouldGenerateTicks(): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// #107 E-EXEC (COUNCIL_STEWARDSHIP_BLUEPRINT v2.0 §5.2) — phiên giao dịch
+// PHI-VN cho matching lệnh sandbox đa thị trường. Client-safe thuần — chỉ
+// toán ngày/giờ ICT, KHÔNG đụng DB. Đơn giản hoá trung thực (blueprint §7.5):
+// US cố định 21:30–04:00 ICT (không đổi mùa đông/hè, không nghỉ lễ Mỹ) ·
+// HK 09:30–12:00 + 13:00–16:00 ICT T2–T6 · forex & hàng hoá 24/5
+// (T2 06:00 → T7 06:00 ICT). Trái phiếu Mỹ đi theo phiên US.
+// ─────────────────────────────────────────────────────────────────
+
+/** Loại phiên phi-VN — quyết định lúc nào lệnh sandbox thị trường đó được xét khớp. */
+export type ForeignSessionKind = "US" | "HK" | "FX245";
+
+const MIN_US_OPEN = 21 * 60 + 30; // 21:30 ICT
+const MIN_US_CLOSE = 4 * 60; // 04:00 ICT
+const MIN_HK_AM_OPEN = 9 * 60 + 30; // 09:30 ICT
+const MIN_HK_AM_CLOSE = 12 * 60; // 12:00 ICT
+const MIN_HK_PM_OPEN = 13 * 60; // 13:00 ICT
+const MIN_HK_PM_CLOSE = 16 * 60; // 16:00 ICT
+const MIN_FX_OPEN = 6 * 60; // 06:00 ICT (mở T2 06:00, đóng T7 06:00)
+
+/** {dow ICT (0=CN), phút kể từ 00:00 ICT} của một thời điểm UTC. */
+function ictDowMinutes(date: Date): { dow: number; minutes: number } {
+  const v = vnShift(date);
+  return {
+    dow: v.getUTCDay(),
+    minutes: v.getUTCHours() * 60 + v.getUTCMinutes(),
+  };
+}
+
+/**
+ * Phiên thị trường phi-VN có đang MỞ tại thời điểm cho trước?
+ * - "US": T2–T6 (theo ngày giao dịch Mỹ): 21:30 ICT tối ngày D → 04:00 ICT sáng D+1.
+ * - "HK": T2–T6 09:30–12:00 và 13:00–16:00 ICT.
+ * - "FX245": 24/5 — T2 06:00 → T7 06:00 ICT (đóng cuối tuần từ T7 06:00 tới T2 06:00).
+ */
+export function isForeignSessionOpen(kind: ForeignSessionKind, date: Date = new Date()): boolean {
+  const { dow, minutes: m } = ictDowMinutes(date);
+  switch (kind) {
+    case "US":
+      // tối T2–T6 (21:30→24:00) hoặc sáng T3–T7 (00:00→04:00)
+      return (dow >= 1 && dow <= 5 && m >= MIN_US_OPEN) || (dow >= 2 && dow <= 6 && m < MIN_US_CLOSE);
+    case "HK":
+      if (dow < 1 || dow > 5) return false;
+      return (m >= MIN_HK_AM_OPEN && m < MIN_HK_AM_CLOSE) || (m >= MIN_HK_PM_OPEN && m < MIN_HK_PM_CLOSE);
+    case "FX245":
+      // đóng: T7 từ 06:00, toàn bộ CN, T2 trước 06:00
+      if (dow === 6 && m >= MIN_FX_OPEN) return false;
+      if (dow === 0) return false;
+      if (dow === 1 && m < MIN_FX_OPEN) return false;
+      return true;
+    default:
+      return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
 // #96 — hint "lệnh đang chờ gì": phiên giao dịch KẾ TIẾP sẽ mở lúc nào.
 // Nhu cầu gốc: trader thấy lệnh "Chờ khớp" đứng yên cả cuối tuần mà không
 // biết hệ thống đang chờ mở phiên (matching engine chỉ chạy trong tick, tick

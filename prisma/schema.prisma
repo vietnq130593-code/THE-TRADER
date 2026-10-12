@@ -498,6 +498,17 @@ model Position {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // #107 E-EXEC — chỉ dùng cho tài sản PHI-VN (null = tài sản VN dùng avgPrice):
+  // · tài sản giá ngoại tệ (cp US/HK, forex): giá vốn VND/đơn vị tại lúc khớp
+  //   (đã quy đổi qua USD/VND — unrealised = qty×giáVND_nay − qty×avgCostVND,
+  //   tự nhiên tách bạch lãi giá vs lãi tỷ giá);
+  // · tài sản danh nghĩa (trái phiếu/hàng hoá — 1 đv = 1.000.000₫ triển khai):
+  //   avgCostVND = 1.000.000/đv, openIdxUnits = Σ(qty×10^6/idx_khớp) — cơ sở
+  //   cộng dồn CHÍNH XÁC cho giá trị = openIdxUnits×idx_nay/10^6 (idx = chỉ số
+  //   giá trị VND của tài sản gốc, sx base 1.0 tại bar đầu).
+  avgCostVND BigInt?
+  openIdxUnits BigInt?
+
   trades Trade[]
 
   @@unique([brokerAccountId, instrumentId])
@@ -1042,54 +1053,4 @@ model DecisionEvaluation {
   @@index([evaluatedAt(sort: Desc)])
   @@index([verdict])
   @@index([direction])
-}
-
-// E-ALLOC §5.1 — thí nghiệm phân bổ đa rổ do HỘI ĐỒNG tự đề xuất (hoặc
-// trader tạo tay): vốn giấy ĐỘC LẬP, đánh giá mark-to-market hằng ngày
-// theo chỉ số rổ (constant-mix — tái cân bằng về trọng số gốc mỗi ngày).
-// KHÔNG đặt lệnh thật/sandbox — đúng chỉ đạo “đầu tư bao nhiêu, bao nhiêu
-// phần bỏ vào rổ nào là việc hội đồng tự nghiên cứu, thử nghiệm”.
-model AllocationExperiment {
-  id             String   @id @default(cuid())
-  name           String
-  hypothesis     String // giả thuyết hội đồng tự viết
-  weightsJson    String // [{basket, weight}] — trọng số %, tổng 100
-  capitalVND     BigInt // vốn giấy của thí nghiệm
-  horizonDays    Int // 7..90 ngày giao dịch
-  startedAt      DateTime @default(now())
-  status         String   @default("RUNNING") // RUNNING | DONE | STOPPED
-  createdBy      String   @default("council") // council | trader | seed
-
-  // Kết quả — ghi 1 lần khi chuyển DONE (engine tổng kết)
-  finalEquityVND BigInt?
-  returnPct      Float?
-  maxDrawdownPct Float?
-  sharpe         Float? // mean/std × √252 trên chuỗi snapshot
-  perBasketJson  String? // JSON đóng góp lợi suất từng rổ
-  lesson         String? // bài học (LLM hội nghị phân bổ KẾ tiếp viết lại)
-  endedAt        DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  snapshots      ExperimentSnapshot[]
-
-  @@index([status, startedAt(sort: Desc)])
-  @@index([createdBy])
-}
-
-// 1 dòng/ngày cho mỗi thí nghiệm đang chạy (unique(experimentId, date) —
-// idempotent, engine 16:35 ICT t2–t6). basketsJson giữ per-basket value +
-// return NGÀY đó để hồi cứu đóng góp từng rổ.
-model ExperimentSnapshot {
-  id           String   @id @default(cuid())
-  experimentId String
-  experiment   AllocationExperiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
-  date         DateTime // ngày ICT — neo 15:00 UTC cùng convention Bar
-  equityVND    BigInt // mark-to-market theo chỉ số rổ
-  returnPct    Float // lũy kế từ vốn gốc
-  basketsJson  String // [{basket, value, retDay}] — đóng góp ngày
-  createdAt    DateTime @default(now())
-
-  @@unique([experimentId, date])
-  @@index([experimentId, date])
 }

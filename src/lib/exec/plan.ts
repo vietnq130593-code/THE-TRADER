@@ -80,8 +80,10 @@ export interface ExecutionPlan {
  *  - under-threshold:    notional ≤ ngưỡng TWAP_ADTV_TRIGGER_PCT% ADTV-20;
  *  - adtv-unavailable:   không đo được ADTV-20 (lỗi query hoặc chưa đủ 20 bar —
  *                        F-73A-07) → fail-soft §6.6 đi đường an toàn;
- *  - insufficient-lots:  khối lượng không đủ ≥ sliceCount lot cho mỗi lát. */
-export type SinglePlanReason = "under-threshold" | "adtv-unavailable" | "insufficient-lots";
+ *  - insufficient-lots:  khối lượng không đủ ≥ sliceCount lot cho mỗi lát.
+ *  - foreign-market:     #107 E-EXEC — instrument phi-VN luôn SINGLE (TWAP là
+ *                        luật HOSE: ADTV/lot/lát; ngoài VN khớp tại close). */
+export type SinglePlanReason = "under-threshold" | "adtv-unavailable" | "insufficient-lots" | "foreign-market";
 
 /** Sinh plan JSON cho lệnh (P0 luôn 1 lát SINGLE — đúng hành vi engine hiện tại).
  *  F-73A-13: `singleReason` nói đúng lý do không tách (mặc định under-threshold). */

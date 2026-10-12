@@ -1253,17 +1253,25 @@ export interface XrelInsightResponse {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * #106 — COUNCIL_STEWARDSHIP_BLUEPRINT: module Hội đồng + đa thị trường
- * (tài khoản toàn cục C-VISION · sổ đánh giá D-LEDGER · thí nghiệm E-ALLOC)
+ * #106/#107 — COUNCIL_STEWARDSHIP_BLUEPRINT v2.0: module Hội đồng + đa thị
+ * trường (tài khoản toàn cục C-VISION · sổ đánh giá D-LEDGER · E-EXEC đầu tư
+ * từ khoản tiền thử nghiệm — thí nghiệm phân bổ E-ALLOC đã bỏ #107)
  * ═══════════════════════════════════════════════════════════════════ */
 
-/** Vị thế sandbox trong tầm nhìn hội đồng (close mới nhất để tính uPnL). */
+/** Vị thế sandbox mọi thị trường trong tầm nhìn hội đồng (#107 E-EXEC:
+ * phi-VN kèm thị trường/đơn vị/giá trị quy VND/tỷ giá áp dụng). */
 export interface CouncilPositionView {
   symbol: string;
+  market: string;
+  currency: string;
+  unitKind: string;
+  unitLabel: string;
   quantity: number;
   avgPrice: number;
   lastPrice: number | null;
   unrealizedPnl: number | null;
+  marketValue: number | null;
+  fxRate: number | null;
 }
 
 /** Tài khoản Hội đồng (sandbox K1) — GET /api/council/overview. */
@@ -1309,42 +1317,9 @@ export interface DecisionLedgerStatsView {
   totalCashPnlVND: number;
 }
 
-/** Trọng số rổ của thí nghiệm phân bổ (chuẩn hoá về tổng 100). */
-export interface ExperimentWeightView {
-  basket: string;
-  weight: number;
-}
-
-export interface ExperimentResultView {
-  finalEquityVND: number | null;
-  returnPct: number | null;
-  maxDrawdownPct: number | null;
-  sharpe: number | null;
-  perBasket: Array<{ basket: string; weight: number; contributionPct: number }> | null;
-  lesson: string | null;
-}
-
-export interface CouncilExperimentView {
-  id: string;
-  name: string;
-  hypothesis: string;
-  weights: ExperimentWeightView[];
-  capitalVND: number;
-  horizonDays: number;
-  startedAt: string;
-  status: "RUNNING" | "DONE" | "STOPPED";
-  createdBy: string;
-  endedAt: string | null;
-  daysRun: number;
-  latest: { date: string; equityVND: number; returnPct: number } | null;
-  snapshots: Array<{ date: string; returnPct: number }>;
-  result: ExperimentResultView | null;
-}
-
 export interface CouncilOverviewResponse {
   account: CouncilAccountView;
   decisions: { rows: DecisionLedgerRowView[]; stats: DecisionLedgerStatsView };
-  experiments: { running: CouncilExperimentView[]; closed: CouncilExperimentView[] };
   meta: { range: { from: string | null; to: string | null }; evaluatedAt: string };
 }
 
@@ -1380,43 +1355,3 @@ export interface CouncilEvalResponse {
   durationMs: number;
 }
 
-/** POST /api/council/experiments/mark — tóm tắt lượt mark. */
-export interface CouncilMarkResponse {
-  running: number;
-  snapshotsWritten: number;
-  finalized: string[];
-  skippedNoData: number;
-  durationMs: number;
-}
-
-/** POST /api/council/allocation-session — kết quả hội nghị phân bổ LLM. */
-export interface CouncilSessionResponse {
-  ok: boolean;
-  created: boolean;
-  experimentId?: string;
-  experimentName?: string;
-  weights?: ExperimentWeightView[];
-  reflection?: string;
-  narrative?: string;
-  lessonsUpdated: number;
-  parseFail?: string;
-  model: string;
-  tokensIn: number;
-  tokensOut: number;
-  durationMs: number;
-}
-
-/** POST /api/council/experiments — tạo thí nghiệm tay. */
-export interface CouncilCreateExperimentResponse {
-  ok: boolean;
-  error?: string;
-  experiment?: {
-    id: string;
-    name: string;
-    weightsJson: string;
-    capitalVND: number;
-    horizonDays: number;
-    status: string;
-    startedAt: string;
-  };
-}

@@ -1,34 +1,29 @@
 "use client";
 
 /**
- * src/components/dashboard/council-workspace.tsx — #106
- * COUNCIL_STEWARDSHIP_BLUEPRINT: module "Hội đồng" (workspace thứ 8).
+ * src/components/dashboard/council-workspace.tsx — #106/#107
+ * COUNCIL_STEWARDSHIP_BLUEPRINT v2.0: module "Hội đồng".
  *
- * Ba卡片:
+ * Hai card (#107 — bỏ card Thí nghiệm phân bổ E-ALLOC: khoản tiền thử nghiệm
+ * sandbox CHÍNH LÀ thí nghiệm — vẽ rắn thêm chân):
  *  (1) TÀI KHOẢN HỘI ĐỒNG — tầm nhìn toàn cục (C-VISION): equity · cash ·
- *      P&L từ lúc kích hoạt · đường cong CashSnapshot k1-daily · vị thế với
- *      lãi/lỗ chưa thực hiện. Trước #106 tài khoản sandbox VÔ HÌNH với hội
- *      đồng (quarantine P0 #87) — trader đã phê duyệt thay đổi này.
+ *      P&L từ lúc kích hoạt · đường cong CashSnapshot k1-daily · VỊ THẾ NHÓM
+ *      THEO THỊ TRƯỜNG (CP VN · CP quốc tế · trái phiếu · forex · hàng hoá —
+ *      tài sản USD kèm chip quy đổi USD→VND, #107 E-EXEC).
  *  (2) SỔ ĐÁNH GIÁ QUYẾT ĐỊNH (D-LEDGER): mỗi tín hiệu 1 hàng với phán quyết
  *      WIN/LOSS/NEUTRAL ±0,5% + P&L tiền quy kết — "đánh giá toàn cục các
  *      quyết định mua bán lợi ích hay tổn thất".
- *  (3) THÍ NGHIỆM PHÂN BỔ ĐA RỔ (E-ALLOC): hội đồng TỰ nghiên cứu tỷ trọng
- *      5 rổ — hội nghị LLM Chủ nhật 05:50 + tạo tay + mark hằng ngày + bài
- *      học từ kết quả.
  *
- * Bộ chọn khoảng thời gian toàn cục #105 lọc sổ quyết định (decidedAt) và
- * thí nghiệm (startedAt) theo ngày ICT.
+ * Bộ chọn khoảng thời gian toàn cục #105 lọc sổ quyết định (decidedAt)
+ * theo ngày ICT.
  */
 
 import * as React from "react";
 import {
   BookOpenCheck,
-  FlaskConical,
   Loader2,
-  Plus,
   RefreshCw,
   Scale,
-  Square,
   Users,
 } from "lucide-react";
 import {
@@ -43,50 +38,41 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  useAllocationSession,
-  useCouncilOverview,
-  useCreateExperiment,
-  useMarkExperiments,
-  useRunDecisionEval,
-  useStopExperiment,
-} from "@/hooks/use-council";
+import { useCouncilOverview, useRunDecisionEval } from "@/hooks/use-council";
 import { useDateRange } from "@/hooks/use-date-range";
 import {
   changeColor,
   formatDateTime,
   formatPct,
-  formatPrice,
+  formatUnitPrice,
   formatVnd,
   formatVndCompact,
 } from "@/lib/format";
+import type { UnitKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import type {
-  CouncilExperimentView,
-  DecisionLedgerRowView,
-} from "@/lib/types";
+import type { DecisionLedgerRowView } from "@/lib/types";
 
 /* ─────────────────── Tiện ích dùng chung ─────────────────── */
 
-const BASKET_SHORT: Record<string, string> = {
-  VN_EQUITY: "CP VN",
-  INTL_EQUITY: "CP QT",
-  BOND: "Tr.phiếu",
+/** Nhóm hiển thị vị thế theo thị trường (#107 E-EXEC M4.6 UIUX v1.1). */
+const MARKET_GROUP: Record<string, string> = {
+  HOSE: "CP Việt Nam",
+  HNX: "CP Việt Nam",
+  UPCOM: "CP Việt Nam",
+  US: "Cổ phiếu quốc tế",
+  HK: "Cổ phiếu quốc tế",
+  BOND: "Trái phiếu",
   FOREX: "Forex",
   COMMODITY: "Hàng hoá",
 };
+const MARKET_GROUP_ORDER = [
+  "CP Việt Nam",
+  "Cổ phiếu quốc tế",
+  "Trái phiếu",
+  "Forex",
+  "Hàng hoá",
+];
 
 function verdictClass(verdict: string): string {
   if (verdict === "WIN") return "border-up/40 text-up";
@@ -117,61 +103,6 @@ function executionLabel(kind: string | null): string {
     default:
       return "—";
   }
-}
-
-/** Sparkline returnPct cho thí nghiệm — SVG polyline thuần (pattern EquitySparkline). */
-function ReturnSparkline({
-  points,
-}: {
-  points: Array<{ date: string; returnPct: number }>;
-}) {
-  if (points.length < 2) return null;
-  const w = 240;
-  const h = 44;
-  const pad = 4;
-  const values = points.map((p) => p.returnPct);
-  const min = Math.min(0, ...values);
-  const max = Math.max(0, ...values);
-  const span = max - min || 1;
-  const xy = points.map((p, i) => ({
-    x: pad + (i / (points.length - 1)) * (w - 2 * pad),
-    y: h - pad - ((p.returnPct - min) / span) * (h - 2 * pad),
-  }));
-  const line = xy.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const zeroY = h - pad - ((0 - min) / span) * (h - 2 * pad);
-  const up = values[values.length - 1] >= 0;
-  const stroke = up ? "var(--color-up, #16a34a)" : "var(--color-down, #dc2626)";
-  return (
-    <svg
-      viewBox={`0 0 ${w} ${h}`}
-      className="h-11 w-full min-w-[120px]"
-      role="img"
-      aria-label={`Lợi suất thí nghiệm ${points.length} phiên: ${formatPct(
-        values[values.length - 1]
-      )}`}
-      preserveAspectRatio="none"
-    >
-      <line
-        x1={pad}
-        x2={w - pad}
-        y1={zeroY}
-        y2={zeroY}
-        stroke="currentColor"
-        className="text-border"
-        strokeWidth={1}
-        vectorEffect="non-scaling-stroke"
-      />
-      <polyline
-        points={line}
-        fill="none"
-        stroke={stroke}
-        strokeWidth={2}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-  );
 }
 
 /* ─────────────────── Card 1: Tài khoản Hội đồng ─────────────────── */
@@ -333,38 +264,88 @@ function AccountVisionCard({
                   <th className="px-3 py-2 text-right font-medium">Lượng</th>
                   <th className="px-3 py-2 text-right font-medium">Giá vốn</th>
                   <th className="px-3 py-2 text-right font-medium">Giá gần nhất</th>
-                  <th className="px-3 py-2 text-right font-medium">Lãi/lỗ chưa thực hiện</th>
+                  <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Giá trị (quy VND)</th>
+                  <th className="px-3 py-2 text-right font-medium">Lãi/lỗ</th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p) => (
-                  <tr key={p.symbol} className="border-b last:border-0">
-                    <td className="px-3 py-2 font-medium">{p.symbol}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {p.quantity.toLocaleString("vi-VN")}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {formatPrice(p.avgPrice)}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {p.lastPrice != null ? formatPrice(p.lastPrice) : "—"}
-                    </td>
-                    <td
-                      className={cn(
-                        "px-3 py-2 text-right font-medium tabular-nums",
-                        changeColor(p.unrealizedPnl)
-                      )}
-                    >
-                      {p.unrealizedPnl != null ? formatVnd(p.unrealizedPnl) : "—"}
-                    </td>
-                  </tr>
-                ))}
+                {MARKET_GROUP_ORDER.map((group) => {
+                  const rows = positions.filter(
+                    (p) => (MARKET_GROUP[p.market ?? ""] ?? "CP Việt Nam") === group
+                  );
+                  if (rows.length === 0) return null;
+                  const groupValue = rows.reduce((s, p) => s + (p.marketValue ?? 0), 0);
+                  const groupUpnl = rows.reduce((s, p) => s + (p.unrealizedPnl ?? 0), 0);
+                  const fxRate = rows.find((p) => p.fxRate != null)?.fxRate ?? null;
+                  return (
+                    <React.Fragment key={group}>
+                      <tr className="border-b bg-muted/20">
+                        <td colSpan={6} className="px-3 py-1.5 text-[11px] text-muted-foreground">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-foreground">{group}</span>
+                            <span className="tabular-nums">{formatVndCompact(groupValue)}</span>
+                            <span className={cn("tabular-nums", changeColor(groupUpnl))}>
+                              {groupUpnl >= 0 ? "+" : "−"}
+                              {formatVndCompact(Math.abs(groupUpnl))}
+                            </span>
+                            {fxRate != null ? (
+                              <Badge variant="outline" className="border-primary/30 text-[10px] text-primary">
+                                quy đổi {Math.round(fxRate).toLocaleString("vi-VN")}₫/USD
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                      {rows.map((p) => {
+                        const kind = (p.unitKind ?? "VND") as UnitKind;
+                        const cur = p.currency ?? "VND";
+                        const isVn = !p.market || ["HOSE", "HNX", "UPCOM"].includes(p.market);
+                        return (
+                          <tr key={p.symbol} className="border-b last:border-0">
+                            <td className="px-3 py-2 font-medium">{p.symbol}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {p.quantity.toLocaleString("vi-VN")}
+                              {!isVn ? (
+                                <span className="ml-1 text-[10px] text-muted-foreground">
+                                  {p.unitLabel}
+                                </span>
+                              ) : null}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {isVn ? formatVndCompact(p.avgPrice) : formatUnitPrice(p.avgPrice, kind, cur)}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {p.lastPrice != null
+                                ? isVn
+                                  ? formatVndCompact(p.lastPrice)
+                                  : formatUnitPrice(p.lastPrice, kind, cur)
+                                : "—"}
+                            </td>
+                            <td className="hidden px-3 py-2 text-right tabular-nums sm:table-cell">
+                              {p.marketValue != null ? formatVnd(p.marketValue) : "—"}
+                            </td>
+                            <td
+                              className={cn(
+                                "px-3 py-2 text-right font-medium tabular-nums",
+                                changeColor(p.unrealizedPnl)
+                              )}
+                            >
+                              {p.unrealizedPnl != null ? formatVnd(p.unrealizedPnl) : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Không nắm giữ vị thế nào — tiền mặt 100%.
+            Không nắm giữ vị thế nào — tiền mặt 100%. Hội đồng có thể đầu tư vào
+            CP VN · CP quốc tế · trái phiếu · forex · hàng hoá từ khoản tiền thử
+            nghiệm (khối VŨ TRỤ GIAO DỊCH trong prompt Chủ tịch).
           </p>
         )}
       </CardContent>
@@ -384,10 +365,16 @@ interface CouncilOverviewResponseAccount {
   equityCurve?: Array<{ createdAt: string; equity: number }>;
   positions?: Array<{
     symbol: string;
+    market: string;
+    currency: string;
+    unitKind: string;
+    unitLabel: string;
     quantity: number;
     avgPrice: number;
     lastPrice: number | null;
     unrealizedPnl: number | null;
+    marketValue: number | null;
+    fxRate: number | null;
   }>;
 }
 
@@ -560,438 +547,12 @@ function DecisionLedgerCard({
   );
 }
 
-/* ─────────────────── Card 3: Thí nghiệm phân bổ ─────────────────── */
-
-function WeightChips({
-  weights,
-}: {
-  weights: Array<{ basket: string; weight: number }>;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {weights
-        .filter((w) => w.weight > 0)
-        .map((w) => (
-          <span
-            key={w.basket}
-            className="rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground"
-          >
-            {BASKET_SHORT[w.basket] ?? w.basket} {w.weight}%
-          </span>
-        ))}
-    </div>
-  );
-}
-
-function ExperimentRow({
-  exp,
-  onStop,
-  stopPending,
-}: {
-  exp: CouncilExperimentView;
-  onStop: (id: string) => void;
-  stopPending: boolean;
-}) {
-  const running = exp.status === "RUNNING";
-  const ret = running ? (exp.latest?.returnPct ?? 0) : (exp.result?.returnPct ?? null);
-  return (
-    <div className="flex flex-col gap-2 px-4 py-3 sm:px-6">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{exp.name}</span>
-            <Badge
-              variant="outline"
-              className={
-                running
-                  ? "border-primary/40 text-primary"
-                  : "border-muted-foreground/40 text-muted-foreground"
-              }
-            >
-              {running ? "đang chạy" : exp.status === "DONE" ? "đã đóng" : "đã dừng"}
-            </Badge>
-            <span className="rounded-full border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              {exp.createdBy === "council"
-                ? "hội đồng đề xuất"
-                : exp.createdBy === "seed"
-                  ? "khởi động (hồi tính)"
-                  : "trader tạo"}
-            </span>
-            {running ? (
-              <span className="text-[10px] text-muted-foreground">
-                ngày {exp.daysRun}/{exp.horizonDays} · vốn{" "}
-                {formatVndCompact(exp.capitalVND)}
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">
-            {exp.hypothesis}
-          </p>
-          <div className="mt-1.5">
-            <WeightChips weights={exp.weights} />
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          {exp.snapshots.length >= 2 ? (
-            <div className="hidden w-36 sm:block">
-              <ReturnSparkline points={exp.snapshots} />
-            </div>
-          ) : null}
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] text-muted-foreground">
-              {running ? "tới nay" : "kết quả"}
-            </span>
-            <span className={cn("text-base font-semibold tabular-nums", changeColor(ret))}>
-              {formatPct(ret)}
-            </span>
-            {!running && exp.result ? (
-              <span className="text-[10px] text-muted-foreground">
-                maxDD {exp.result.maxDrawdownPct != null ? `${exp.result.maxDrawdownPct.toFixed(2).replace(".", ",")}%` : "—"}
-                {" · "}
-                Sharpe {exp.result.sharpe ?? "—"}
-              </span>
-            ) : null}
-          </div>
-          {running ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-2.5"
-              onClick={() => onStop(exp.id)}
-              disabled={stopPending}
-              aria-label={`Dừng thí nghiệm ${exp.name}`}
-            >
-              <Square className="size-3.5" aria-hidden="true" />
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      {!running && exp.result?.lesson ? (
-        <p className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-relaxed">
-          <strong className="text-primary">Bài học:</strong> {exp.result.lesson}
-        </p>
-      ) : null}
-      {!running && exp.result?.perBasket && exp.result.perBasket.length > 0 ? (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] text-muted-foreground">
-          {exp.result.perBasket
-            .filter((b) => b.weight > 0)
-            .map((b) => (
-              <span key={b.basket} className="tabular-nums">
-                {BASKET_SHORT[b.basket] ?? b.basket} đóng góp{" "}
-                <span className={changeColor(b.contributionPct)}>
-                  {formatPct(b.contributionPct)}
-                </span>
-              </span>
-            ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function CreateExperimentDialog({
-  open,
-  onOpenChange,
-  onCreate,
-  pending,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  onCreate: (input: {
-    name: string;
-    hypothesis: string;
-    weights: Array<{ basket: string; weight: number }>;
-    capitalVND: number;
-    horizonDays: number;
-  }) => void;
-  pending: boolean;
-}) {
-  const [name, setName] = React.useState("");
-  const [hypothesis, setHypothesis] = React.useState("");
-  const [horizon, setHorizon] = React.useState(30);
-  const [capitalM, setCapitalM] = React.useState(100);
-  const [weights, setWeights] = React.useState<Record<string, number>>({
-    VN_EQUITY: 40,
-    INTL_EQUITY: 15,
-    BOND: 15,
-    FOREX: 10,
-    COMMODITY: 20,
-  });
-  const basketKeys = ["VN_EQUITY", "INTL_EQUITY", "BOND", "FOREX", "COMMODITY"];
-  const total = basketKeys.reduce((a, k) => a + (weights[k] || 0), 0);
-  const valid = total >= 95 && total <= 105;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Tạo thí nghiệm phân bổ</DialogTitle>
-          <DialogDescription>
-            Danh mục giấy độc lập — engine đánh giá mark-to-market 16:35 ICT
-            hằng ngày theo chỉ số 5 rổ (constant-mix). Không đặt lệnh thật.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="exp-name">Tên thí nghiệm</Label>
-            <Input
-              id="exp-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="VD: Nghiên cứu 60-40 cổ phiếu–trái phiếu"
-              maxLength={120}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="exp-hypo">Giả thuyết cần kiểm chứng</Label>
-            <Textarea
-              id="exp-hypo"
-              value={hypothesis}
-              onChange={(e) => setHypothesis(e.target.value)}
-              placeholder="VD: Trong môi trường lãi suất cao, tăng tỷ trọng trái phiếu giảm biên độ mà giữ lợi suất?"
-              rows={3}
-              maxLength={600}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="exp-capital">Vốn (triệu ₫)</Label>
-              <Input
-                id="exp-capital"
-                type="number"
-                min={1}
-                max={10_000}
-                value={capitalM}
-                onChange={(e) => setCapitalM(Number(e.target.value) || 0)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="exp-horizon">Horizon (ngày 7–90)</Label>
-              <Input
-                id="exp-horizon"
-                type="number"
-                min={7}
-                max={90}
-                value={horizon}
-                onChange={(e) => setHorizon(Number(e.target.value) || 0)}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label>Trọng số 5 rổ (%)</Label>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {basketKeys.map((k) => (
-                <div key={k} className="flex flex-col gap-1">
-                  <span className="text-[10px] text-muted-foreground">
-                    {BASKET_SHORT[k]}
-                  </span>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={weights[k] ?? 0}
-                    onChange={(e) =>
-                      setWeights((prev) => ({
-                        ...prev,
-                        [k]: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
-                      }))
-                    }
-                    aria-label={`Trọng số rổ ${BASKET_SHORT[k]}`}
-                  />
-                </div>
-              ))}
-            </div>
-            <p
-              className={cn(
-                "text-[11px] tabular-nums",
-                valid ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400"
-              )}
-            >
-              Tổng: {total}% — phải nằm trong [95, 105] (tự chuẩn hoá về 100).
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Huỷ
-          </Button>
-          <Button
-            onClick={() => {
-              onCreate({
-                name,
-                hypothesis,
-                weights: basketKeys.map((k) => ({
-                  basket: k,
-                  weight: weights[k] || 0,
-                })),
-                capitalVND: capitalM * 1_000_000,
-                horizonDays: horizon,
-              });
-            }}
-            disabled={
-              pending || !valid || name.trim().length < 3 || hypothesis.trim().length < 10
-            }
-          >
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : null}
-            Tạo thí nghiệm
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ExperimentsCard({
-  experiments,
-  isLoading,
-  onSession,
-  sessionPending,
-  onMark,
-  markPending,
-  onCreate,
-  createPending,
-  onStop,
-  stopPending,
-  rangeLabel,
-}: {
-  experiments:
-    | { running: CouncilExperimentView[]; closed: CouncilExperimentView[] }
-    | undefined;
-  isLoading: boolean;
-  onSession: () => void;
-  sessionPending: boolean;
-  onMark: () => void;
-  markPending: boolean;
-  onCreate: (input: {
-    name: string;
-    hypothesis: string;
-    weights: Array<{ basket: string; weight: number }>;
-    capitalVND: number;
-    horizonDays: number;
-  }) => void;
-  createPending: boolean;
-  onStop: (id: string) => void;
-  stopPending: boolean;
-  rangeLabel: string | null;
-}) {
-  const [dialogOpen, setDialogOpen] = React.useState(false);
-  const running = experiments?.running ?? [];
-  const closed = experiments?.closed ?? [];
-  return (
-    <Card className="gap-4">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <FlaskConical className="size-4 text-primary" aria-hidden="true" />
-          Thí nghiệm phân bổ đa rổ — việc của Hội đồng
-        </CardTitle>
-        <CardDescription>
-          Hội đồng tự nghiên cứu “bao nhiêu phần bỏ vào rổ nào”: hội nghị LLM
-          Chủ nhật 05:50 đề xuất → engine đánh giá hằng ngày → kết quả + bài
-          học quay lại prompt Chủ tịch
-          {rangeLabel ? ` · ${rangeLabel}` : ""}
-        </CardDescription>
-        <CardAction>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 px-2.5"
-              onClick={onSession}
-              disabled={sessionPending}
-              aria-label="Họp Hội đồng phân bổ ngay (LLM ~25 giây)"
-            >
-              {sessionPending ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <Users className="size-3.5" aria-hidden="true" />
-              )}
-              <span className="hidden sm:inline">Họp Hội đồng</span>
-              <span className="sm:hidden">Họp</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 px-2.5"
-              onClick={onMark}
-              disabled={markPending}
-              aria-label="Đánh giá mark-to-market thí nghiệm ngay"
-            >
-              {markPending ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <RefreshCw className="size-3.5" aria-hidden="true" />
-              )}
-              <span className="hidden lg:inline">Đánh giá</span>
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 gap-1.5 px-2.5"
-              onClick={() => setDialogOpen(true)}
-              aria-label="Tạo thí nghiệm phân bổ thủ công"
-            >
-              <Plus className="size-3.5" aria-hidden="true" />
-              <span className="hidden sm:inline">Tạo thí nghiệm</span>
-              <span className="sm:hidden">Tạo</span>
-            </Button>
-          </div>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="pb-0">
-        {isLoading ? (
-          <div className="flex flex-col gap-2 px-6 pb-6">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-16" />
-            ))}
-          </div>
-        ) : running.length + closed.length === 0 ? (
-          <div className="px-6 pb-6 text-sm text-muted-foreground">
-            <strong>Chưa có thí nghiệm nào.</strong> Bấm “Họp Hội đồng” để
-            Chủ tịch đề xuất thí nghiệm đầu tiên từ số liệu 5 rổ — hoặc tạo
-            tay qua “Tạo thí nghiệm”.
-          </div>
-        ) : (
-          <div className="max-h-[28rem] divide-y divide-border/60 overflow-y-auto custom-scrollbar">
-            {[...running, ...closed].map((exp) => (
-              <ExperimentRow
-                key={exp.id}
-                exp={exp}
-                onStop={onStop}
-                stopPending={stopPending}
-              />
-            ))}
-          </div>
-        )}
-        <p className="px-4 pb-4 pt-3 text-[11px] leading-relaxed text-muted-foreground sm:px-6">
-          Thí nghiệm là danh mục giấy ĐỘC LẬP (không đụng lệnh sandbox HOSE) —
-          đúng chỉ đạo: “đầu tư bao nhiêu, đầu tư thế nào… là việc hội đồng
-          phải tự nghiên cứu, học tập, thử nghiệm và thu nhận kết quả”.
-        </p>
-      </CardContent>
-      <CreateExperimentDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onCreate={(input) => {
-          onCreate(input);
-          setDialogOpen(false);
-        }}
-        pending={createPending}
-      />
-    </Card>
-  );
-}
-
 /* ─────────────────── Workspace ─────────────────── */
 
 export function CouncilWorkspace() {
   const { rangeQuery, rangeKey, dateRange } = useDateRange();
   const overviewQuery = useCouncilOverview(rangeQuery, rangeKey);
   const evalMutation = useRunDecisionEval();
-  const markMutation = useMarkExperiments();
-  const sessionMutation = useAllocationSession();
-  const createMutation = useCreateExperiment();
-  const stopMutation = useStopExperiment();
 
   const rangeLabel = dateRange
     ? `theo khoảng đã chọn ${dateRange.from} → ${dateRange.to}`
@@ -1005,7 +566,7 @@ export function CouncilWorkspace() {
       className="flex flex-col gap-6"
     >
       <h2 className="sr-only">
-        Hội đồng — tài khoản toàn cục · sổ đánh giá quyết định · thí nghiệm phân bổ
+        Hội đồng — tài khoản toàn cục đa thị trường · sổ đánh giá quyết định
       </h2>
       <AccountVisionCard
         account={overviewQuery.data?.account}
@@ -1016,19 +577,6 @@ export function CouncilWorkspace() {
         isLoading={overviewQuery.isLoading}
         onEvaluate={() => evalMutation.mutate()}
         evaluatePending={evalMutation.isPending}
-        rangeLabel={rangeLabel}
-      />
-      <ExperimentsCard
-        experiments={overviewQuery.data?.experiments}
-        isLoading={overviewQuery.isLoading}
-        onSession={() => sessionMutation.mutate()}
-        sessionPending={sessionMutation.isPending}
-        onMark={() => markMutation.mutate()}
-        markPending={markMutation.isPending}
-        onCreate={(input) => createMutation.mutate(input)}
-        createPending={createMutation.isPending}
-        onStop={(id) => stopMutation.mutate(id)}
-        stopPending={stopMutation.isPending}
         rangeLabel={rangeLabel}
       />
     </section>

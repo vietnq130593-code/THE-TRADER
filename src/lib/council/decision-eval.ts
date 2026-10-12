@@ -26,6 +26,19 @@
  */
 
 import { db } from "@/lib/db";
+// #107 E-EXEC: đánh giá quyết định phi-VN — trái phiếu theo mô hình duration
+// (giá = lợi suất, ĐẢO chiều giá trị); dòng tiền trade quy VND tại tỷ giá ngày
+// khớp; tách lãi giá / lãi tỷ giá cho vị thế USD đang mở (driversJson).
+import {
+  BOND_DURATION,
+  NOTIONAL_UNIT_VND,
+  foreignPriceUnitValueVND,
+  isForeignMarket,
+  notionalIdxAtDate,
+  usdVndAtDate,
+  usdVndRate,
+} from "@/lib/exec/market-rules";
+import { vnDateIso } from "@/lib/market-session";
 
 /** Ngưỡng phán quyết ±0,5% — khớp bandit #87 (một hệ ngưỡng toàn hệ thống). */
 export const VERDICT_THRESHOLD_PCT = 0.5;
@@ -106,19 +119,39 @@ export async function evaluateDecisions(): Promise<DecisionEvalSummary> {
       const entry = entryBar?.close ?? null;
       const mark = bars.length > 0 ? bars[bars.length - 1].close : null;
 
+      // ── #107 E-EXEC: phân lớp thị trường của quyết định ──
+      const isBond = sig.instrument.market === "BOND";
+      const isForeign = isForeignMarket(sig.instrument.market);
+      const foreignKind = !isForeign
+        ? null
+        : isBond || sig.instrument.market === "COMMODITY"
+          ? "NOTIONAL"
+          : "PRICE";
+      const D = BOND_DURATION[sig.instrument.symbol] ?? 8;
+      /** Trái phiếu — lợi suất theo nguyên % (BOND_PCT): giá trị = −D·Δy + carry. */
+      const bondRet = (y0: number, y1: number, tradingDays: number): number => {
+        const carry = (y0 / 100) * (Math.min(Math.max(tradingDays, 0), 260) / 252);
+        return -D * ((y1 - y0) / 100) + carry;
+      };
+
       // ── (a) Kết quả DỰ BÁO theo hướng ──
+      // Trái phiếu: raw = mô hình duration (native USD — đánh giá bài gọi yield,
+      // tách khỏi kênh tỷ giá); tài sản giá: raw = biến động giá native.
+      const barsAfter = bars.filter((b) => b.date.getTime() > sig.createdAt.getTime());
       let markPnlPct: number | null = null;
       if (entry != null && mark != null && entry > 0) {
-        const raw = (mark - entry) / entry;
+        const raw = isBond ? bondRet(entry, mark, barsAfter.length) : (mark - entry) / entry;
         markPnlPct = (sig.direction === "SELL" ? -raw : raw) * 100;
       }
       // peak/trough dọc đường (từ sau ngày quyết định)
       let peak: number | null = null;
       let trough: number | null = null;
       if (entry != null && entry > 0) {
+        let dayIdx = 0;
         for (const b of bars) {
           if (b.date.getTime() <= sig.createdAt.getTime()) continue;
-          const raw = (b.close - entry) / entry;
+          dayIdx++;
+          const raw = isBond ? bondRet(entry, b.close, dayIdx) : (b.close - entry) / entry;
           const adj = (sig.direction === "SELL" ? -raw : raw) * 100;
           if (peak == null || adj > peak) peak = adj;
           if (trough == null || adj < trough) trough = adj;
@@ -129,7 +162,7 @@ export async function evaluateDecisions(): Promise<DecisionEvalSummary> {
       const orders = await db.order.findMany({
         where: { signalId: sig.id },
         include: {
-          trades: { select: { side: true, quantity: true, price: true, fee: true, tax: true } },
+          trades: { select: { side: true, quantity: true, price: true, fee: true, tax: true, executedAt: true } },
           brokerAccount: { select: { accountType: true } },
         },
       });
@@ -137,22 +170,83 @@ export async function evaluateDecisions(): Promise<DecisionEvalSummary> {
       let executionKind: string | null = null;
       let cashPnlVND: bigint | null = null;
       let openQty = 0;
-      let sellVwapNotional = BigInt(0);
+      let sellVwapNative = 0; // Σ(price_native × qty) các lệnh BÁN — VWAP theo đơn vị GIÁ gốc
       let sellQty = 0;
       let buyQty = 0;
       let buyCost = BigInt(0); // gồm phí
-      let sellProceeds = BigInt(0); // trừ phí + thuế
+      let sellProceeds = BigInt(0); // trừ phí + thuế (VND)
       const world = orders[0]?.brokerAccount?.accountType === "sandbox" ? "sandbox" : "paper";
 
+      // #107 E-EXEC — trạng thái định giá phi-VN (lazy trong vòng trade)
+      const instLite = {
+        symbol: sig.instrument.symbol,
+        market: sig.instrument.market,
+        type: sig.instrument.type,
+      };
+      let fxNow: number | null = null;
+      let unitMarkNow: number | null = null; // giá VND/đv tại mark (PRICE)
+      let idxNow: number | null = null; // idx tại mark (NOTIONAL)
+      let idxBasis: number | null = null; // idx tại ngày MUA ĐẦU TIÊN của signal
+      let firstBuyIso: string | null = null;
+      let nvQtyUSD = 0; // Σ qty × giáUSD/đv tại khớp — để tách lãi giá / lãi tỷ giá
+      if (isForeign && trades.length > 0) {
+        fxNow = sig.instrument.symbol === "VND=X" ? 1 : await usdVndRate().catch(() => null);
+        if (foreignKind === "PRICE" && mark != null && fxNow != null) {
+          unitMarkNow = foreignPriceUnitValueVND(instLite, mark, fxNow);
+        }
+        if (foreignKind === "NOTIONAL") {
+          idxNow = await notionalIdxAtDate(sig.instrument.symbol, vnDateIso(new Date())).catch(() => null);
+          const firstBuy = trades.find((t) => t.side === "BUY");
+          if (firstBuy) {
+            firstBuyIso = vnDateIso(firstBuy.executedAt);
+            idxBasis = await notionalIdxAtDate(sig.instrument.symbol, firstBuyIso).catch(() => null);
+          }
+        }
+      }
+
       for (const t of trades) {
-        const notional = BigInt(t.quantity) * BigInt(t.price);
-        if (t.side === "BUY") {
-          buyQty += t.quantity;
-          buyCost += notional + t.fee;
+        if (t.side === "SELL") sellVwapNative += t.price * t.quantity;
+        if (foreignKind == null) {
+          // VN — dòng tiền như cũ (giá DB = VND)
+          const notional = BigInt(t.quantity) * BigInt(t.price);
+          if (t.side === "BUY") {
+            buyQty += t.quantity;
+            buyCost += notional + t.fee;
+          } else {
+            sellQty += t.quantity;
+            sellProceeds += notional - t.fee - t.tax;
+          }
+        } else if (foreignKind === "PRICE") {
+          // Giá VND/đv tại ngày khớp (tỷ giá VND=X ngày đó — tái lập được)
+          const fillIso = vnDateIso(t.executedAt);
+          const fxFill = sig.instrument.symbol === "VND=X" ? 1 : await usdVndAtDate(fillIso).catch(() => null);
+          const unitNative = foreignPriceUnitValueVND(instLite, t.price, 1); // USD/đv (VND=X → VND/USD)
+          const unit = unitNative != null && fxFill != null ? unitNative * fxFill : null;
+          if (unit == null) continue; // thiếu dữ liệu tỷ giá — bỏ qua trade (đợi sync)
+          const notional = BigInt(Math.round(t.quantity * unit));
+          if (t.side === "BUY") {
+            buyQty += t.quantity;
+            buyCost += notional + t.fee;
+            nvQtyUSD += t.quantity * (unitNative ?? 0);
+          } else {
+            sellQty += t.quantity;
+            sellProceeds += notional - t.fee - t.tax;
+          }
         } else {
-          sellQty += t.quantity;
-          sellProceeds += notional - t.fee - t.tax;
-          sellVwapNotional += notional;
+          // NOTIONAL — 1 đv = 1.000.000₫: BUY trừ đúng qty×1tr + phí (tái lập
+          // fillForeignOrder); SELL proceeds ≈ qty×1tr×(idx ngày bán / idx ngày
+          // mua đầu tiên của signal) — quy attribution theo signal (ghi drivers).
+          if (t.side === "BUY") {
+            buyQty += t.quantity;
+            buyCost += BigInt(t.quantity * NOTIONAL_UNIT_VND) + t.fee;
+          } else {
+            const sellIso = vnDateIso(t.executedAt);
+            const idxSell = await notionalIdxAtDate(sig.instrument.symbol, sellIso).catch(() => null);
+            const ratio = idxSell != null && idxBasis != null && idxBasis > 0 ? idxSell / idxBasis : 1;
+            const proceeds = BigInt(Math.round(t.quantity * NOTIONAL_UNIT_VND * ratio));
+            sellQty += t.quantity;
+            sellProceeds += proceeds - t.fee - t.tax;
+          }
         }
       }
       if (orders.length === 0 || trades.length === 0) {
@@ -161,19 +255,34 @@ export async function evaluateDecisions(): Promise<DecisionEvalSummary> {
         openQty = Math.max(0, buyQty - sellQty);
         if (sig.direction === "SELL") {
           // SELL thực thi: so VWAP bán với giá quyết định (chi phí vốn thuộc
-          // tín hiệu MUA trước — không quy gộp giả tạo, ghi rõ trong drivers)
+          // tín hiệu MUA trước — không quy gộp giả tạo, ghi rõ trong drivers).
+          // #107 E-EXEC: VWAP theo đơn vị GIÁ NATIVE (VND với tài sản VN ·
+          // cents/rate với tài sản giá phi-VN · LỢI SUẤT với trái phiếu — bond
+          // quy giá trị thu được = bondRet(y₀→y_vwap), cùng chiều "bán cao = tốt").
           executionKind = "EXECUTED_CLOSED";
           if (sellQty > 0 && entry != null && entry > 0) {
-            const vwap = Number(sellVwapNotional) / sellQty;
-            markPnlPct = ((vwap - entry) / entry) * 100;
+            const vwapNative = sellVwapNative / sellQty;
+            const raw = isBond ? bondRet(entry, vwapNative, barsAfter.length) : (vwapNative - entry) / entry;
+            markPnlPct = raw * 100;
           }
           cashPnlVND = null; // trung thực: không gán P&L tiền cho quyết định bán
         } else {
           executionKind = openQty > 0 ? "EXECUTED_OPEN" : "EXECUTED_CLOSED";
           // P&L quy kết = tiền bán thu về + giá trị phần mở (đánh giá mark)
-          // − vốn mua (gồm phí) — đối xứng dòng tiền netRealised k-sandbox
+          // − vốn mua (gồm phí) — đối xứng dòng tiền netRealised k-sandbox.
+          // #107 E-EXEC: giá trị phần mở theo luật thị trường (quy VND).
           const openValue =
-            openQty > 0 && mark != null ? BigInt(Math.round(openQty * mark)) : BigInt(0);
+            openQty > 0 && mark != null
+              ? foreignKind === "NOTIONAL"
+                ? BigInt(
+                    Math.round(
+                      openQty * NOTIONAL_UNIT_VND * (idxNow != null && idxBasis != null && idxBasis > 0 ? idxNow / idxBasis : 1)
+                    )
+                  )
+                : foreignKind === "PRICE"
+                  ? BigInt(Math.round(openQty * (unitMarkNow ?? 0)))
+                  : BigInt(Math.round(openQty * mark))
+              : BigInt(0);
           cashPnlVND = sellProceeds + openValue - buyCost;
         }
       }
@@ -204,6 +313,39 @@ export async function evaluateDecisions(): Promise<DecisionEvalSummary> {
           sig.direction === "SELL" && executionKind?.startsWith("EXECUTED")
             ? "SELL: đánh giá VWAP bán vs giá quyết định — chi phí vốn thuộc tín hiệu MUA trước đó"
             : null,
+        // ── #107 E-EXEC: ngữ cảnh thị trường + tách lãi giá / lãi tỷ giá ──
+        ...(foreignKind ? { market: sig.instrument.market, assetKind: foreignKind } : {}),
+        ...(foreignKind === "PRICE" && openQty > 0 && unitMarkNow != null && fxNow != null && nvQtyUSD > 0
+          ? (() => {
+              // fxFillTrungBình = vốn mua (trừ phí ước) / Σ(qty×giáUSD) — tỷ giá
+              // bình quân tại các lần mua; tách: giá giữ fx cũ → lãi giá, phần
+              // tăng do fx → lãi tỷ giá (tổng = value_now − cost mở xấp xỉ).
+              const openCost = (Number(buyCost) * openQty) / Math.max(1, buyQty);
+              const unitUSDNow = foreignPriceUnitValueVND(instLite, mark ?? 0, 1);
+              const fxAvg = Number(buyCost) / nvQtyUSD; // xấp xỉ tỷ giá bình quân các lần mua
+              const fxApplied = sig.instrument.symbol === "VND=X" ? 1 : fxNow;
+              const fxAvgSafe = sig.instrument.symbol === "VND=X" ? 1 : fxAvg > 0 ? fxAvg : fxApplied;
+              const valueNow = openQty * unitMarkNow;
+              const valueAtFxAvg = unitUSDNow != null ? openQty * unitUSDNow * fxAvgSafe : null;
+              return {
+                fxRateNow: Math.round(fxApplied),
+                fxRateAvgFill: Math.round(fxAvgSafe),
+                pricePnlVND: valueAtFxAvg != null ? Math.round(valueAtFxAvg - openCost) : null,
+                fxPnlVND:
+                  valueAtFxAvg != null && sig.instrument.symbol !== "VND=X"
+                    ? Math.round(valueNow - valueAtFxAvg)
+                    : 0,
+              };
+            })()
+          : {}),
+        ...(foreignKind === "NOTIONAL"
+          ? {
+              notionalUnitVND: NOTIONAL_UNIT_VND,
+              idxNow: idxNow != null ? Number(idxNow.toFixed(4)) : null,
+              idxBasis: idxBasis != null ? Number(idxBasis.toFixed(4)) : null,
+              note2: "danh nghĩa: SELL proceeds ≈ idx ngày bán/idx ngày mua đầu của signal",
+            }
+          : {}),
       };
 
       await db.decisionEvaluation.upsert({

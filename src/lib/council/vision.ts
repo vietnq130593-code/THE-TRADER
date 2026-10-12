@@ -1,21 +1,29 @@
 /**
- * src/lib/council/vision.ts — KHỐI TẦM NHÌN HỘI ĐỒNG C-VISION (#106
- * COUNCIL_STEWARDSHIP_BLUEPRINT §4 — phê duyệt riêng của trader cho thay đổi
- * quarantine P0 §5.1 #87: "Hội đồng không thấy tài khoản thì làm sao đánh giá
- * toàn cục các quyết định mua bán lợi ích hay tổn thất").
+ * src/lib/council/vision.ts — KHỐI TẦM NHÌN HỘI ĐỒNG C-VISION
+ * (#106 COUNCIL_STEWARDSHIP_BLUEPRINT §4 · hiệu chỉnh v2.0 #107 theo làm rõ
+ * của trader: "hội đồng ngoài nắm được thông tin các thị trường còn nắm thông
+ * tin số tiền hiện có, các khoản đầu tư và giá trị các khoản đầu tư hiện tại
+ * đang biến động theo thị trường như thế nào").
  *
- * buildCouncilVisionBlock() — ≤900 ký tự (~360 token, cùng ngân sách XREL
- * #103), 4 phần: (1) tài khoản sandbox K1 · (2) vị thế đang nắm · (3) kết quả
- * 7 quyết định gần nhất từ D-LEDGER · (4) thí nghiệm phân bổ đang chạy + bài
- * học thí nghiệm đóng gần nhất. Tiêm 3 đường (parity XREL): wave E Chủ tịch
- * (route.ts) · single-run portfolio-strategist · chat strategist — fail-soft
- * .catch(() => null), cache in-process 60s.
+ * v2.0 thay đổi so với #106: BỎ mục "thí nghiệm phân bổ đang chạy + bài học"
+ * (E-ALLOC đã tháo — khoản tiền thử nghiệm sandbox CHÍNH LÀ thí nghiệm);
+ * vị thế giờ hiển thị MỌI THỊ TRƯỜNG (#107 E-EXEC: cp qtế quy VND qua USD/VND
+ * — giữ tài sản USD đồng thời cược USD/VND; trái phiếu/hàng hoá theo danh
+ * nghĩa idx); thêm mục (4) THỊ TRƯỜNG ĐA TÀI SẢN 5 nhóm.
+ *
+ * 4 phần: (1) tài khoản sandbox K1 · (2) vị thế đang nắm mọi thị trường ·
+ * (3) kết quả 7 quyết định gần nhất từ D-LEDGER · (4) thị trường đa tài sản.
+ * Tiêm 3 đường (parity XREL): wave E Chủ tịch (route.ts) · single-run
+ * portfolio-strategist · chat strategist — fail-soft .catch(() => null),
+ * cache in-process 60s.
  *
  * CHỈ ĐỌC: tầm nhìn ≠ quyền thực thi — agents vẫn KHÔNG tự đặt lệnh sandbox
  * ngoài cổng K1 auto-convert B9 hiện hành.
  */
 
 import { db } from "@/lib/db";
+import { basketStatsCached } from "@/lib/council/baskets";
+import { markPositionVND, usdVndRate, execUnitLabel, isForeignMarket } from "@/lib/exec/market-rules";
 
 const CACHE_TTL_MS = 60_000;
 let cache: { at: number; block: string | null } = { at: 0, block: null };
@@ -33,16 +41,30 @@ function fmtPct(n: number | null | undefined): string {
   return `${n > 0 ? "+" : n < 0 ? "−" : ""}${s}%`;
 }
 
-/** Vị thế sandbox + close mới nhất để tính lãi/lỗ chưa thực hiện. */
+/** Vị thế sandbox mọi thị trường + định giá theo luật thị trường (quy VND). */
 async function sandboxPositions(): Promise<
-  Array<{ symbol: string; qty: number; avgPrice: number; last: number | null; upnl: number | null }>
+  Array<{
+    symbol: string;
+    market: string;
+    qty: number;
+    qtyLabel: string;
+    avgPrice: number;
+    last: number | null;
+    valueVND: number;
+    upnl: number | null;
+    fxRate: number | null;
+  }>
 > {
   const positions = await db.position.findMany({
     where: {
       status: "OPEN",
       brokerAccount: { accountType: "sandbox", deletedAt: null },
     },
-    include: { instrument: { select: { id: true, symbol: true } } },
+    include: {
+      instrument: {
+        select: { id: true, symbol: true, market: true, type: true, currency: true },
+      },
+    },
   });
   const out = [];
   for (const p of positions) {
@@ -52,13 +74,24 @@ async function sandboxPositions(): Promise<
       select: { close: true },
     });
     const last = lastBar?.close ?? null;
-    const upnl = last != null ? (last - p.avgPrice) * p.quantity : null;
+    const mark = await markPositionVND({
+      quantity: p.quantity,
+      avgPrice: p.avgPrice,
+      avgCostVND: p.avgCostVND,
+      openIdxUnits: p.openIdxUnits,
+      instrument: p.instrument,
+      lastNative: last ?? p.avgPrice,
+    }).catch(() => null);
     out.push({
       symbol: p.instrument.symbol,
+      market: p.instrument.market,
       qty: p.quantity,
+      qtyLabel: execUnitLabel(p.instrument),
       avgPrice: p.avgPrice,
       last,
-      upnl,
+      valueVND: mark?.valueVND ?? 0,
+      upnl: mark?.unrealisedVND ?? null,
+      fxRate: mark?.fxRate ?? null,
     });
   }
   return out;
@@ -66,33 +99,24 @@ async function sandboxPositions(): Promise<
 
 async function buildVisionBlockInner(): Promise<string | null> {
   // ── (1) Tài khoản sandbox K1 (thế giới Hội đồng đánh giá toàn cục) ──
-  const [account, kSetting, positions, decisions, runningExps, lastDone] =
-    await Promise.all([
-      db.brokerAccount.findFirst({
-        where: { accountType: "sandbox", deletedAt: null },
-        select: { cashBalance: true, equity: true },
-      }),
-      db.appSetting.findUnique({
-        where: { key: "k-sandbox" },
-        select: { value: true },
-      }),
-      sandboxPositions(),
-      db.decisionEvaluation.findMany({
-        orderBy: { decidedAt: "desc" },
-        take: 7,
-        include: { signal: { include: { instrument: { select: { symbol: true } } } } },
-      }),
-      db.allocationExperiment.findMany({
-        where: { status: "RUNNING" },
-        orderBy: { startedAt: "desc" },
-        take: 2,
-        include: { snapshots: { orderBy: { date: "desc" }, take: 1 } },
-      }),
-      db.allocationExperiment.findFirst({
-        where: { status: "DONE" },
-        orderBy: { endedAt: "desc" },
-      }),
-    ]);
+  const [account, kSetting, positions, decisions, basketRows, fx] = await Promise.all([
+    db.brokerAccount.findFirst({
+      where: { accountType: "sandbox", deletedAt: null },
+      select: { cashBalance: true, equity: true },
+    }),
+    db.appSetting.findUnique({
+      where: { key: "k-sandbox" },
+      select: { value: true },
+    }),
+    sandboxPositions(),
+    db.decisionEvaluation.findMany({
+      orderBy: { decidedAt: "desc" },
+      take: 7,
+      include: { signal: { include: { instrument: { select: { symbol: true } } } } },
+    }),
+    basketStatsCached().catch(() => [] as Awaited<ReturnType<typeof basketStatsCached>>),
+    usdVndRate().catch(() => null),
+  ]);
 
   const initial = (() => {
     try {
@@ -119,15 +143,41 @@ async function buildVisionBlockInner(): Promise<string | null> {
     lines.push("Chưa có tài khoản sandbox — chưa kích hoạt cơ chế thử nghiệm K1.");
   }
 
-  // ── (2) Vị thế đang nắm ──
+  // ── (2) Vị thế đang nắm — MỌI THỊ TRƯỜNG, giá trị quy VND ──
   if (positions.length > 0) {
-    const posLines = positions.map(
-      (p) =>
-        `${p.symbol} ${p.qty}cp @${p.avgPrice.toLocaleString("vi-VN")}` +
-        (p.upnl != null
-          ? ` → L/L ${p.upnl > 0 ? "+" : p.upnl < 0 ? "−" : ""}${Math.abs(Math.round(p.upnl)).toLocaleString("vi-VN")}₫`
-          : "")
-    );
+    const vn = positions.filter((p) => !isForeignMarket(p.market));
+    const foreign = positions.filter((p) => isForeignMarket(p.market));
+    const posLines: string[] = [];
+    if (vn.length > 0) {
+      posLines.push(
+        ...vn.map(
+          (p) =>
+            `${p.symbol} ${p.qty}cp @${p.avgPrice.toLocaleString("vi-VN")}` +
+            (p.upnl != null
+              ? ` → L/L ${p.upnl > 0 ? "+" : p.upnl < 0 ? "−" : ""}${Math.abs(Math.round(p.upnl)).toLocaleString("vi-VN")}₫`
+              : "")
+        )
+      );
+    }
+    if (foreign.length > 0) {
+      const fxNote = fx != null ? ` (quy đổi ${Math.round(fx).toLocaleString("vi-VN")}₫/USD)` : "";
+      posLines.push(
+        ...foreign.map((p) => {
+          const isNotional = p.market === "BOND" || p.market === "COMMODITY";
+          const qtyPart = isNotional
+            ? `${p.qty}${p.qtyLabel.includes("danh nghĩa") ? " đv danh nghĩa" : " đv"}`
+            : `${p.qty} ${p.qtyLabel}`;
+          const pricePart = isNotional ? "" : ` @${p.avgPrice.toLocaleString("vi-VN")}`;
+          return (
+            `${p.symbol} ${qtyPart}${pricePart} → ${fmtVndShort(p.valueVND)}` +
+            (p.upnl != null
+              ? ` L/L ${p.upnl > 0 ? "+" : p.upnl < 0 ? "−" : ""}${Math.abs(Math.round(p.upnl)).toLocaleString("vi-VN")}₫`
+              : "") +
+            fxNote
+          );
+        })
+      );
+    }
     lines.push(`VỊ THẾ: ${posLines.join(" · ")}`);
   } else {
     lines.push("VỊ THẾ: không nắm giữ mã nào.");
@@ -148,30 +198,12 @@ async function buildVisionBlockInner(): Promise<string | null> {
     lines.push("KẾT QUẢ QUYẾT ĐỊNH: sổ đánh giá chưa có hàng — chưa từng đánh giá.");
   }
 
-  // ── (4) Thí nghiệm phân bổ đang chạy + bài học gần nhất ──
-  if (runningExps.length > 0) {
-    const eLines = runningExps.map((e) => {
-      const last = e.snapshots[0];
-      const w = (() => {
-        try {
-          const arr = JSON.parse(e.weightsJson) as Array<{ basket: string; weight: number }>;
-          return arr
-            .filter((x) => x.weight > 0)
-            .map((x) => `${x.basket.replace("_", " ")} ${x.weight}%`)
-            .join("/");
-        } catch {
-          return "?";
-        }
-      })();
-      const ret = last ? fmtPct(last.returnPct) : "0%";
-      return `"${e.name}" [${w}] tới nay ${ret}`;
-    });
-    lines.push(`THÍ NGHIỆM PHÂN BỔ ĐANG CHẠY: ${eLines.join(" · ")}`);
-  }
-  if (lastDone) {
-    const lesson = (lastDone.lesson ?? "").slice(0, 160);
+  // ── (4) THỊ TRƯỜNG ĐA TÀI SẢN (5 nhóm — v2.0 thay mục thí nghiệm) ──
+  if (basketRows.length > 0) {
+    const parts = basketRows.map((b) => `${b.short} ${fmtPct(b.ret5d)}/${fmtPct(b.ret30d)}`);
+    const fxPart = fx != null ? ` · USD/VND ${Math.round(fx).toLocaleString("vi-VN")}` : "";
     lines.push(
-      `BÀI HỌC THÍ NGHIỆM ĐÓNG GẦN NHẤT ("${lastDone.name}" ${fmtPct(lastDone.returnPct)}): ${lesson || "chưa có bài học"}`
+      `THỊ TRƯỜNG ĐA TÀI SẢN (lợi suất 5 phiên/30 phiên): ${parts.join(" · ")}${fxPart} — giữ tài sản USD đồng thời chịu biến động tỷ giá USD/VND.`
     );
   }
 
