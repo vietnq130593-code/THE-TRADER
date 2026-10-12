@@ -8,8 +8,8 @@
  * sandbox CHÍNH LÀ thí nghiệm — vẽ rắn thêm chân):
  *  (1) TÀI KHOẢN HỘI ĐỒNG — tầm nhìn toàn cục (C-VISION): equity · cash ·
  *      P&L từ lúc kích hoạt · đường cong CashSnapshot k1-daily · VỊ THẾ NHÓM
- *      THEO THỊ TRƯỜNG (CP VN · CP quốc tế · trái phiếu · forex · hàng hoá —
- *      tài sản USD kèm chip quy đổi USD→VND, #107 E-EXEC).
+ *      THEO THỊ TRƯỜNG (#108 v2.2: đầu tư chỉ tại thị trường VN — nhóm
+ *      phi-VN chỉ hiển thị nếu còn vị thế lịch sử, hiện 0).
  *  (2) SỔ ĐÁNH GIÁ QUYẾT ĐỊNH (D-LEDGER): mỗi tín hiệu 1 hàng với phán quyết
  *      WIN/LOSS/NEUTRAL ±0,5% + P&L tiền quy kết — "đánh giá toàn cục các
  *      quyết định mua bán lợi ích hay tổn thất".
@@ -55,7 +55,8 @@ import type { DecisionLedgerRowView } from "@/lib/types";
 
 /* ─────────────────── Tiện ích dùng chung ─────────────────── */
 
-/** Nhóm hiển thị vị thế theo thị trường (#107 E-EXEC M4.6 UIUX v1.1). */
+/** Nhóm hiển thị vị thế theo thị trường (#107 E-EXEC M4.6 · #108 v2.2:
+ *  đầu tư chỉ tại VN — nhóm phi-VN chỉ hiện nếu có vị thế lịch sử). */
 const MARKET_GROUP: Record<string, string> = {
   HOSE: "CP Việt Nam",
   HNX: "CP Việt Nam",
@@ -343,9 +344,10 @@ function AccountVisionCard({
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Không nắm giữ vị thế nào — tiền mặt 100%. Hội đồng có thể đầu tư vào
-            CP VN · CP quốc tế · trái phiếu · forex · hàng hoá từ khoản tiền thử
-            nghiệm (khối VŨ TRỤ GIAO DỊCH trong prompt Chủ tịch).
+            Không nắm giữ vị thế nào — tiền mặt 100%. Hội đồng có thể đầu tư cổ
+            phiếu/ETF Việt Nam từ khoản tiền thử nghiệm; thị trường quốc tế &
+            tỷ giá chỉ theo dõi tham chiếu (khối THỊ TRƯỜNG QUỐC TẾ trong prompt
+            Chủ tịch — chính sách đầu tư chỉ tại thị trường VN).
           </p>
         )}
       </CardContent>
@@ -566,7 +568,7 @@ export function CouncilWorkspace() {
       className="flex flex-col gap-6"
     >
       <h2 className="sr-only">
-        Hội đồng — tài khoản toàn cục đa thị trường · sổ đánh giá quyết định
+        Hội đồng — tài khoản toàn cục · đầu tư chỉ tại thị trường VN (quốc tế tham chiếu) · sổ đánh giá quyết định
       </h2>
       <AccountVisionCard
         account={overviewQuery.data?.account}

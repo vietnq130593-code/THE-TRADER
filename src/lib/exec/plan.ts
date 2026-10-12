@@ -81,9 +81,9 @@ export interface ExecutionPlan {
  *  - adtv-unavailable:   không đo được ADTV-20 (lỗi query hoặc chưa đủ 20 bar —
  *                        F-73A-07) → fail-soft §6.6 đi đường an toàn;
  *  - insufficient-lots:  khối lượng không đủ ≥ sliceCount lot cho mỗi lát.
- *  - foreign-market:     #107 E-EXEC — instrument phi-VN luôn SINGLE (TWAP là
- *                        luật HOSE: ADTV/lot/lát; ngoài VN khớp tại close). */
-export type SinglePlanReason = "under-threshold" | "adtv-unavailable" | "insufficient-lots" | "foreign-market";
+ *  (#108 v2.2: bỏ foreign-market — sandbox chỉ còn CP VN, mọi lệnh xét TWAP
+ *  luật HOSE; giá trị cũ trong plan lịch sử vẫn đọc được vì chỉ là chuỗi JSON.) */
+export type SinglePlanReason = "under-threshold" | "adtv-unavailable" | "insufficient-lots";
 
 /** Sinh plan JSON cho lệnh (P0 luôn 1 lát SINGLE — đúng hành vi engine hiện tại).
  *  F-73A-13: `singleReason` nói đúng lý do không tách (mặc định under-threshold). */

@@ -5,6 +5,8 @@
 > Nguồn: bảng chấm điểm 9 view phiên #105 (VLM glm-5v-turbo + rà code) — điểm tổng **~6.0/10 "functional but fatiguing"**. Phiên #105 đã triển khai GIAI ĐOẠN 0 (hệ màu emerald-teal + header 3 vùng + bộ chọn khoảng thời gian); tài liệu này là kế hoạch **các giai đoạn kế tiếp** cho từng module, từng dialog, từng cách hiển thị — kèm chỉ tiêu nghiệm thu đo được.
 >
 > **Hiệu chỉnh v1.1 (#107)** theo làm rõ của trader: bỏ toàn bộ UI "thí nghiệm phân bổ" (E-ALLOC #106 — vẽ rắn thêm chân; khoản tiền thử nghiệm sandbox LÀ thí nghiệm). Module Hội đồng còn và chỉ còn: KPI tài khoản + đường cong equity + **vị thế nhóm theo thị trường** + sổ phán quyết. M4.4/M4.6/M4.8/M4.9 đã cập nhật; các mục khác bảo toàn.
+>
+> **Hiệu chỉnh v1.2 (#108 — chính sách VN-only, triển khai UI/UX còn hoãn theo chỉ thị trader):** vũ trụ ĐẦU TƯ chỉ còn CP/ETF Việt Nam (COUNCIL_STEWARDSHIP_BLUEPRINT v2.2) — mọi thiết kế UI liên quan vị thế/kênh đầu tư phải phản ánh chính sách này: nhóm thị trường phi-VN chỉ hiển thị khi có vị thế lịch sử (hiện 0); các khối "đa thị trường" trong UI thị trường là THAM CHIẾU (theo dõi tỷ giá/hàng hoá/cảm xúc qtế ảnh hưởng VN), không phải đối tượng đầu tư. M4.6 (bảng vị thế nhóm) đã được #107 triển khai và #108 hiệu chỉnh ngữ nghĩa; khi triển khai các mục còn lại của file này, rà lại từng chỗ nhắc "đa thị trường/đầu tư quốc tế" cho đúng v2.2.
 
 ---
 

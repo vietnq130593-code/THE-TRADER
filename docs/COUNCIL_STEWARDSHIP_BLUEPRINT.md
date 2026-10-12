@@ -1,11 +1,17 @@
-# COUNCIL_STEWARDSHIP_BLUEPRINT v2.0 — Hội đồng thấy tài khoản · đánh giá quyết định · vũ trụ đa thị trường · đầu tư đa thị trường TỪ KHOẢN TIỀN THỬ NGHIỆM
+# COUNCIL_STEWARDSHIP_BLUEPRINT v2.2 — Hội đồng thấy tài khoản · đánh giá quyết định · theo dõi đa thị trường · ĐẦU TƯ CHỈ TẠI THỊ TRƯỜNG VIỆT NAM
 
 > Phiên #106 dựng v1.0 (4 tầng C-VISION · D-LEDGER · X-MARKETS · E-ALLOC).
 > **v2.0 hiệu chỉnh phiên #107** theo làm rõ của trader:
 >
 > *"Rổ ở đây ý là quyết định đầu tư vào đâu — cổ phiếu, trái phiếu… của công ty nào, ngân hàng nào… — không nhất thiết là 5 nguồn đầu tư cố định nào; có thể chúng ta hiểu nhầm ở đây. Ngoài ra chế độ thử nghiệm đã là chơi kiểu thí nghiệm rồi, cần gì Thí nghiệm phân bố đa rổ — khác gì vẽ rắn thêm chân. Tôi đã set up một số tiền để làm Thử nghiệm rồi thì các agent cứ thế mà sử dụng: triển khai nghiên cứu thị trường, đầu tư từ khoản tiền đấy. Từ đấy là đủ để học rồi còn gì. Hội đồng ngoài nắm được thông tin các thị trường còn nắm thông tin số tiền hiện có, các khoản đầu tư và giá trị các khoản đầu tư hiện tại đang biến động theo thị trường như thế nào — là điều chắc chắn cần biết. Vì phải biết được thông tin thị trường thế nào và mình có gì mới đánh giá được các quyết định từng đưa ra đến hiện tại kết quả là gì, dự đoán được các quyết định hiện tại thì tương lai sẽ thế nào. Qua đó chính là mục tiêu của việc học để hiểu về thị trường và đầu tư đúng."*
 >
-> **Thay đổi lớn v1 → v2:** BỎ toàn bộ tầng E-ALLOC (thí nghiệm phân bổ đa rổ — vốn giấy riêng 100tr₫, hội nghị CN 05:50 đề xuất tỷ trọng 5 rổ cố định, mark 16:35). Khoản tiền thử nghiệm sandbox K1 **CHÍNH LÀ thí nghiệm duy nhất**: agents nghiên cứu thị trường và đầu tư TRỰC TIẾP từ khoản tiền đó vào bất kỳ tài sản nào trong vũ trụ (cổ phiếu VN/quốc tế của công ty cụ thể, trái phiếu, forex, hàng hoá). "Rổ" chỉ còn là **lớp thống kê thị trường** để nhìn nhanh bức tranh 5 nhóm tài sản — KHÔNG phải đối tượng đầu tư, KHÔNG có tỷ trọng cố định.
+> **v2.2 hiệu chỉnh phiên #108** theo chỉ thị mới của trader (thu hẹp vũ trụ ĐẦU TƯ):
+>
+> *"Trừ thị trường tiền tệ thì các thị trường đầu tư chỉ ở trong Việt Nam thôi, nước ngoài tôi biết thế quái nào được. Vậy nên các agent có đầu tư tài chính thì cũng tại thị trường Việt Nam thôi. Tất nhiên ngoại hối, tiền tệ nước ngoài cũng cần theo dõi vì bản chất nó cũng có lúc ảnh hưởng tới thị trường."*
+>
+> **Thay đổi lớn v2.1 → v2.2:** vũ trụ GIAO DỊCH (đặt lệnh sandbox) chỉ còn **CP/ETF Việt Nam** (HOSE/HNX/UPCOM — luật lot-100 như hiện hành). Toàn bộ tài sản quốc tế (cp Mỹ/HK · trái phiếu Mỹ · hàng hoá) và **forex (kể cả USD/VND, EURUSD, AUDUSD) hạ cấp xuống THAM CHIẾU — theo dõi để hiểu ảnh hưởng quốc tế (đặc biệt kênh tỷ giá) đến thị trường VN, KHÔNG đầu tư**. Khối prompt đổi tên VŨ TRỤ GIAO DỊCH → THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU); cổng thực thi chặn mọi tín hiệu phi-VN với thông điệp chính sách rõ ràng.
+>
+> **Thay đổi lớn v1 → v2:** BỎ toàn bộ tầng E-ALLOC (thí nghiệm phân bổ đa rổ — vốn giấy riêng 100tr₫, hội nghị CN 05:50 đề xuất tỷ trọng 5 rổ cố định, mark 16:35). Khoản tiền thử nghiệm sandbox K1 **CHÍNH LÀ thí nghiệm duy nhất**: agents nghiên cứu thị trường và đầu tư TRỰC TIẾP từ khoản tiền đó vào cổ phiếu/ETF VN (v2.2) — "rổ" chỉ còn là **lớp thống kê thị trường** để nhìn nhanh bức tranh 5 nhóm tài sản (trong đó 4 nhóm quốc tế thuần túy THAM CHIẾU).
 >
 > Nguyên tắc xuyên suốt (bảo toàn v1): **hội đồng TỰ nghiên cứu** — hệ thống chỉ cung cấp (1) tầm nhìn tài khoản & danh mục, (2) sổ đánh giá quyết định, (3) vũ trụ dữ liệu thị trường, (4) sân thực thi từ khoản tiền thử nghiệm. Hệ thống KHÔNG quy định đầu tư vào đâu hay bao nhiêu — mọi quyết định do Hội đồng tự đưa ra từ dữ liệu và hậu quả chính nó gánh.
 
@@ -51,18 +57,18 @@
 ┌─ C-VISION ── Hội đồng NHÌN THẤY (tiêm 3 đường prompt) ──────────────┐
 │ 1. TÀI KHOẢN THỬ NGHIỆM: equity · cash · P&L từ kích hoạt · %/ngày  │
 │ 2. VỊ THẾ ĐANG NẮM: mã × lượng × giá vốn × giá hiện tại × lãi/lỗ    │
-│    (mọi thị trường — kèm quy đổi USD→VND + tách lãi giá / lãi tỷ   │
-│    giá cho tài sản phi-VN)                                          │
+│    (CP/ETF VN; tài sản phi-VN lịch sử nếu còn → hiển thị trung     │
+│    thực kèm quy đổi USD→VND)                                        │
 │ 3. KẾT QUẢ 7 QUYẾT ĐỊNH GẦN NHẤT (D-LEDGER): hướng → WIN/LOSS ±pct  │
 │ 4. THỊ TRƯỜNG ĐA TÀI SẢN: 5 nhóm ret5/ret30 + USD/VND               │
 └──────────────┬──────────────────────────────────────────────────────┘
-               ▼  QUYẾT ĐỊNH: MUA/BÁN/GIỮ mã CỤ THỂ (công ty/issuer cụ thể,
-                  bất kỳ thị trường nào trong vũ trụ giao dịch được)
+               ▼  QUYẾT ĐỊNH: MUA/BÁN/GIỮ mã CỤ THỂ — CHỈ CP/ETF VIỆT
+                  NAM (HOSE/HNX/UPCOM); thị trường quốc tế & forex =
+                  THAM CHIẾU bối cảnh — KHÔNG đầu tư (v2.2)
 ┌─ E-EXEC ──── thực thi từ KHOẢN TIỀN THỬ NGHIỆM (§5 — thay E-ALLOC) ─┐
-│ Signal → cổng B9 đồng thuận (mọi thị trường, không nới lỏng) →      │
-│ lệnh sandbox theo luật TỪNG thị trường (lot · phiên · băng · phí ·  │
-│ đơn vị tiền — bảng §5.2) · kế toán 1 đồng VND, quy đổi USD/VND khi  │
-│ định giá · matching theo cửa sổ phiên của thị trường đó             │
+│ Signal → cổng B9 đồng thuận (luật như cũ) → lệnh sandbox theo luật  │
+│ VN (lot 100 · phiên 09:15–15:00 · băng ±7% · phí 0,15%) · tín hiệu │
+│ phi-VN bị chặn tại cổng với thông điệp chính sách rõ ràng           │
 └──────────────┬──────────────────────────────────────────────────────┘
                ▼
 ┌─ D-LEDGER ── sổ đánh giá quyết định (job 16:45 t2–t6 — GIỮ) ────────┐
@@ -136,67 +142,59 @@ Mỗi quyết định từng đưa ra → 1 hàng `DecisionEvaluation`, cập nh
 `src/lib/council/vision.ts` — `buildCouncilVisionBlock()` ≤900 ký tự (~360 token, ngân sách XREL #103), tiêm 3 đường parity (wave E Chủ tịch route.ts sau `portfolioWeightsBlock` · single-run strategist · chat strategist), fail-soft, cache 60s. Chỉ ĐỌC — tầm nhìn ≠ quyền thực thi (lệnh vẫn qua cổng K1/B9).
 
 1. `TÀI KHOẢN HỘI ĐỒNG (sandbox K1)`: equity · cash · P&L từ lúc kích hoạt (₫ + %) · biến động ngày gần nhất — *"số tiền hiện có"*.
-2. `VỊ THẾ ĐANG NẮM`: mã × lượng × giá vốn × giá hiện tại × lãi/lỗ — **v2: mọi thị trường**, tài sản USD kèm quy đổi VND + tách lãi giá/lãi tỷ giá — *"các khoản đầu tư và giá trị các khoản đầu tư hiện tại đang biến động theo thị trường"*.
+2. `VỊ THẾ ĐANG NẮM`: mã × lượng × giá vốn × giá hiện tại × lãi/lỗ — **v2.2: CP/ETF VN** (tài sản phi-VN lịch sử nếu còn → hiển thị trung thực kèm quy đổi VND + tách lãi giá/lãi tỷ giá) — *"các khoản đầu tư và giá trị các khoản đầu tư hiện tại đang biến động theo thị trường"*.
 3. `KẾT QUẢ 7 QUYẾT ĐỊNH GẦN NHẤT` (từ D-LEDGER): hướng mã → WIN/LOSS ±pct — *"đánh giá được các quyết định từng đưa ra đến hiện tại kết quả là gì"*.
-4. **v2 ĐỔI NỘI DUNG** (v1 là "thí nghiệm phân bổ đang chạy" — BỎ): `THỊ TRƯỜNG ĐA TÀI SẢN`: 1 dòng 5 nhóm — CP VN ±x% · CP quốc tế ±x% · trái phiếu ±x% · forex (USD/VND ±x%) · hàng hoá ±x% (ret5/ret30 từ baskets.ts) — *"ngoài nắm được thông tin các thị trường"*.
+4. **v2 ĐỔI NỘI DUNG** (v1 là "thí nghiệm phân bổ đang chạy" — BỎ): `THỊ TRƯỜNG ĐA TÀI SẢN`: 1 dòng 5 nhóm — CP VN ±x% · CP quốc tế ±x% · trái phiếu ±x% · forex (USD/VND ±x%) · hàng hoá ±x% (ret5/ret30 từ baskets.ts) — *v2.2: 4 nhóm quốc tế THAM CHIẾU — "ngoại hối, tiền tệ nước ngoài cũng cần theo dõi vì bản chất nó cũng có lúc ảnh hưởng tới thị trường"* — *"ngoài nắm được thông tin các thị trường"*.
 
 Cộng khối thị trường VN sẵn có trong prompt (bảng HOSE-STOCK + XREL + flows) → đủ bộ đôi trader yêu cầu: **thị trường thế nào + mình có gì**.
 
 ---
 
-## §5. E-EXEC — đầu tư đa thị trường TỪ KHOẢN TIỀN THỬ NGHIỆM (MỚI thay E-ALLOC)
+## §5. E-EXEC — đầu tư TỪ KHOẢN TIỀN THỬ NGHIỆM, CHỈ TẠI THỊ TRƯỜNG VIỆT NAM (v2.2)
 
-> *Nếu tôi đã set up một số tiền để làm Thử nghiệm rồi thì các agent cứ thế mà sử dụng triển khai nghiên cứu thị trường, đầu tư từ khoản tiền đấy.*
+> *Nếu tôi đã set up một số tiền để làm Thử nghiệm rồi thì các agent cứ thế mà sử dụng triển khai nghiên cứu thị trường, đầu tư từ khoản tiền đấy.* (#107)
+> *Trừ thị trường tiền tệ thì các thị trường đầu tư chỉ ở trong Việt Nam thôi, nước ngoài tôi biết thế quái nào được. Vậy nên các agent có đầu tư tài chính thì cũng tại thị trường Việt Nam thôi. Tất nhiên ngoại hối, tiền tệ nước ngoài cũng cần theo dõi vì bản chất nó cũng có lúc ảnh hưởng tới thị trường.* (#108 — v2.2)
 
-Không vốn giấy riêng, không danh mục song song, không tỷ trọng ai đặt. Một tài khoản sandbox duy nhất (100tr₫ trader đã cấp #87), agents tự quyết định mua/bán mã cụ thể — **cổ phiếu của công ty nào, trái phiếu tenor nào, cặp tiền nào, hợp đồng hàng hoá nào** — theo luật vi mô của thị trường đó.
+Không vốn giấy riêng, không danh mục song song, không tỷ trọng ai đặt. Một tài khoản sandbox duy nhất (100tr₫ trader đã cấp #87), agents tự quyết định mua/bán **cổ phiếu/ETF Việt Nam cụ thể** (công ty nào, sàn nào) theo luật vi mô VN hiện hành — *giữ nguyên như trước #107: lot 100 · phiên 09:15–11:30/13:00–15:00 T2–T6 · băng trần/sàn ±7%/±10% · phí 0,15% · tiền VND · sizing %NAV của k-sandbox.*
 
-### §5.1 Vũ trụ GIAO DỊCH được vs THAM CHIẾU
+### §5.1 Vũ trụ GIAO DỊCH vs THAM CHIẾU (v2.2 — bảng trung tâm)
 
-| Nhóm | Đặt lệnh được (sandbox) | Chỉ tham chiếu (không lệnh) |
+| Nhóm | Đặt lệnh được (sandbox) | THAM CHIẾU — theo dõi, KHÔNG đầu tư (v2.2) |
 |---|---|---|
-| CP VN | HOSE/HNX/UPCOM stock + ETF (như hiện hành) | VNINDEX · VN30 |
-| CP quốc tế | AAPL MSFT NVDA GOOGL AMZN META TSLA JPM · 0700.HK 0005.HK 3888.HK | ^GSPC ^IXIC ^HSI |
-| Trái phiếu | US5Y · US10Y · US30Y (mô hình duration §7) | — |
-| Forex | EURUSD=X · AUDUSD=X · VND=X | DX-Y.NYB · USDJPY=X |
-| Hàng hoá | GC=F · SI=F · BZ=F · CL=F · HG=F · NG=F | — |
+| CP/ETF VN | HOSE/HNX/UPCOM stock + ETF (như hiện hành) | VNINDEX · VN30 |
+| CP quốc tế | — | AAPL MSFT NVDA GOOGL AMZN META TSLA JPM · 0700.HK 0005.HK 3888.HK · ^GSPC ^IXIC ^HSI |
+| Trái phiếu | — | US5Y · US10Y · US30Y (mô hình duration §7) |
+| Forex | — | EURUSD=X · AUDUSD=X · VND=X · DX-Y.NYB · USDJPY=X |
+| Hàng hoá | — | GC=F · SI=F · BZ=F · CL=F · HG=F · NG=F |
 
-Lý do tham chiếu: INDEX không đầu tư trực tiếp được (quy tắc hiện hành "trừ INDEX"); DXY là chỉ báo sức USD; USDJPY cặp JPY-denominated — giá trị nghiên cứu của nó đã phủ bởi VND=X (giữ USD) + EUR/AUD (đa dạng đồng), tránh chuỗi quy đổi JPY→USD→VND 2 tầng (ghi trung thực §7.4).
+Lý do (lời trader #108): thị trường ngoài VN thì trader "biết thế quái nào được" — agents đầu tư tài chính chỉ tại thị trường VN; ngoại hối/tiền tệ nước ngoài **cần theo dõi** vì có lúc ảnh hưởng tới thị trường (kênh tỷ giá USD/VND, giá hàng hoá đầu vào, cảm xúc quốc tế). Vì vậy 4 nhóm quốc tế vẫn được **đồng bộ dữ liệu X-MARKETS + hiển thị trong khối THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU) của prompt Chủ tịch/strategist + ảnh chụp 5 nhóm ở C-VISION mục 4** — đúng nghĩa "ngoài nắm được thông tin các thị trường", nhưng **cổng tín hiệu + thực thi chặn sạch mọi mã phi-VN**:
 
-### §5.2 Luật vi mô từng thị trường (bảng trung tâm)
+- `execRuleFor()` (market-rules.ts) chỉ còn luật cho HOSE/HNX/UPCOM (trừ INDEX); **mọi thị trường US/HK/BOND/FOREX/COMMODITY → null** → map `instrumentIdBySymbol` tự loại (tín hiệu mã ngoài VN bị bỏ với nhắc nhở rõ — như mã hallucinate) · `createPaperOrderFromSignal` chặn 400 với thông điệp chính sách.
+- Prompt Chủ tịch: quy tắc tín hiệu "chỉ chọn mã có trong bảng chỉ báo" (CP/ETF VN); khối quốc tế đổi tên **VŨ TRỤ GIAO DỊCH → THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU)** và ghi rõ vì sao theo dõi + vì sao không đầu tư.
 
-| Thị trường | Đơn vị lệnh tối thiểu | Phiên ICT (mô phỏng) | Băng giá | Phí mô phỏng | Tiền | Định giá VND |
+### §5.2 Luật vi mô — duy nhất thị trường VN (v2.2 thu hẹp từ v2.1)
+
+| Thị trường | Đơn vị lệnh tối thiểu | Phiên ICT | Băng giá | Phí mô phỏng | Tiền | Định giá |
 |---|---|---|---|---|---|---|
-| CP VN | lot 100 (giữ signal-execution.ts:42) | 09:15–11:30 · 13:00–15:00 T2–T6 (giữ) | ±7%/±10% (giữ) | 0,15% (giữ) | VND | trực tiếp |
-| CP Mỹ | 1 cổ phiếu | 21:30–04:00 T2–T6 | không | 0,02% | USD | × close VND=X |
-| CP HK | 1 cổ phiếu (bỏ board-lot từng mã — §7) | 09:30–12:00 · 13:00–16:00 T2–T6 | không | 0,10% | HKD | ÷ 7,8 (peg cố định) → USD × VND=X |
-| Trái phiếu | danh nghĩa 10tr₫/bước | theo phiên Mỹ T2–T6 | không | 0 (gộp carry) | USD | mô hình −D·Δy+carry §7 |
-| Forex | 1.000 đơn vị tiền gốc | 24/5 (T2 06:00 → T7 06:00) | không | spread 2 pip | cặp | giá đã USD-denominated × VND=X |
-| Hàng hoá | 1 hợp đồng × hệ số §5.3 | 24/5 đơn giản (§7) | không | 0,03% | USD | × VND=X |
+| CP/ETF VN | lot 100 | 09:15–11:30 · 13:00–15:00 T2–T6 | ±7%/±10% | 0,15% (+thuế bán 0,1%) | VND | trực tiếp |
 
-Luật hiện hành KHÔNG đổi cho CP VN — E-ALLOC cũ không đụng, E-EXEC mới cũng không đụng; mọi thứ thêm vào là **additive theo thị trường**.
+Bảng luật phi-VN của v2.1 (cp Mỹ/HK 0,01cp · trái phiếu danh nghĩa 1tr₫ · forex nano lot 100 · hàng hoá danh nghĩa 1tr₫ · khớp tại close đa phiên) **được tháo khỏi đường thực thi** cùng với matching phi-VN trong tick route — bộ định giá VND đa thị trường (markPositionVND · idx · USD/VND) **GIỮ lại** để (a) hiển thị trung thực bất kỳ vị thế phi-VN lịch sử nào còn sót (hiện 0), (b) D-LEDGER tiếp tục đánh giá tín hiệu lịch sử đầy đủ. Lịch sử thiết kế v2.1 bảo toàn ở §9.2.
 
-### §5.3 Hệ số hợp đồng hàng hoá (danh nghĩa 1 hợp đồng = price × hệ số, USD)
+### §5.3 Kế toán MỘT đồng tiền (VND)
 
-GC vàng 100 oz · SI bạc 5.000 oz · BZ Brent 1.000 thùng · CL WTI 1.000 thùng · HG đồng 25.000 lb · NG khí 10.000 MMBtu. Không mô phỏng margin/đòn bẩy — mua full-value (nghiên cứu phân bổ, không nghiên cứu gearing; ghi §7).
+- Cash sandbox VND; mua/bán CP VN trừ/cộng tiền + phí/thuế như luật hiện hành từ trước #107.
+- Định giá hằng ngày k1 settle 16:30 (job sẵn có): equity = cash + Σ(qty × giá) — chỉ CP VN nên không phụ thuộc tỷ giá.
 
-### §5.4 Kế toán MỘT đồng tiền (VND) — "khoản đầu tư biến động theo thị trường"
+### §5.4 Tín hiệu & cổng
 
-- Cash sandbox giữ đơn tiền VND (không sub-account USD — đơn giản hoá trung thực, ghi §7).
-- Mua tài sản USD: cash giảm `qty × price_native × USDVND_close + phí`; bán đảo lại. Vị thế HKD qua peg 7,8.
-- Định giá hằng ngày (k1 settle 16:30 — job sẵn có): `value = qty × price_native × USDVND_close`. **Biến động USD/VND trở thành lãi/lỗ TRỰC TIẾP của mọi vị thế quốc tế** — quyết định forex của hội đồng VN được hiện thực hoá tự nhiên: giữ tài sản USD = đồng thời cược USD/VND.
-- Trái phiếu: mark = danh nghĩa × (1 + lũy kế ret duration-model của tenor đó).
+- **B9 đồng thuận giữ nguyên** cho CP VN — không đổi gì so với trước #107.
+- Signal map: bảng chính HOSE-STOCK trong prompt GIỮ; khối THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU) vào prompt **Chủ tịch / portfolio-strategist** — bối cảnh quốc tế cho quyết định VN.
+- Sizing: `k-sandbox.sizePct` %NAV giữ nguyên; lot 100.
 
-### §5.5 Tín hiệu & cổng
+### §5.5 Matching engine & D-LEDGER
 
-- **B9 đồng thuận áp dụng như nhau mọi thị trường** — không nới lỏng cho tài sản mới, cùng một chuẩn phê duyệt.
-- Signal map mở rộng: bảng chính HOSE-STOCK trong prompt GIỮ (continuity §3.8 — không phình prompt 23 agents); thêm khối gọn `VŨ TRỤ GIAO DỊCH ĐA THỊ TRƯỜNG` (mã giao dịch được theo nhóm + giá + % ngày — chỉ nhóm đã có dữ liệu) vào prompt **Chủ tịch / portfolio-strategist** — người quyết định phân bổ.
-- Sizing: `k-sandbox.sizePct` %NAV giữ nguyên; `qty = floor((equity×pct)/(price_native×USDVND×hệ số))`, min 1 đơn vị; lot 100 chỉ áp CP VN.
-
-### §5.6 Matching engine & D-LEDGER phi-VN
-
-- `market-session.ts`: thêm cửa sổ phiên theo thị trường (bảng §5.2) — lệnh sandbox chỉ được xét khớp trong phiên của thị trường đó. **Paper world giữ nguyên luật VN** (thế giới VNDIRECT thật không đổi).
-- Khớp phi-VN tại **giá close đã sync** (EOD 15:45 VN · intl-sync 06:15): LIMIT BUY khớp nếu close ≤ giá đặt, khớp TẠI close — trung thực: không bịa microstructure intraday cho thị trường chỉ có bar ngày (tick simulator giữ nguyên chỉ cho VN).
-- D-LEDGER: markPnlPct trên Bar native; cashPnlVND sẵn VND; `driversJson` tách lãi giá / lãi tỷ giá cho vị thế USD đang mở (§3).
+- Tick simulator + khớp lệnh sandbox: **chỉ VN** (như trước #107). Nhánh khớp phi-VN tại close của v2.1 đã tháo (không còn lệnh phi-VN nào để khớp — 0 pending khi đổi chính sách).
+- D-LEDGER job 16:45 t2–t6 GIỮ NGUYÊN — đánh giá mọi tín hiệu lịch sử (markPnlPct trên Bar native; tài sản USD: driversJson tách lãi giá/lãi tỷ giá — dành cho dữ liệu quá khứ).
 
 ---
 
@@ -205,28 +203,27 @@ GC vàng 100 oz · SI bạc 5.000 oz · BZ Brent 1.000 thùng · CL WTI 1.000 th
 | Thành phần | Thay đổi v2 |
 |---|---|
 | Schema | **−2 model** (AllocationExperiment · ExperimentSnapshot — drop tables sau khi export lesson) · **+0 model mới** (E-EXEC dùng Signal/Order/Trade/Position/CashSnapshot hiện hành) · lot/hệ số/phiên = hằng code `LOT_SPECS` (không đổi schema) |
-| API | **−3 route** (`experiments` · `experiments/mark` · `allocation-session`) · `overview` bỏ trường thí nghiệm, thêm vị thế nhóm theo thị trường + tách lãi giá/tỷ giá · `baskets` **GIỮ** (thống kê cho card Thị trường + C-VISION mục 4) · `evaluate` **GIỮ** |
-| market-engine (:3003) | **−2 job** (16:35 mark · CN 05:50 hội nghị) · 16:45 evaluate **GIỮ** · matching/session mở rộng đa thị trường (sandbox only) |
-| Prompt | vision mục 4: THÍ NGHIỆM PHÂN BỔ → THỊ TRƯỜNG ĐA TÀI SẢN · + khối VŨ TRỤ GIAO DỊCH (Chủ tịch/strategist) |
-| UI | council-workspace: −card Thí nghiệm −dialog tạo; card VỊ THẾ nhóm theo thị trường + chip quy đổi USD→VND · card "Đa rổ thị trường" module Thị trường **GIỮ** (bức tranh thống kê) |
+| API | **−3 route** (`experiments` · `experiments/mark` · `allocation-session`) · `overview` bỏ trường thí nghiệm · `baskets` **GIỮ** (thống kê cho card Thị trường + C-VISION mục 4) · `evaluate` **GIỮ** |
+| market-engine (:3003) | **−2 job** (16:35 mark · CN 05:50 hội nghị) · 16:45 evaluate **GIỮ** · #108: tháo luôn matching phi-VN trong tick route (chỉ VN) |
+| Prompt | vision mục 4: THÍ NGHIỆM PHÂN BỔ → THỊ TRƯỜNG ĐA TÀI SẢN · #107 từng có khối VŨ TRỤ GIAO DỊCH · #108 đổi thành **THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU)** — chỉ bối cảnh, không đầu tư |
+| UI | council-workspace: −card Thí nghiệm −dialog tạo; card VỊ THẾ nhóm thị trường (nhóm phi-VN chỉ hiển thị nếu có vị thế lịch sử) · card "Đa rổ thị trường" module Thị trường **GIỮ** (bức tranh thống kê — 4 nhóm quốc tế thuần tham chiếu) |
 | K3 nhiệm vụ | không đổi (16:45 là engine-side như cũ) |
 | Bộ chọn khoảng #105 | GIỮ — overview + sổ phán quyết vẫn lọc from/to ngày ICT |
 
 ---
 
-## §7. Giới hạn & quyết định trung thực (trader cần biết — v2)
+## §7. Giới hạn & quyết định trung thực (trader cần biết — v2.2)
 
-1. **Trái phiếu VN**: chưa có nguồn miễn phí từ sandbox → nhóm BOND = Treasury Mỹ (ảnh hưởng VN qua kênh USD). InstrumentType sẵn sàng khi trader cấp nguồn.
-2. **USD/VND lịch sử**: er-api chỉ "hôm nay" → chuỗi VND=X tích luỹ từ #106; định giá tài sản USD các ngày trước đó dùng close gần nhất có (honest mark).
-3. **Yahoo quota IP**: hàng hoá/quốc tế về đủ dần theo ngày 06:15; DataSourceStatus ghi rõ.
-4. **BOND = mô hình duration** (−D·Δy + carry, D=4,5/8/17): vừa là cách đánh giá vừa là cách THỰC THI vị thế trái phiếu — không phải giá bond thật từng trái. USDJPY/DXY/Index tham chiếu không giao dịch (§5.1).
-5. **Phiên mô phỏng đơn giản hoá**: US 21:30 ICT cố định (không đổi mùa đông/hè, không nghỉ lễ Mỹ); forex 24/5 không có phí swap/rollover qua đêm; hàng hoá full-value không margin; HK bỏ board-lot từng mã; HKD peg 7,8 cố định không mô phỏng dải peg.
-6. **Khớp phi-VN tại close đã sync** — không microstructure intraday ngoài VN (tick simulator chỉ VN, giữ nguyên).
-7. **Kế toán 1 tiền VND** — không sub-account USD: mọi tài sản quy VND tại close USD/VND. Chọn đơn giản đúng cho nghiên cứu; nếu sau này cần kế toán đa tiền thật thì nâng cấp có chủ đích.
+1. **Chính sách đầu tư chỉ tại thị trường VN (#108 — quyết định của trader, không phải giới hạn kỹ thuật)**: mọi thị trường ngoài VN (cp Mỹ/HK · trái phiếu Mỹ · forex · hàng hoá) KHÔNG đặt lệnh sandbox — lý do trader: *"nước ngoài tôi biết thế quái nào được"*. Ngoại hối/tiền tệ nước ngoài vẫn đồng bộ + hiển thị THAM CHIẾU vì *"có lúc ảnh hưởng tới thị trường"*. Nếu sau này trader muốn mở lại đầu tư phi-VN: luật v2.1 bảo toàn ở §9.2 + bộ định giá markPositionVND còn nguyên → bật lại execRuleFor là đủ.
+2. **Trái phiếu VN**: chưa có nguồn miễn phí từ sandbox → nhóm BOND = Treasury Mỹ (chỉ tham chiếu từ v2.2). InstrumentType sẵn sàng khi trader cấp nguồn.
+3. **USD/VND lịch sử**: er-api chỉ "hôm nay" → chuỗi VND=X tích luỹ từ #106; job đồng bộ hằng ngày tiếp tục vì tỷ giá là dữ liệu THAM CHIẾU quan trọng nhất với thị trường VN.
+4. **Yahoo quota IP**: hàng hoá/quốc tế về đủ dần theo ngày 06:15; DataSourceStatus ghi rõ.
+5. **BOND = mô hình duration** (−D·Δy + carry, D=4,5/8/17) — từ v2.2 chỉ còn ở lớp thống kê baskets + D-LEDGER đánh giá tín hiệu lịch sử.
+6. **Bộ định giá VND đa thị trường (markPositionVND · idx · USD/VND) GIỮ lại** sau v2.2 — hiển thị trung thực vị thế lịch sử phi-VN nếu còn (hiện 0) + đánh giá D-LEDGER tín hiệu quá khứ; không sinh lệnh mới.
 
-### §7.5a Tinh chỉnh thực thi P2 (code hoá #107 — khác văn bản gốc §5.2/§5.3, phục vụ đúng ý đồ)
+### §7.5a Tinh chỉnh thực thi P2 (code hoá #107 — LỊCH SỬ từ v2.2: toàn bộ chỉ còn hiệu lực với bộ định giá/D-LEDGER)
 
-1. **Đơn vị danh nghĩa 1tr₫/đv cho hàng hoá + trái phiếu** (gốc §5.3 định nghĩa hợp đồng thật × hệ số — GC=F 100 oz ≈ 10,8 tỷ₫/hợp đồng, KHÔNG mua nổi trên tài khoản 100tr₫ no-margin full-value). Mỗi đơn vị = 1.000.000₫ triển khai, giá trị theo chỉ số VND của tài sản gốc (hàng hoá spot×fx · trái phiếu duration-model + fx) — tư duy “chứng chỉ danh nghĩa”.
+1. **Đơn vị danh nghĩa 1tr₫/đv cho hàng hoá + trái phiếu** (gốc §5.3 v2.0 định nghĩa hợp đồng thật × hệ số — GC=F 100 oz ≈ 10,8 tỷ₫/hợp đồng, KHÔNG mua nổi trên tài khoản 100tr₫ no-margin full-value). Mỗi đơn vị = 1.000.000₫ triển khai, giá trị theo chỉ số VND của tài sản gốc — tư duy “chứng chỉ danh nghĩa”.
 2. **CP Mỹ/HK tính đơn vị lẻ 0,01 cp** (fractional shares) — để định cỡ 5% NAV mua nổi cả mega-cap (AAPL ≈ 5,9tr₫/cp > 5%×96,7tr₫ nếu nguyên cp).
 3. **Forex lot nano 100 đv tiền gốc** (gốc nói 1.000 — với tài khoản 100tr₫, 1.000 EUR ≈ 28tr₫ = 28% NAV vượt mọi giới hạn sizing; 100 EUR ≈ 2,8tr₫ khớp khẩu vị 5%).
 4. **Trái phiếu BUY khớp khi yield ≥ giá đặt** (trái phiếu “rẻ” khi lợi suất cao — ngược chiều giá trị) — SELL khi yield ≤ giá đặt; các mức targetPrice/stopLoss của bond đều là LỢI SUẤT.
@@ -234,13 +231,13 @@ GC vàng 100 oz · SI bạc 5.000 oz · BZ Brent 1.000 thùng · CL WTI 1.000 th
 
 ---
 
-## §8. Kế hoạch nghiệm thu v2 (khi triển khai code — chuẩn nhà)
+## §8. Kế hoạch nghiệm thu v2.2 (chuẩn nhà)
 
-1. **Tháo E-ALLOC sạch**: 0 tham chiếu `AllocationExperiment`/`ExperimentSnapshot` trong code; engine còn đúng 1 job council (16:45); schema drop 2 bảng; lesson thí nghiệm DONE đã export vào docs.
-2. **Prompt** (force single-run Chủ tịch): khối TÀI KHOẢN + VỊ THẾ + KẾT QUẢ 7 QUYẾT ĐỊNH + THỊ TRƯỜNG ĐA TÀI SẢN — **0 dòng "THÍ NGHIỆM PHÂN BỔ"**; khối VŨ TRỤ GIAO DỊCH có ≥ 3 nhóm phi-VN.
-3. **E-EXEC thử 1 tín hiệu phi-VN** (vd GC=F hoặc AAPL): qua cổng B9 → lệnh sandbox đúng lot/phiên/phí → khớp tại close → Position định giá `price × USDVND` → D-LEDGER đánh giá đúng, driversJson tách lãi giá/lãi tỷ giá.
-4. **Hồi quy**: tín hiệu CP VN + lệnh TCB hiện hữu hoạt động nguyên vẹn (lot 100 · phiên VN · B9); D-LEDGER 9 hàng cũ không đổi số; date-range #105 5 API from/to; module Hội đồng render card tài khoản + sổ phán quyết (không còn card thí nghiệm) · 0 console error · mobile 390 sw=cw.
-5. **Chất lượng**: lint 0 · tsc 0 (src) · E2E agent-browser desktop 1440 + mobile 390 · fixbug 4 lớp Fixbug.md trên toàn scope thay đổi.
+1. **Chính sách VN-only chặn sạch**: `execRuleFor` trả null cho MỘI instrument phi-VN (kể cả VND=X · EURUSD=X · AAPL · GC=F · US10Y · 0700.HK); map `instrumentIdBySymbol` không chứa mã phi-VN; `createPaperOrderFromSignal` với instrument phi-VN → 400 thông điệp chính sách; 0 vị thế/lệnh phi-VN mở trong DB.
+2. **Prompt** (Chủ tịch/strategist): khối THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU) có ≥ 3 nhóm phi-VN + ghi rõ KHÔNG đầu tư; quy tắc tín hiệu chỉ cho phép mã bảng chỉ báo VN; vision mục 4 THỊ TRƯỜNG ĐA TÀI SẢN + USD/VND còn nguyên (theo dõi).
+3. **Hồi quy CP VN nguyên vẹn**: tín hiệu + lệnh TCB lot-100 · phiên VN · băng ±7% · B9 như cũ; D-LEDGER 9 hàng cũ không đổi số; date-range #105; module Hội đồng render · 0 console error · mobile 390 sw=cw; tick route chạy không lỗi.
+4. **Tháo E-ALLOC sạch (giữ từ v2.1)**: 0 tham chiếu AllocationExperiment/ExperimentSnapshot; engine đúng 1 job council (16:45).
+5. **Chất lượng**: lint 0 · tsc 0 (src) · E2E agent-browser desktop 1440 + mobile 390 · **giao thức Fixbug 4 lớp (Fixbug.md §4) trên toàn scope #107+#108** theo chỉ thị trader — vòng lặp tới khi 0 finding + Vòng Xác Nhận sạch.
 
 ---
 
@@ -260,6 +257,7 @@ GC vàng 100 oz · SI bạc 5.000 oz · BZ Brent 1.000 thùng · CL WTI 1.000 th
 - **v1.0 (#106)**: dựng 4 tầng C-VISION · D-LEDGER · X-MARKETS · E-ALLOC + toàn bộ code + ~9.700 bar thật + hội nghị LLM đo thật 44s. E-ALLOC khi đó diễn giải "rổ" thành 5 nguồn cố định + vốn giấy riêng 100tr₫.
 - **v2.0 (#107)**: trader làm rõ → bỏ E-ALLOC (vẽ rắn thêm chân), "rổ" = quyết định đầu tư mã cụ thể, khoản tiền thử nghiệm sandbox LÀ thí nghiệm, hội đồng phải thấy thị trường + tiền + vị thế + giá trị biến động. Giữ C-VISION/D-LEDGER/X-MARKETS; thêm E-EXEC (blueprint — CHƯA code, chờ duyệt §9.1).
 - **v2.1 (#107 triển khai)**: trader phê duyệt triển khai toàn bộ blueprint ("Tiến hành luôn cho tôi"). P1–P4 code hoá: tháo E-ALLOC sạch (2 bảng drop + 5 file xoá + 3 route xoá + 2 job engine tháo trước mốc CN 18/10) · E-EXEC core (market-rules.ts · matching tại close đa phiên · kế toán avgCostVND/openIdxUnits · sizing theo đơn vị thị trường · D-LEDGER bond/fx) · prompt VŨ TRỤ GIAO DỊCH 3 đường + vision mục 4 THỊ TRƯỜNG ĐA TÀI SẢN + bỏ hardcode VCB · UI Hội đồng v2 (vị thế nhóm thị trường + chip quy đổi). 4 tinh chỉnh thực thi ghi trung thực §7.5a (đơn vị danh nghĩa 1tr₫/đv cho hàng hoá + trái phiếu vì hợp đồng thật quá to cho tài khoản 100tr₫; cp Mỹ/HK tính đơn vị lẻ 1/100 cp; forex lot nano 100 đv). Nghiệm thu: scripts/p107-verify.ts 49/49 PASS + auto-convert E2E EURUSD=X (lệnh lot-100 → khớp phiên forex → avgCostVND chính xác 0,19₫ → realized chỉ mất phí spread → dọn sạch hermetic).
+- **v2.2 (#108)**: trader chỉ thị thu hẹp — *"các thị trường đầu tư chỉ ở trong Việt Nam thôi, nước ngoài tôi biết thế quái nào được… ngoại hối, tiền tệ nước ngoài cũng cần theo dõi"*. Vũ trụ giao dịch thu về CP/ETF VN (lot-100 như cũ); toàn bộ tài sản quốc tế + forex hạ cấp THAM CHIẾU (khối prompt đổi tên THỊ TRƯỜNG QUỐC TẾ + mục 4 vision giữ theo dõi 5 nhóm + USD/VND). Code: execRuleFor chặn phi-VN → null · tháo nhánh sizing/khớp phi-VN (signal-execution + tick route) · GIỮ markPositionVND/idx/USD-VND cho hiển thị trung thực + D-LEDGER lịch sử · giao thức Fixbug 4 lớp chạy trên toàn scope #107+#108 theo chỉ thị trader.
 
 ---
 

@@ -26,7 +26,7 @@ import {
   buildValuationBlock,
   buildLiquidityBlock,
   buildPortfolioWeightsBlock,
-  buildTradableUniverseBlock,
+  buildIntlReferenceBlock,
 } from "@/lib/agent-context";
 // #106 C-VISION — tầm nhìn toàn cục hội đồng cho Chủ tịch (wave E)
 import { buildCouncilVisionBlock } from "@/lib/council/vision";
@@ -906,11 +906,11 @@ export async function POST() {
     // đề xuất phân bổ của Chủ tịch (currentPct không bịa — đo từ DB).
     const portfolioWeightsBlock = await buildPortfolioWeightsBlock().catch(() => null);
 
-    // #107 E-EXEC — VŨ TRỤ GIAO DỊCH ĐA THỊ TRƯỜNG: bảng mã PHI-VN đặt lệnh
-    // được kèm giá theo đơn vị DB (cùng đơn vị targetPrice phải dùng) — Chủ
-    // tịch tự quyết định đầu tư vào đâu ngoài CP VN (cp qtế/trái phiếu/forex/
-    // hàng hoá) từ chính dữ liệu này. Fail-soft như RAG/XREL/vision.
-    const tradableUniverseBlock = await buildTradableUniverseBlock().catch(() => null);
+    // #108 v2.2 — THỊ TRƯỜNG QUỐC TẾ THAM CHIẾU: bảng mã PHI-VN + giá theo
+    // đơn vị DB — CHỈ bối cảnh quốc tế (tỷ giá/hàng hoá/cảm xúc qtế đôi lúc
+    // ảnh hưởng thị trường VN), KHÔNG đầu tư. Tín hiệu chỉ chọn CP/ETF VN
+    // (chính sách trader #108). Fail-soft như RAG/XREL/vision.
+    const intlReferenceBlock = await buildIntlReferenceBlock().catch(() => null);
 
     // #106 C-VISION + #107 — TÀI KHOẢN HỘI ĐỒNG (sandbox K1) + vị thế mọi
     // thị trường + kết quả 7 quyết định gần nhất (D-LEDGER) + ảnh chụp thị
@@ -926,8 +926,8 @@ export async function POST() {
       ...(ragBlock ? ["", ragBlock] : []),
       // M2 (#103) — quan hệ thị trường đã học cho Chủ tịch (cùng cấp như RAG)
       ...(xrelBlock ? ["", xrelBlock] : []),
-      // #107 E-EXEC — vũ trụ giao dịch phi-VN (mã cụ thể + giá đơn vị DB)
-      ...(tradableUniverseBlock ? ["", tradableUniverseBlock] : []),
+      // #108 v2.2 — bối cảnh thị trường quốc tế THAM CHIẾU (mã + giá đơn vị DB)
+      ...(intlReferenceBlock ? ["", intlReferenceBlock] : []),
       // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): khối GIAO VIỆC — CHỈ khi k4.enabled
       // (tắt → 0 token thêm, prompt y như trước K4). Đặt SAU RAG block đúng
       // thiết kế đã duyệt; yêu cầu Chairman kèm JSON assignTasks cuối output.
@@ -997,9 +997,9 @@ export async function POST() {
             ? (s.confidence as StrategistSignal["confidence"])
             : confidence;
         const sigSymbol = s.symbol.trim().toUpperCase();
-        // #107 E-EXEC: đơn vị giá theo thị trường — VN làm tròn bội 100₫ như cũ;
-        // phi-VN (cents/FX_RATE/BOND_PCT) GIỮ NGUYÊN số nguyên DB native
-        // (round100 sẽ phá giá forex 10.852→10.900 / yield 425→400).
+        // #108 v2.2: tín hiệu chỉ còn mã VN (map loại phi-VN) — làm tròn bội
+        // 100₫ như cũ; nhánh Math.round giữ cho mọi symbol lạ khác (phòng
+        // thủ — không bao giờ tới tạo lệnh vì map đã chặn).
         const sigInst = await db.instrument
           .findUnique({ where: { symbol: sigSymbol }, select: { market: true } })
           .catch(() => null);
@@ -1312,7 +1312,7 @@ export async function POST() {
         // Chairman hallucinate mã ngoài bảng giá — ghi rõ để trader biết
         const warnMessage = await persistMessage(
           executorAgent.id,
-          `Chủ tịch Hội đồng đề xuất mã ${strategist.signal.symbol} không có trong bảng instrument — tín hiệu bị bỏ qua (no fabrication). Đề nghị Chủ tịch chỉ chọn mã trong danh mục VN30 đang theo dõi.`,
+          `Chủ tịch Hội đồng đề xuất mã ${strategist.signal.symbol} không có trong vũ trụ giao dịch (bảng chỉ báo CP/ETF Việt Nam) — tín hiệu bị bỏ qua (no fabrication). Đề nghị Chủ tịch chỉ chọn mã Việt Nam trong bảng chỉ báo: chính sách Hội đồng chỉ đầu tư tại thị trường VN, thị trường quốc tế chỉ tham chiếu.`,
           "Mã không hợp lệ — từ chối ghi nhận tín hiệu.",
           null
         );

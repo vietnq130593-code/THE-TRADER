@@ -28,15 +28,11 @@ import {
   shouldTwap,
   type TwapSliceDraft,
 } from "@/lib/exec/twap";
-// #107 E-EXEC (COUNCIL_STEWARDSHIP_BLUEPRINT v2.0 §5.5): sizing theo đơn vị
-// lệnh của TỪNG thị trường + kế toán VND đa thị trường (markPositionsVND).
-import {
-  execRuleFor,
-  execUnitLabel,
-  foreignUnitValueVND,
-  markPositionsVND,
-  NOTIONAL_UNIT_VND,
-} from "@/lib/exec/market-rules";
+// #107/#108 E-EXEC (COUNCIL_STEWARDSHIP_BLUEPRINT v2.2 §5): vũ trụ giao dịch
+// sandbox CHỈ còn CP/ETF VN (chính sách trader #108 — ngoài VN chỉ tham chiếu);
+// equity đa thị trường qua markPositionsVND (xử lý cả vị thế lịch sử phi-VN
+// nếu còn sót — hiện 0).
+import { execRuleFor, markPositionsVND } from "@/lib/exec/market-rules";
 
 /**
  * MỘT NGUỒN DUY NHẤT cho toán tạo lệnh giấy từ tín hiệu
@@ -366,26 +362,22 @@ export async function createPaperOrderFromSignal(
   const lastPrice = quote?.last ?? 0;
   const symbol = signal.instrument.symbol;
 
-  // ── #107 E-EXEC: luật vi mô theo thị trường + cổng thế giới ────────────
-  // Tài sản phi-VN (cp Mỹ/HK · trái phiếu · forex · hàng hoá) chỉ thực thi
-  // trong THẾ GIỚI SANDBOX K1 (chế độ thử nghiệm đa thị trường); thế giới
-  // paper = tài khoản VNDIRECT thật — luật VN, không đặt lệnh ngoài VN.
-  // INDEX/DXY/USDJPY không có luật (tham chiếu §5.1) → chặn sạch, không tạo
-  // lệnh treo vĩnh viễn.
+  // ── #108 E-EXEC v2.2: cổng chính sách VN-only ──────────────────────────
+  // Chỉ CP/ETF VN (HOSE/HNX/UPCOM, trừ INDEX) đặt lệnh được. Mọi instrument
+  // ngoài VN (cp Mỹ/HK · trái phiếu · forex · hàng hoá) → execRuleFor null →
+  // chặn với thông điệp chính sách — không tạo lệnh treo vĩnh viễn.
   const execRule = execRuleFor(signal.instrument);
   if (!execRule) {
+    const isForeignMkt =
+      signal.instrument.market !== "HOSE" &&
+      signal.instrument.market !== "HNX" &&
+      signal.instrument.market !== "UPCOM";
     return {
       ok: false,
       status: 400,
-      error: `Mã ${symbol} không thuộc vũ trụ giao dịch được (INDEX/tham chiếu) — không thể tạo lệnh.`,
-    };
-  }
-  const isForeign = execRule.assetKind !== "VN_PRICE";
-  if (isForeign && world !== "sandbox") {
-    return {
-      ok: false,
-      status: 400,
-      error: `Tín hiệu ${symbol} thuộc thị trường ngoài VN (${signal.instrument.market}) — chỉ thực thi được trong chế độ thử nghiệm sandbox K1, không đặt lệnh paper VNDIRECT.`,
+      error: isForeignMkt
+        ? `Mã ${symbol} thuộc thị trường ngoài Việt Nam (${signal.instrument.market}) — chính sách Hội đồng chỉ đầu tư tại thị trường VN (ngoài VN chỉ theo dõi tham chiếu), không thể tạo lệnh.`
+        : `Mã ${symbol} là chỉ số tham chiếu (INDEX) — không thể tạo lệnh.`,
     };
   }
 
@@ -448,8 +440,8 @@ export async function createPaperOrderFromSignal(
             ? opts.sizePct
             : 5) / 100
         : POSITION_SIZE_PCT;
-    // F-102 + #107 E-EXEC: equity = cash + GTTH vị thế mở ĐA THỊ TRƯỜNG
-    // (VN: giá quote như cũ; phi-VN: quy VND qua avgCostVND/idx — markPositionsVND).
+    // F-102 + #107 E-EXEC: equity = cash + GTTH vị thế mở (markPositionsVND —
+    // VN theo giá quote như cũ; vị thế lịch sử phi-VN nếu còn quy VND trung thực).
     const positions = await db.position.findMany({
       where: { brokerAccountId: account.id, status: "OPEN" },
       include: {
@@ -483,71 +475,6 @@ export async function createPaperOrderFromSignal(
         error: "Không xác định được giá trị tài sản để định cỡ lệnh.",
       };
     }
-    if (isForeign) {
-      // ── #107 E-EXEC: sizing phi-VN theo ĐƠN VỊ LỆNH của thị trường ──
-      // · cp Mỹ/HK: 1 đv = 0,01 cp · forex: 1 đv = 1 đv tiền gốc (lot 100)
-      // · trái phiếu/hàng hoá: 1 đv danh nghĩa = 1.000.000₫
-      const unitVND =
-        execRule.assetKind === "NOTIONAL"
-          ? NOTIONAL_UNIT_VND
-          : await foreignUnitValueVND(signal.instrument, lastPrice);
-      if (unitVND == null || unitVND <= 0) {
-        return {
-          ok: false,
-          status: 400,
-          error:
-            "Chưa có tỷ giá USD/VND để định giá lệnh thị trường ngoài VN — đợi đồng bộ dữ liệu (VND=X) rồi tín hiệu kế tiếp sẽ thực thi.",
-        };
-      }
-      const rawQty = Math.floor((equity * sizeFraction) / unitVND);
-      if (rawQty < execRule.minQty) {
-        return {
-          ok: false,
-          status: 400,
-          error: `Khối lượng tính toán nhỏ hơn 1 đơn vị lệnh tối thiểu (${execRule.minQty} ${execUnitLabel(signal.instrument)}) tại ${signal.instrument.market} — tăng % NAV mỗi lệnh hoặc chọn tài sản nhỏ hơn.`,
-        };
-      }
-      quantity = Math.max(execRule.minQty, Math.floor(rawQty / execRule.lotStep) * execRule.lotStep);
-
-      // SELL phải có vị thế (giữ nguyên tinh thần guard VN — không bán khống)
-      if (side === "SELL") {
-        const held = positions.find((p) => p.instrumentId === signal.instrumentId);
-        if (!held || held.quantity < execRule.minQty) {
-          return {
-            ok: false,
-            status: 400,
-            error: `Không có vị thế ${symbol} để đặt lệnh BÁN — chỉ bán được mã hội đồng đang nắm giữ.`,
-          };
-        }
-        quantity = Math.min(quantity, Math.floor(held.quantity / execRule.lotStep) * execRule.lotStep);
-        if (quantity < execRule.minQty) {
-          return {
-            ok: false,
-            status: 400,
-            error: `Vị thế hiện có nhỏ hơn 1 đơn vị lệnh tối thiểu (${execRule.minQty} ${execUnitLabel(signal.instrument)}).`,
-          };
-        }
-      }
-
-      // Giá đặt = đơn vị DB native của chính bảng giá (KHÔNG băng trần/sàn —
-      // ngoài VN không có luật băng; KHÔNG round100 — sẽ phá giá forex/bond).
-      // Giá mục tiêu của LLM nếu hợp lệ (đơn vị DB — khối VŨ TRỤ GIAO DỊCH giới
-      // thiệu đúng đơn vị); lệch > 2× hoặc < 0,5× tham chiếu → dùng tham chiếu
-      // (chống lỗi đơn vị). Trái phiếu: giá = lợi suất — engine BUY khớp khi
-      // yield ≥ giá đặt ("rẻ" khi lợi suất cao) — công thức min/max phía dưới
-      // vẫn đúng vì chiều đảo nằm ở điều kiện khớp, không ở giá đặt.
-      let basePrice = lastPrice;
-      if (signal.targetPrice && signal.targetPrice > 0) {
-        const ratio = signal.targetPrice / lastPrice;
-        if (ratio > 0.5 && ratio < 2) {
-          basePrice =
-            side === "BUY"
-              ? Math.min(signal.targetPrice, Math.round(lastPrice * 1.01))
-              : Math.max(signal.targetPrice, Math.round(lastPrice * 0.99));
-        }
-      }
-      price = Math.max(1, Math.round(basePrice));
-    } else {
     const rawQty = Math.floor((equity * sizeFraction) / lastPrice);
     quantity = Math.max(100, Math.floor(rawQty / 100) * 100);
 
@@ -584,7 +511,6 @@ export async function createPaperOrderFromSignal(
           : Math.max(signal.targetPrice, round100(lastPrice * 0.99))
         : round100(lastPrice);
     price = Math.max(bandLow, Math.min(basePrice, bandHigh));
-    } // hết nhánh VN (else của isForeign)
 
     note =
       opts.sizing === "sandbox"
@@ -600,14 +526,10 @@ export async function createPaperOrderFromSignal(
   // Notional lệnh > 1% ADTV-20 phiên → tách sliceCount Order con (mỗi con 1
   // plan con TWAP rải afterTick). Dưới ngưỡng / không đủ lot/lát → SINGLE cũ.
   // ADTV đọc Bar EOD (không cache — gọi 1 lần mỗi APPROVE, tần suất thấp).
-  // #107 E-EXEC: instrument phi-VN LUÔN SINGLE — TWAP (ADTV/lot/lát) là luật
-  // HOSE; ngoài VN khớp tại close đã sync, không có lát intraday.
+  // #108 v2.2: sandbox chỉ còn CP VN → mọi lệnh xét TWAP luật HOSE như cũ.
   let twapSlices: TwapSliceDraft[] | null = null;
   let twapAdtv = 0;
   let singleReason: SinglePlanReason = "under-threshold"; // F-73A-13
-  if (isForeign) {
-    singleReason = "foreign-market";
-  } else {
   try {
     const { adtvVnd } = await adtv20For(signal.instrument.id);
     twapAdtv = adtvVnd;
@@ -624,7 +546,6 @@ export async function createPaperOrderFromSignal(
     else if (!shouldTwap(quantity * price, twapAdtv)) singleReason = "under-threshold";
     else singleReason = "insufficient-lots";
   }
-  } // hết nhánh TWAP VN
   const twapNotionalPct = notionalPctAdtv(quantity * price, twapAdtv);
   const twapMeta: PlanTwapMeta | null = twapSlices
     ? {

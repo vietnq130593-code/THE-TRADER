@@ -31,14 +31,27 @@ function ictDayEnd(date: string): Date {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * F-1081-01 (fixbug #108): regex chỉ bắt SAI ĐỊNH DẠNG — "2026-13-01" vượt
+ * DATE_RE rồi new Date() cho Invalid Date → Prisma throw → 500. Bổ sung kiểm
+ * NGỮ NGHĨA (pattern đã dùng ở data-quality route: isNaN getTime). Trả 422
+ * đúng nghĩa validate thay vì 500.
+ */
+function isValidIctDay(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const [, m, d] = s.split("-").map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  return !Number.isNaN(ictDayStart(s).getTime());
+}
+
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
     const fromRaw = sp.get("from");
     const toRaw = sp.get("to");
-    if ((fromRaw && !DATE_RE.test(fromRaw)) || (toRaw && !DATE_RE.test(toRaw))) {
+    if ((fromRaw && !isValidIctDay(fromRaw)) || (toRaw && !isValidIctDay(toRaw))) {
       return NextResponse.json(
-        { error: "from/to phải là ngày YYYY-MM-DD (ngày ICT +07:00)." },
+        { error: "from/to phải là ngày YYYY-MM-DD hợp lệ (ngày ICT +07:00)." },
         { status: 422 }
       );
     }

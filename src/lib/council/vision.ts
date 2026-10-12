@@ -7,9 +7,11 @@
  *
  * v2.0 thay đổi so với #106: BỎ mục "thí nghiệm phân bổ đang chạy + bài học"
  * (E-ALLOC đã tháo — khoản tiền thử nghiệm sandbox CHÍNH LÀ thí nghiệm);
- * vị thế giờ hiển thị MỌI THỊ TRƯỜNG (#107 E-EXEC: cp qtế quy VND qua USD/VND
- * — giữ tài sản USD đồng thời cược USD/VND; trái phiếu/hàng hoá theo danh
- * nghĩa idx); thêm mục (4) THỊ TRƯỜNG ĐA TÀI SẢN 5 nhóm.
+ * thêm mục (4) THỊ TRƯỜNG ĐA TÀI SẢN 5 nhóm.
+ * v2.2 (#108 — chính sách VN-only): mục (4) đổi chân thành THAM CHIẾU (4 nhóm
+ * quốc tế + USD/VND theo dõi vì ảnh hưởng thị trường VN — đầu tư chỉ tại
+ * thị trường VN); vị thế hiển thị trung thực mọi thị trường (chống sót dữ
+ * liệu lịch sử phi-VN — hiện 0 vị thế như vậy).
  *
  * 4 phần: (1) tài khoản sandbox K1 · (2) vị thế đang nắm mọi thị trường ·
  * (3) kết quả 7 quyết định gần nhất từ D-LEDGER · (4) thị trường đa tài sản.
@@ -198,12 +200,13 @@ async function buildVisionBlockInner(): Promise<string | null> {
     lines.push("KẾT QUẢ QUYẾT ĐỊNH: sổ đánh giá chưa có hàng — chưa từng đánh giá.");
   }
 
-  // ── (4) THỊ TRƯỜNG ĐA TÀI SẢN (5 nhóm — v2.0 thay mục thí nghiệm) ──
+  // ── (4) THỊ TRƯỜNG ĐA TÀI SẢN (5 nhóm — v2.0 thay mục thí nghiệm;
+  // v2.2: 4 nhóm quốc tế + USD/VND = THAM CHIẾU theo dõi) ──
   if (basketRows.length > 0) {
     const parts = basketRows.map((b) => `${b.short} ${fmtPct(b.ret5d)}/${fmtPct(b.ret30d)}`);
     const fxPart = fx != null ? ` · USD/VND ${Math.round(fx).toLocaleString("vi-VN")}` : "";
     lines.push(
-      `THỊ TRƯỜNG ĐA TÀI SẢN (lợi suất 5 phiên/30 phiên): ${parts.join(" · ")}${fxPart} — giữ tài sản USD đồng thời chịu biến động tỷ giá USD/VND.`
+      `THỊ TRƯỜNG ĐA TÀI SẢN (lợi suất 5 phiên/30 phiên): ${parts.join(" · ")}${fxPart} — quốc tế & tỷ giá chỉ THAM CHIẾU (ảnh hưởng thị trường VN qua kênh ngoại hối/hàng hoá/cảm xúc); đầu tư Hội đồng chỉ tại thị trường Việt Nam.`
     );
   }
 

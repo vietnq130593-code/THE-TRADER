@@ -3589,3 +3589,50 @@ Stage Summary:
 - HỘI ĐỒNG THẤY ĐẦY ĐỦ BỘ BA: thị trường (VŨ TRỤ GIAO DỊCH + THỊ TRƯỜNG ĐA TÀI SẢN) + tiền + vị thế giá trị biến động (vision v2 + UI nhóm thị trường).
 - File: 2 mới (market-rules.ts ~470 dòng + p107-verify.ts) + 1 script E2E (p107-sig-e2e.ts) + 17 sửa (schema · tick route · signal-execution · plan.ts · market-session · k-sandbox · portfolio · overview · decision-eval · vision · agent-context · run route · types · use-council · council-workspace · nav · api) + 6 xoá (experiments · allocation-session · 3 route · p106-verify) + 3 docs (blueprint v2.1 · DB_SCHEMA v0.9.5 · TECHNICAL v1.9.2) + 4 screenshots p107-*.
 - Bàn giao: councilEval 16:45 t2–t6 tự chạy (định giá đa thị trường từ mai) · agents có thể ra tín hiệu phi-VN từ chu kỳ sau (B9 như cũ) · 4 tinh chỉnh thực thi documented §7.5a chờ trader duyệt lại nếu muốn đổi đơn vị (hợp đồng thật / lot 1.000 / danh nghĩa 10tr₫).
+
+---
+Task ID: 108-IMPL-vnonly
+Agent: main-orchestrator (Z.ai Code)
+Task: Triển khai chỉ thị trader phiên #108 — thu hẹp vũ trụ ĐẦU TƯ về chỉ thị trường Việt Nam (COUNCIL_STEWARDSHIP_BLUEPRINT v2.2): "Trừ thị trường tiền tệ thì các thị trường đầu tư chỉ ở trong Việt Nam thôi, nước ngoài tôi biết thế quái nào được… ngoại hối, tiền tệ nước ngoài cũng cần theo dõi vì bản chất nó cũng có lúc ảnh hưởng tới thị trường."
+
+Work Log:
+- Blueprint v2.2: header + trích chỉ thị #108 · sơ đồ §1 (E-EXEC box VN-only) · §4 mục 2/4 (tham chiếu quốc tế + USD/VND theo dõi) · §5 viết lại toàn bộ (bảng §5.1 vũ trụ: chỉ CP/ETF VN đặt lệnh được; 4 nhóm quốc tế THAM CHIẾU; §5.2 luật chỉ còn VN; §5.5 matching chỉ VN; giữ bộ định giá lịch sử) · §6 bảng delta · §7 thêm mục 1 chính sách VN-only (lý do + đường mở lại) + §7.5a ghi LỊCH SỬ · §8 nghiệm thu v2.2 (5 mục) · §9.2 entry v2.2.
+- market-rules.ts: execRuleFor chỉ HOSE/HNX/UPCOM (trừ INDEX) — MỌI instrument phi-VN → null (kể cả VND=X/EURUSD=X/GC=F/US10Y/0700.HK); xoá RULE_US/HK/FOREX/BOND/CMDTY + TRADABLE_FOREX_SYMBOLS + foreignFeeVND + foreignUnitValueVND; MIN_QTY thu về VN; listTradableForeign → listForeignReference (kèm INDEX/DXY/USDJPY — mọi mã phi-VN đều tham chiếu như nhau); GIỮ nguyên bộ định giá markPositionVND · notionalIdxSeries · usdVndRate/usdVndAtDate · foreignPriceUnitValueVND (hiển thị trung thực vị thế lịch sử + D-LEDGER quá khứ).
+- agent-context.ts: buildTradableUniverseBlock → buildIntlReferenceBlock — khối prompt đổi thành "THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU — THEO DÕI, KHÔNG ĐẦU TƯ)" (6 nhóm: CP MỸ · CP HK · CHỈ SỐ QTẾ · TRÁI PHIẾU MỸ · FOREX · HÀNG HOÁ + giá DB native + % ngày + ghi rõ vì sao theo dõi + vì sao không đầu tư + "mã ngoài VN sẽ bị hệ thống từ chối"); prompt Chủ tịch (portfolio-strategist) quy tắc tín hiệu đổi thành "chỉ chọn mã CỔ PHIẾU/ETF VIỆT NAM có trong bảng chỉ báo — vũ trụ giao dịch duy nhất"; JSON schema symbol "mã CP/ETF Việt Nam hợp lệ"; comment map instrumentIdBySymbol cập nhật (map tự loại phi-VN qua isTradableSandboxInstrument).
+- signal-execution.ts: cổng chính sách VN-only (execRuleFor null → 400 thông điệp "chính sách Hội đồng chỉ đầu tư tại thị trường VN" / INDEX riêng); XOÁ nhánh isForeign sizing (~120 dòng) + nhánh TWAP foreign-market; giữ markPositionsVND cho equity; plan.ts bỏ "foreign-market" khỏi SinglePlanReason (ghi chú giá trị JSON lịch sử vẫn đọc được).
+- tick route: XOÁ fillForeignOrder + matchForeignSandboxOrders + ForeignFillSnapshot + call sites (early-return + main path) + foreignFills response field (~410 dòng) — tick simulator + khớp lệnh sandbox thuần VN như trước #107; GIỮ recomputeEquity superset (định giá trung thực mọi vị thế mở); market-session.ts xoá isForeignSessionOpen + ForeignSessionKind (mất consumer).
+- run route: import/usage buildIntlReferenceBlock + comment v2.2; invalid-symbol message nhắc chính sách ("chỉ chọn mã Việt Nam… thị trường quốc tế chỉ tham chiếu"); priceRound comment cập nhật.
+- vision.ts: mục (4) THỊ TRƯỜNG ĐA TÀI SẢN giữ theo dõi 5 nhóm + USD/VND (nhu cầu trader) nhưng chân đổi: "quốc tế & tỷ giá chỉ THAM CHIẾU… đầu tư Hội đồng chỉ tại thị trường Việt Nam"; header comment v2.2.
+- UI council-workspace.tsx: empty-state ("Hội đồng có thể đầu tư cổ phiếu/ETF Việt Nam… thị trường quốc tế & tỷ giá chỉ theo dõi tham chiếu") + sr-only h2 ("đầu tư chỉ tại thị trường VN (quốc tế tham chiếu)") + header comment; bảng vị thế nhóm giữ nguyên cơ chế (nhóm phi-VN tự ẩn khi không có vị thế).
+- Scripts: XOÁ p107-verify.ts + p107-sig-e2e.ts (nghiệm thu đa thị trường đã thu hồi); MỚI scripts/p108-verify.ts (53 kiểm: luật vi mô 12 mã · map tín hiệu · bộ định giá lịch sử · prompt vision/intl/chairman · chặn EURUSD=X + GC=F (400 + 0 lệnh) · hồi quy TCB lot-100 + băng + hermetic cash · DB sạch · D-LEDGER idempotent + 9 hàng · 6 API) + scripts/p108-sig-e2e.ts (EURUSD=X CHẶN + TCB tạo lệnh + dọn sạch) — cả hai hermetic tự dọn.
+- Docs: TECHNICAL_BLUEPRINT v1.9.3 changelog; UIUX_UPGRADE_BLUEPRINT hiệu chỉnh v1.2 (UI/UX hoãn nhưng ghi ràng buộc chính sách VN-only cho các phần sẽ làm).
+
+Stage Summary:
+- CHÍNH SÁCH VN-ONLY CHẶN SẠCH Ở 3 LỚP: prompt (map + quy tắc Chủ tịch + khối tham chiếu) → tạo lệnh (400 thông điệp chính sách) → khớp lệnh (tick route thuần VN). DB: 0 vị thế/lệnh/tín hiệu phi-VN.
+- NGOẠI HỐI & THỊ TRƯỜNG QTẾ VẪN THEO DÕI (đúng chỉ thị): X-MARKETS sync 06:15 nguyên vẹn; khối THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU) tiêm 3 đường prompt; vision mục 4 giữ 5 nhóm + USD/VND.
+- BỘ ĐỊNH GIÁ LỊCH SỬ GIỮ NGUYÊN: markPositionVND/idx/usdVndAtDate — hiển thị trung thực + D-LEDGER đánh giá tín hiệu quá khứ; mở lại đầu tư phi-VN sau này = bật lại switch case execRuleFor.
+- p108-verify 53/53 PASS · p108-sig-e2e PASS · lint 0 · tsc 0 (src).
+
+---
+Task ID: 108-FIXBUG-council-exec (phiên #108 — theo chỉ thị trader "khởi động giao thức fixbug với phần vừa triển khai")
+Agent: main-orchestrator (Z.ai Code)
+Task: GIAO THỨC FIXBUG (Fixbug.md §1–§9) trên scope "phần vừa triển khai" = E-EXEC + C-VISION + module Hội đồng + tick route (toàn bộ thay đổi #107 + #108). 4 lớp rà §4 mỗi vòng · fix P0→P1→P2 · test kiểm định §5 · vòng lặp tới 0 finding + Vòng Xác Nhận §7.
+
+Work Log:
+- VÒNG 1 (4 lớp):
+  * Tĩnh-code: đọc lại toàn bộ diff 13 file (git diff 239+/1208−) — luồng cổng createPaperOrderFromSignal (HOLD → live-gate → VN-only → sizing VN → TWAP) đúng; tick route sau xoá ~410 dòng không còn tham chiếu treo (tsc + lint 0); market-session còn vnShift dùng chung; agent-context 3 đường tiêm parity đổi tên nhất quán.
+  * Tĩnh-dữ liệu: DB — 1 vị thế mở duy nhất TCB (HOSE sandbox) · 0 lệnh chờ · 0 vị thế/lệnh phi-VN; PHÁT HIỆN 1 tín hiệu ACTIVE EURUSD=X (tàn dư test p107-sig-e2e, chưa từng convert — 0 order/marker/position/trade) → F-1081-02.
+  * Động-runtime: engine :3003 sống (bun --hot, tick 200 liên tục trong dev.log; cơn HTTP 500 17:33–17:34 là cửa sổ hot-reload GIỮA CHỈNH SỬA của chính phiên — tự hồi phục khi import vá xong, engine fail-soft "giữ state tick trước" đúng thiết kế #42); engine-state eodSync/intlSync 2026-10-12 OK; PHÁT HIỆN /api/council/overview?from=2026-13-01 → 500 → F-1081-01.
+  * Động-browser (agent-browser, desktop 1440 + mobile 390): module Hội đồng render (KPI 100,0tr₫ · Tiền 96,7tr₫ · L/L −34.905₫ · bảng nhóm "CP Việt Nam 3,3tr₫ −10.000₫" + TCB 6 cột · sổ 9 quyết định Σ −14.905₫) · nút "Đánh giá ngay" chạy OK · module Thị trường card Đa rổ nguyên vẹn · mobile sw=cw=390 không cuộn ngang · footer pushed-down tự nhiên (pageH > vh) · 0 page error · console sạch → PHÁT HIỆN sr-only h2 còn "đa thị trường" → F-1081-03.
+- FINDINGS + FIX + TEST KIỂM ĐỊNH:
+  * F-1081-01 (P1): council/overview validate from/to chỉ DATE_RE (định dạng) — "2026-13-01" vượt regex → new Date() Invalid → PrismaClientValidationError → 500 thay vì 422. VÁ: isValidIctDay (regex + tháng 1-12/ngày 1-31 + isNaN getTime — pattern đã có ở data-quality route). KIỂM ĐỊNH tái hiện đúng điều kiện: from=2026-13-01 → 422 · from=abc → 422 · from/to hợp lệ → 200 (curl).
+  * F-1081-02 (P2): residue test p107-sig-e2e — tín hiệu EURUSD=X BUY ACTIVE zombie (retry auto-convert mỗi chu kỳ K2, không bao giờ khớp dưới chính sách mới). VÁ: xoá (rationale test tường minh). KIỂM ĐỊNH: signal phi-VN còn lại = 0.
+  * F-1081-03 (P2): sr-only h2 module Hội đồng "tài khoản toàn cục đa thị trường" — sai ngữ nghĩa v2.2. VÁ: "tài khoản toàn cục · đầu tư chỉ tại thị trường VN (quốc tế tham chiếu) · sổ đánh giá quyết định". KIỂM ĐỊNH: browser eval #workspace-panel-council h2 trả đúng chuỗi mới.
+- VÒNG 2 (rà lại TOÀN scope như chưa từng fix): quét lại diff từng file + runtime (awk xác định foreignFeeVND-error cuối dòng 48.538 < tick-200 cuối dòng 48.842 — 0 lỗi mới sau fix; PrismaValidationError cuối 48.635 = 2 lần gọi test TRƯỚC vá, sau đó chỉ 200/422) + engine log sạch + socket.io 404 (3.142 lần, có từ dòng 1.143 — pre-existing artifact duyệt localhost trực tiếp, ngoài scope) → 0 finding mới.
+- VÒNG XÁC NHẬN §7 (độc lập, nặng runtime+browser): p108-verify 53/53 PASS lại · p108-sig-e2e (EURUSD=X CHẶN 400 chính sách + 0 lệnh; TCB lot-100 qty 100 giá 32.600; cash 96.725.095₫ nguyên vẹn) · lint 0 · tsc 0 (src) · browser desktop 1440 (h2 mới + council + 0 error) + mobile 390 (sw=cw=390, no h-scroll, council render) · console sạch · dev.log 200 dòng cuối 0 lỗi.
+
+Stage Summary:
+- Trạng thái: TRIỆT ĐỂ (2 vòng fix + 1 vòng xác nhận sạch, §7 thoả).
+- Findings: 3 (P0: 0 · P1: 1 · P2: 2) — cả 3 đã vá + kiểm định bằng chứng.
+- Phát hiện ngoài phạm vi (ghi "còn treo"): 6 route #105 cùng lớp lỗi validate ngày regex-only của F-1081-01 — orders · news · news/archive · signals · agents/messages · instruments/bars ("2026-13-01" → 500 thay vì 422) — đề xuất chạy Fixbug scope `api`; socket.io 404 khi duyệt localhost trực tiếp (artifact môi trường, qua gateway preview đúng).
+- Ghi trung thực: cơn 500 17:33–17:34 trong dev.log là cửa sổ hot-reload giữa chừng chỉnh sửa của phiên #108 (không phải bug code) — engine fail-soft xử lý đúng, tự hồi phục.

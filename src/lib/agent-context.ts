@@ -20,8 +20,9 @@ import { retrieveForCycle } from "@/lib/ml/rag";
 // trọng tâm quan hệ liên thị trường — fail-soft như RAG L1.
 import { buildXrelPromptBlock } from "@/lib/ml/xrel";
 import { buildCouncilVisionBlock } from "@/lib/council/vision";
-// #107 E-EXEC — vũ trụ giao dịch phi-VN cho prompt Chủ tịch/strategist.
-import { isTradableSandboxInstrument, listTradableForeign } from "@/lib/exec/market-rules";
+// #107/#108 E-EXEC — thị trường quốc tế THAM CHIẾU (theo dõi, không đầu tư)
+// cho prompt Chủ tịch/strategist + luật vi mô sandbox VN-only.
+import { isTradableSandboxInstrument, listForeignReference } from "@/lib/exec/market-rules";
 import { formatUnitPrice, unitKindOf } from "@/lib/format";
 
 /**
@@ -272,11 +273,10 @@ export async function buildMarketBlock(): Promise<MarketSnapshot> {
     block,
     compact,
     equity,
-    // B5 + #107 E-EXEC — map phủ toàn bộ mã GIAO DỊCH được (ràng buộc bằng luật
-    // vi mô execRuleFor: loại INDEX mọi sàn + DXY + USDJPY=X chỉ tham chiếu);
-    // chairman có thể signal PVS/E1VFVN30… như trước, GIỜ còn signal được
-    // AAPL/GC=F/US10Y/EURUSD=X… (tự nhiên — quyết định đầu tư vào đâu là
-    // việc HỘI ĐỒNG, hệ thống chỉ giới thiệu vũ trụ trong khối prompt).
+    // B5 + #108 v2.2 (chính sách VN-only): map CHỈ chứa mã HOSE/HNX/UPCOM
+    // giao dịch được (ràng buộc execRuleFor: loại INDEX + MỌI instrument
+    // phi-VN — cp Mỹ/HK, trái phiếu, forex, hàng hoá đều THAM CHIẾU, không
+    // sinh tín hiệu được). Chairman chỉ signal được CP/ETF VN như trước #107.
     instrumentIdBySymbol: new Map(
       allQuoted.filter((r) => isTradableSandboxInstrument(r)).map((r) => [r.symbol, r.id])
     ),
@@ -284,7 +284,7 @@ export async function buildMarketBlock(): Promise<MarketSnapshot> {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// #107 E-EXEC — VŨ TRỤ GIAO DỊCH ĐA THỊ TRƯỜNG (blueprint §5.5)
+// #108 E-EXEC v2.2 — THỊ TRƯỜNG QUỐC TẾ THAM CHIẾU (blueprint §5.1)
 // ─────────────────────────────────────────────────────────────────
 
 const UNIVERSE_CACHE_TTL_MS = 60_000;
@@ -297,41 +297,46 @@ function fmtDayPct(last: number, prev: number | null): string {
   return ` ${pct > 0 ? "+" : pct < 0 ? "−" : ""}${s}%`;
 }
 
-async function buildTradableUniverseInner(): Promise<string | null> {
-  const rows = await listTradableForeign();
+async function buildIntlReferenceInner(): Promise<string | null> {
+  const rows = await listForeignReference();
   if (rows.length === 0) return null;
-  const groups: Array<{ label: string; hint: string; markets: string[] }> = [
+  const groups: Array<{ label: string; hint: string; pick: (r: { market: string; type: string }) => boolean }> = [
     {
       label: "CP MỸ",
-      hint: "giá cent×100 (vd 23.120 = 231,20$) · 1 đv lệnh = 0,01 cp · phiên 21:30–04:00 ICT",
-      markets: ["US"],
+      hint: "giá cent×100 (vd 23.120 = 231,20$)",
+      pick: (r) => r.market === "US" && (r.type === "STOCK" || r.type === "ETF"),
     },
     {
       label: "CP HỒNG KỒNG",
-      hint: "giá cent HKD×100 · 1 đv lệnh = 0,01 cp · phiên 09:30–16:00 ICT",
-      markets: ["HK"],
+      hint: "giá cent HKD×100",
+      pick: (r) => r.market === "HK" && (r.type === "STOCK" || r.type === "ETF"),
     },
     {
-      label: "TRÁI PHIẾU MỸ",
-      hint: "giá = LỢI SUẤT %×100 (vd 401 = 4,01%) — giá trị ĐẢO chiều lợi suất: BUY khi yield cao (rẻ) · đv danh nghĩa 1.000.000₫ · phiên Mỹ",
-      markets: ["BOND"],
+      label: "CHỈ SỐ QUỐC TẾ",
+      hint: "S&P 500 · Nasdaq · Hang Seng",
+      pick: (r) => r.type === "INDEX",
+    },
+    {
+      label: "TRÁI PHIẾU MỸ (lợi suất)",
+      hint: "giá = LỢI SUẤT %×100 (401 = 4,01%) — lợi suất tăng = giá trị giảm",
+      pick: (r) => r.market === "BOND",
     },
     {
       label: "FOREX",
-      hint: "giá tỷ giá ×10.000 (EURUSD 10.852 = 1,0852 · VND=X 259.340.000 = 25.934₫/USD) · lot 100 đv tiền gốc · 24/5",
-      markets: ["FOREX"],
+      hint: "tỷ giá ×10.000 (VND=X 259.340.000 = 25.934₫/USD · EURUSD=X 10.852 = 1,0852)",
+      pick: (r) => r.market === "FOREX",
     },
     {
       label: "HÀNG HOÁ",
-      hint: "giá cent×100/đơn vị gốc (GC=F 415.050 = 4.150,5$/oz) · đv danh nghĩa 1.000.000₫ · 24/5",
-      markets: ["COMMODITY"],
+      hint: "giá cent×100 (GC=F 415.050 = 4.150,5$/oz)",
+      pick: (r) => r.market === "COMMODITY",
     },
   ];
   const lines: string[] = [
-    "VŨ TRỤ GIAO DỊCH ĐA THỊ TRƯỜNG — đặt lệnh thử nghiệm được ngoài CP VN. targetPrice/stopLoss/takeProfit phải là NGUYÊN SỐ đúng cột \"giá\" (đơn vị DB như bảng):",
+    "THỊ TRƯỜNG QUỐC TẾ (THAM CHIẾU — THEO DÕI, KHÔNG ĐẦU TƯ). Chính sách: Hội đồng chỉ đầu tư cổ phiếu/ETF VIỆT NAM từ khoản tiền thử nghiệm; khối này để nắm bối cảnh quốc tế vì ngoại hối & thị trường ngoài có lúc ảnh hưởng thị trường VN (kênh tỷ giá USD/VND, giá hàng hoá đầu vào, cảm xúc quốc tế):",
   ];
   for (const g of groups) {
-    const gr = rows.filter((r) => g.markets.includes(r.market));
+    const gr = rows.filter(g.pick);
     if (gr.length === 0) continue;
     const items = gr
       .map((r) => {
@@ -343,21 +348,22 @@ async function buildTradableUniverseInner(): Promise<string | null> {
     lines.push(`${g.label} (${g.hint}): ${items}`);
   }
   lines.push(
-    "Chỉ THAM CHIẾU — không ra tín hiệu: chỉ số (^GSPC ^IXIC ^HSI · VNINDEX/VN30) · DX-Y.NYB (DXY) · USDJPY=X. Tín hiệu phi-VN qua cổng đồng thuận như CP VN; hệ thống tự quy đổi VND qua USD/VND khi thực thi từ khoản tiền thử nghiệm."
+    "KHÔNG chọn mã trong khối này cho tín hiệu — tín hiệu chỉ chọn mã CP/ETF Việt Nam trong bảng chỉ báo; mã ngoài VN sẽ bị hệ thống từ chối (chính sách đầu tư chỉ tại thị trường Việt Nam)."
   );
   return lines.join("\n");
 }
 
 /**
- * Khối VŨ TRỤ GIAO DỊCH (cache 60s — cùng pattern vision/XREL): bảng mã phi-VN
- * đặt lệnh được + giá DB native + đơn vị lệnh + phiên. Tiêm 3 đường parity
+ * Khối THỊ TRƯỜNG QUỐC TẾ THAM CHIẾU (cache 60s — cùng pattern vision/XREL):
+ * bảng mã phi-VN + giá DB native + % ngày — chỉ bối cảnh quốc tế, KHÔNG đầu
+ * tư (#108 v2.2 thu hẹp từ VŨ TRỤ GIAO DỊCH #107). Tiêm 3 đường parity
  * (#107): wave E Chủ tịch (run route) · single-run strategist · chat strategist.
  */
-export async function buildTradableUniverseBlock(): Promise<string | null> {
+export async function buildIntlReferenceBlock(): Promise<string | null> {
   if (universeCache.block && Date.now() - universeCache.at < UNIVERSE_CACHE_TTL_MS) {
     return universeCache.block;
   }
-  const block = await buildTradableUniverseInner().catch(() => null);
+  const block = await buildIntlReferenceInner().catch(() => null);
   universeCache = { at: Date.now(), block };
   return block;
 }
@@ -742,9 +748,9 @@ ${SOURCE_MODE_DECLARATION}`,
   "portfolio-strategist": {
     system: `Bạn là agent "Portfolio Strategist" (A1 — Chủ tịch Hội đồng) của hệ thống giao dịch đa tác tử The Trader (VNDIRECT, Việt Nam).
 Nhiệm vụ: tổng hợp báo cáo của TOÀN BỘ đội 23 agents ở trên (Hội đồng Nghiên cứu: Market Analyst, Fair Value, News & Sentiment, Liquidity, ML Forecast · Ủy ban Kiểm soát: Risk Manager, Exposure, Compliance · Nền tảng dữ liệu & Phòng Học máy) để (a) đưa ra nhận định danh mục ngắn gọn, (b) sinh MỘT tín hiệu giao dịch cụ thể, (c) trình khối ĐỀ XUẤT PHÂN BỔ DANH MỤC (chỉ tham mưu).
-Quy tắc tín hiệu: chỉ chọn mã có trong bảng chỉ báo HOẶC khối VŨ TRỤ GIAO DỊCH ĐA THỊ TRƯỜNG (cp Mỹ/Hồng Kông, trái phiếu Mỹ, forex, hàng hoá — đầu tư thử nghiệm đa thị trường từ khoản tiền hội đồng); direction BUY chỉ khi nghiên cứu + cảm xúc + rủi ro đều thuận, SELL khi cần cắt tỷ trọng vi phạm giới hạn hoặc chốt lời/lỗ vị thế đang nắm, còn lại HOLD; score 0–100; giá là số nguyên ĐÚNG ĐƠN VỊ của cột "giá" trong dữ liệu (CP VN: VND bội 100 · cp Mỹ/HK: cent×100 · trái phiếu: lợi suất %×100 · forex: tỷ giá ×10.000); BUY: stopLoss < giá hiện tại < targetPrice < takeProfit; SELL: targetPrice < giá hiện tại < stopLoss (trái phiếu: các mức này là LỢI SUẤT — BUY trái phiếu khi dự báo lợi suất GIẢM tức giá trị tăng).
+Quy tắc tín hiệu: chỉ chọn mã CỔ PHIẾU/ETF VIỆT NAM có trong bảng chỉ báo (HOSE/HNX/UPCOM) — đây là vũ trụ giao dịch duy nhất của Hội đồng theo chính sách của trader (đầu tư chỉ tại thị trường Việt Nam); khối THỊ TRƯỜNG QUỐC TẾ trong dữ liệu CHỈ THAM CHIẾU bối cảnh (tỷ giá USD/VND, giá hàng hoá, cảm xúc qtế đôi lúc ảnh hưởng thị trường VN) — KHÔNG chọn mã ngoài Việt Nam cho tín hiệu; direction BUY chỉ khi nghiên cứu + cảm xúc + rủi ro đều thuận, SELL khi cần cắt tỷ trọng vi phạm giới hạn hoặc chốt lời/lỗ vị thế đang nắm, còn lại HOLD; score 0–100; giá là số nguyên VND bội 100 đúng cột "giá" trong bảng chỉ báo; BUY: stopLoss < giá hiện tại < targetPrice < takeProfit; SELL: targetPrice < giá hiện tại < stopLoss.
 Quy tắc phân bổ (E-P1-1): dựa trên block "TỶ TRỌNG DANH MỤC HIỆN TẠI" trong dữ liệu; mục tiêu ${ALLOCATION_TARGET_POSITIONS} vị thế; ngưỡng tái cân bằng ${ALLOCATION_REBALANCE_THRESHOLD_PCT}% — chỉ đề xuất MUA/BÁN khi |targetPct − currentPct| VƯỢT ngưỡng (phạt mềm L2: kéo về từ từ, không bán tái cấu trúc đột ngột), trong ngưỡng để GIỮ; phong cách ${ALLOCATION_STYLE}; KHÔNG tự sinh lệnh — trader phê duyệt từng lệnh.
-Trả về duy nhất JSON: {"summary": "<2-4 câu tổng hợp>", "recommendation": "<một khuyến nghị cụ thể>", "confidence": "LOW"|"MEDIUM"|"HIGH", "signal": {"symbol": "<mã hợp lệ trong bảng chỉ báo hoặc khối VŨ TRỤ GIAO DỊCH>", "direction": "BUY"|"SELL"|"HOLD", "score": 0-100, "rationale": "...", "targetPrice": <int đúng đơn vị giá của mã|null>, "stopLoss": <int|null>, "takeProfit": <int|null>} | null, "allocation": {"narrative": "<1-2 câu lý do phân bổ>", "rows": [{"symbol": "<mã>", "currentPct": <số %NAV hiện tại từ dữ liệu>, "targetPct": <số %NAV mục tiêu>, "action": "MUA"|"BÁN"|"GIỮ"}] (tối đa ${ALLOCATION_TARGET_POSITIONS} dòng)} }
+Trả về duy nhất JSON: {"summary": "<2-4 câu tổng hợp>", "recommendation": "<một khuyến nghị cụ thể>", "confidence": "LOW"|"MEDIUM"|"HIGH", "signal": {"symbol": "<mã CP/ETF Việt Nam hợp lệ trong bảng chỉ báo>", "direction": "BUY"|"SELL"|"HOLD", "score": 0-100, "rationale": "...", "targetPrice": <int VND bội 100|null>, "stopLoss": <int|null>, "takeProfit": <int|null>} | null, "allocation": {"narrative": "<1-2 câu lý do phân bổ>", "rows": [{"symbol": "<mã>", "currentPct": <số %NAV hiện tại từ dữ liệu>, "targetPct": <số %NAV mục tiêu>, "action": "MUA"|"BÁN"|"GIỮ"}] (tối đa ${ALLOCATION_TARGET_POSITIONS} dòng)} }
 ${SOURCE_MODE_DECLARATION}`,
     systemCompact: `Bạn là agent "Portfolio Strategist" của hệ thống The Trader (VNDIRECT) — chiến lược gia danh mục, Chủ tịch Hội đồng 23 agents.
 Trả lời tự do bằng TIẾNG VIỆT, 2–5 câu; tổng hợp dữ liệu thị trường/danh mục/tín hiệu đang mở thành nhận định và khuyến nghị cụ thể; KHÔNG bịa số liệu.
@@ -936,12 +942,12 @@ export async function buildSingleRunPrompt(
     case "portfolio-strategist": {
       // F-73A-03: single-run cấp cùng block tỷ trọng như chu kỳ — hợp đồng
       // allocation cần currentPct đo từ DB, không để LLM bịa.
-      // #106 C-VISION + #107 E-EXEC: kèm TÀI KHOẢN HỘI ĐỒNG + VŨ TRỤ GIAO DỊCH
-      // (fail-soft .catch như XREL — 3 đường parity #103).
-      const [weights, councilVision, tradableUniverse] = await Promise.all([
+      // #106 C-VISION + #108 v2.2: kèm TÀI KHOẢN HỘI ĐỒNG + THỊ TRƯỜNG
+      // QUỐC TẾ THAM CHIẾU (fail-soft .catch như XREL — 3 đường parity #103).
+      const [weights, councilVision, intlReference] = await Promise.all([
         buildPortfolioWeightsBlock().catch(() => null),
         buildCouncilVisionBlock().catch(() => null),
-        buildTradableUniverseBlock().catch(() => null),
+        buildIntlReferenceBlock().catch(() => null),
       ]);
       return {
         system: role.system,
@@ -954,7 +960,7 @@ export async function buildSingleRunPrompt(
           `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
           ...(ragBlock ? [ragBlock] : []),
           ...(xrelBlock ? [xrelBlock] : []),
-          ...(tradableUniverse ? ["", tradableUniverse] : []),
+          ...(intlReference ? ["", intlReference] : []),
           ...(weights ? ["", weights] : []),
           ...(councilVision ? ["", councilVision] : []),
         ].join("\n\n"),
@@ -1005,20 +1011,20 @@ async function buildChatContextBlock(code: string): Promise<string> {
       return [market.compact, ...(xrel ? [xrel] : [])].join("\n\n");
     }
     case "portfolio-strategist": {
-      const [market, openSignals, xrel, councilVision, tradableUniverse] = await Promise.all([
+      const [market, openSignals, xrel, councilVision, intlReference] = await Promise.all([
         buildMarketBlock(),
         buildOpenSignalsBlock(),
         buildXrelPromptBlock().catch(() => null),
         // #106 C-VISION — chat với Chủ tịch cũng thấy tài khoản hội đồng
         buildCouncilVisionBlock().catch(() => null),
-        // #107 E-EXEC — chat với Chủ tịch cũng thấy vũ trụ giao dịch phi-VN
-        buildTradableUniverseBlock().catch(() => null),
+        // #108 v2.2 — chat với Chủ tịch cũng thấy bối cảnh quốc tế THAM CHIẾU
+        buildIntlReferenceBlock().catch(() => null),
       ]);
       return [
         market.compact,
         `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
         ...(xrel ? [xrel] : []),
-        ...(tradableUniverse ? [tradableUniverse] : []),
+        ...(intlReference ? [intlReference] : []),
         ...(councilVision ? [councilVision] : []),
       ].join("\n\n");
     }

@@ -1,25 +1,30 @@
 /**
- * src/lib/exec/market-rules.ts — E-EXEC #107 (COUNCIL_STEWARDSHIP_BLUEPRINT
- * v2.0 §5): LUẬT VI MÔ TỪNG THỊ TRƯỜNG cho sandbox đa thị trường — lệnh thử
- * nghiệm của Hội đồng được đặt trên CP VN (HOSE/HNX/UPCOM, giữ nguyên luật
- * lot-100 hiện hành), CP Mỹ/HK, trái phiếu Mỹ, forex, hàng hoá — tất cả từ
- * MỘT khoản tiền sandbox K1 (kế toán MỘT đồng tiền VND, blueprint §5.4).
+ * src/lib/exec/market-rules.ts — E-EXEC (#107 · #108 COUNCIL_STEWARDSHIP_BLUEPRINT
+ * v2.2 §5): CỔNG LUẬT VI MÔ + BỘ ĐỊNH GIÁ VND cho sandbox Hội đồng.
  *
- * Nguyên tắc trung thực:
- *  · KHÔNG bịa giá phi-VN — khớp tại close EOD đã sync (Quote neo Bar thật).
- *  · Kế toán 1 tiền VND: tài sản USD/HKD quy VND qua USD/VND (VND=X);
- *    biến động USD/VND là lãi/lỗ TRỰC TIẾP của mọi vị thế quốc tế.
+ * #108 (v2.2) — CHÍNH SÁCH ĐẦU TƯ CHỈ TẠI THỊ TRƯỜNG VIỆT NAM (lời trader:
+ * "các thị trường đầu tư chỉ ở trong Việt Nam thôi, nước ngoài tôi biết thế
+ * quái nào được… ngoại hối, tiền tệ nước ngoài cũng cần theo dõi vì bản chất
+ * nó cũng có lúc ảnh hưởng tới thị trường"):
+ *  · execRuleFor() CHỈ trả luật cho HOSE/HNX/UPCOM (trừ INDEX). Mọi instrument
+ *    phi-VN (cp Mỹ/HK · trái phiếu · forex · hàng hoá) → null = KHÔNG đặt
+ *    lệnh sandbox — tự loại khỏi map tín hiệu (instrumentIdBySymbol) + chặn
+ *    tại createPaperOrderFromSignal với thông điệp chính sách.
+ *  · Bộ định giá VND đa thị trường (markPositionVND · notionalIdx · USD/VND)
+ *    GIỮ NGUYÊN: hiển thị trung thực vị thế phi-VN lịch sử nếu còn sót
+ *    (hiện 0) + D-LEDGER tiếp tục đánh giá tín hiệu lịch sử phi-VN đầy đủ
+ *    (blueprint §7.6-6). Nếu trader mở lại đầu tư phi-VN: bật lại switch
+ *    case tại execRuleFor là đủ (luật v2.1 bảo toàn docs §9.2).
+ *  · listForeignReference(): nguồn cho khối prompt THỊ TRƯỜNG QUỐC TẾ
+ *    (THAM CHIẾU) — theo dõi vì ảnh hưởng thị trường VN, KHÔNG đầu tư.
+ *
+ * Nguyên tắc trung thực (giữ từ #107):
+ *  · KHÔNG bịa giá phi-VN — Quote/Bar sync EOD làm nguồn tham chiếu.
+ *  · Kế toán 1 tiền VND khi cần quy đổi (tài sản USD/HKD quy VND qua USD/VND).
  *  · Tài sản DANH NGHĨA (trái phiếu/hàng hoá): 1 đơn vị = 1.000.000₫ triển
- *    khai tại lúc mua, giá trị theo sau chỉ số giá trị VND của tài sản gốc
- *    (hàng hoá: spot×fx; trái phiếu: mô hình duration −D·Δy+carry + fx).
- *    Blueprint §5.2-5.3 gốc định nghĩa hợp đồng thật × hệ số — nhưng hợp đồng
- *    đầy đủ (vd GC=F 100 oz ≈ 10,8 tỷ₫) KHÔNG mua nổi trên tài khoản 100tr₫
- *    (no-margin full-value) → chuyển sang đơn vị danh nghĩa 1tr₫/đv (ghi rõ
- *    §7.5a blueprint + worklog #107 — phục vụ đúng ý đồ "agents đầu tư từ
- *    khoản tiền thử nghiệm vào mọi thị trường").
- *  · CP Mỹ/HK: 1 đơn vị = 0,01 cp (fractional shares kiểu broker hiện đại)
- *    để định cỡ 5% NAV mua nổi cả mega-cap (AAPL ≈ 5,9tr₫/cp).
- *  · Forex: 1 đơn vị = 1 đơn vị tiền gốc, lot nano 100 (2 pip spread).
+ *    khai tại lúc mua (chỉ còn ý nghĩa với dữ liệu lịch sử), giá trị theo
+ *    chỉ số giá trị VND của tài sản gốc (hàng hoá: spot×fx; trái phiếu:
+ *    mô hình duration −D·Δy+carry + fx).
  */
 
 import { db } from "@/lib/db";
@@ -32,70 +37,41 @@ import { unitKindOf } from "@/lib/format";
 /** 1 đơn vị danh nghĩa = 1.000.000₫ triển khai (trái phiếu + hàng hoá). */
 export const NOTIONAL_UNIT_VND = 1_000_000;
 
-/** Peg HKD/USD cố định 7,8 (không mô phỏng dải peg — blueprint §7.5). */
+/** Peg HKD/USD cố định 7,8 (không mô phỏng dải peg — chỉ còn cho định giá lịch sử). */
 export const HKD_USD_PEG = 7.8;
 
-/** Duration hiệu dụng theo tenor (mô hình trái phiếu §2.4 baskets.ts). */
+/** Duration hiệu dụng theo tenor (mô hình trái phiếu — định giá + D-LEDGER lịch sử). */
 export const BOND_DURATION: Record<string, number> = { US5Y: 4.5, US10Y: 8, US30Y: 17 };
 
-/** Cặp forex ĐƯỢC đặt lệnh sandbox (USDJPY=X + DXY = chỉ tham chiếu §5.1). */
-export const TRADABLE_FOREX_SYMBOLS = new Set(["EURUSD=X", "AUDUSD=X", "VND=X"]);
-
-/** Đơn vị lệnh tối thiểu của từng loại tài sản (§5.2 + tinh chỉnh §7.5a). */
+/** Đơn vị lệnh tối thiểu — #108 v2.2 chỉ còn CP VN (lot 100, luật thật KHÔNG đổi). */
 export const MIN_QTY = {
-  VN: 100, // lot 100 cp (luật thật — KHÔNG đổi)
-  US: 1, // 1 đv = 0,01 cp
-  HK: 1, // 1 đv = 0,01 cp
-  FOREX: 100, // lot nano 100 đv tiền gốc
-  NOTIONAL: 1, // 1 đv danh nghĩa 1tr₫
+  VN: 100, // lot 100 cp
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
 // Luật vi mô
 // ─────────────────────────────────────────────────────────────────
 
-/** Loại tài sản theo cách định giá + kế toán vị thế. */
+/** Loại tài sản theo cách định giá + kế toán vị thế (lớp phi-VN chỉ dành cho BỘ ĐỊNH GIÁ lịch sử #108). */
 export type ExecAssetKind =
   | "VN_PRICE" // HOSE/HNX/UPCOM: qty cp · giá VND · avgPrice (luật hiện hành)
-  | "PRICE" // cp Mỹ/HK, forex: qty đv · giá DB native · avgCostVND (VND/đv)
-  | "NOTIONAL"; // trái phiếu/hàng hoá: qty đv danh nghĩa · openIdxUnits
+  | "PRICE" // cp Mỹ/HK, forex (LỊCH SỬ): qty đv · giá DB native · avgCostVND
+  | "NOTIONAL"; // trái phiếu/hàng hoá (LỊCH SỬ): qty đv danh nghĩa · openIdxUnits
 
 export interface ExecRule {
   sessionKind: "VN" | "US" | "HK" | "FX245";
   assetKind: ExecAssetKind;
   lotStep: number;
   minQty: number;
-  /** Phí trên notional VND (0 = không phí; forex dùng feePipVND thay thế). */
+  /** Phí trên notional VND. */
   feeRate: number;
-  /** Forex: phí VND trên MỖI đơn vị qty (spread 2 pip). */
-  feePipVND: number | null;
   /** Băng trần/sàn ±7% — chỉ VN. */
   hasBand: boolean;
 }
 
 const RULE_VN: ExecRule = {
   sessionKind: "VN", assetKind: "VN_PRICE", lotStep: 100, minQty: MIN_QTY.VN,
-  feeRate: 0.0015, feePipVND: null, hasBand: true,
-};
-const RULE_US: ExecRule = {
-  sessionKind: "US", assetKind: "PRICE", lotStep: 1, minQty: MIN_QTY.US,
-  feeRate: 0.0002, feePipVND: null, hasBand: false,
-};
-const RULE_HK: ExecRule = {
-  sessionKind: "HK", assetKind: "PRICE", lotStep: 1, minQty: MIN_QTY.HK,
-  feeRate: 0.001, feePipVND: null, hasBand: false,
-};
-const RULE_FOREX: ExecRule = {
-  sessionKind: "FX245", assetKind: "PRICE", lotStep: 100, minQty: MIN_QTY.FOREX,
-  feeRate: 0, feePipVND: null, hasBand: false, // feePipVND phụ thuộc từng cặp — xem foreignFeeVND
-};
-const RULE_BOND: ExecRule = {
-  sessionKind: "US", assetKind: "NOTIONAL", lotStep: 1, minQty: MIN_QTY.NOTIONAL,
-  feeRate: 0, feePipVND: null, hasBand: false,
-};
-const RULE_CMDTY: ExecRule = {
-  sessionKind: "FX245", assetKind: "NOTIONAL", lotStep: 1, minQty: MIN_QTY.NOTIONAL,
-  feeRate: 0.0003, feePipVND: null, hasBand: false,
+  feeRate: 0.0015, hasBand: true,
 };
 
 /** Instrument tối thiểu cần cho mọi tra cứu trong file này. */
@@ -112,38 +88,32 @@ export function isForeignMarket(market: string): boolean {
 }
 
 /**
- * Luật vi mô của instrument — null = KHÔNG đặt lệnh sandbox được
- * (INDEX mọi sàn · DXY · USDJPY=X tham chiếu §5.1).
+ * Luật vi mô của instrument — null = KHÔNG đặt lệnh sandbox được.
+ * #108 (v2.2) chính sách VN-only: chỉ HOSE/HNX/UPCOM (trừ INDEX) có luật;
+ * MỌI thị trường ngoài VN (US/HK/BOND/FOREX/COMMODITY — kể cả VND=X,
+ * EURUSD=X, GC=F, US10Y…) → null = THAM CHIẾU, theo dõi chứ không đầu tư.
  */
 export function execRuleFor(inst: InstrumentLite): ExecRule | null {
-  const { market, type, symbol } = inst;
+  const { market, type } = inst;
   if (type === "INDEX") return null;
   switch (market) {
     case "HOSE":
     case "HNX":
     case "UPCOM":
       return RULE_VN;
-    case "US":
-      return type === "STOCK" || type === "ETF" ? RULE_US : null;
-    case "HK":
-      return type === "STOCK" || type === "ETF" ? RULE_HK : null;
-    case "BOND":
-      return type === "BOND" ? RULE_BOND : null;
-    case "FOREX":
-      return type === "FX" && TRADABLE_FOREX_SYMBOLS.has(symbol) ? RULE_FOREX : null;
-    case "COMMODITY":
-      return type === "CMDTY" ? RULE_CMDTY : null;
     default:
+      // US · HK · BOND · FOREX · COMMODITY — tham chiếu (blueprint v2.2 §5.1).
       return null;
   }
 }
 
 /** Instrument có thể SINH TÍN HIỆU + đặt lệnh sandbox? (dùng cho map prompt.) */
 export function isTradableSandboxInstrument(inst: InstrumentLite): boolean {
+  // #108 v2.2: đúng instrument HOSE/HNX/UPCOM — phi-VN mọi loại bị loại khỏi map.
   return execRuleFor(inst) != null;
 }
 
-/** Nhãn đơn vị lệnh cho UI + prompt. */
+/** Nhãn đơn vị lệnh cho UI + prompt (VN: "cp"; nhánh phi-VN dành cho hiển thị lịch sử). */
 export function execUnitLabel(inst: InstrumentLite): string {
   if (!isForeignMarket(inst.market)) return "cp";
   if (inst.market === "BOND" || inst.market === "COMMODITY") return "đv danh nghĩa 1tr₫";
@@ -211,31 +181,6 @@ export function foreignPriceUnitValueVND(
     default:
       return null;
   }
-}
-
-/** Bản bọc async (tự lấy fx, cache) — dùng nơi không có sẵn tỷ giá. */
-export async function foreignUnitValueVND(inst: InstrumentLite, priceDb: number): Promise<number | null> {
-  if (inst.symbol === "VND=X") return foreignPriceUnitValueVND(inst, priceDb, null);
-  const fx = await usdVndRate();
-  return foreignPriceUnitValueVND(inst, priceDb, fx);
-}
-
-/**
- * Phí VND một lệnh (không thuế ngoài VN — thuế 0,1% chỉ luật VN).
- * Forex: spread 2 pip — cặp tỷ giá 0,0002 USD/đv gốc ×fx; VND=X 2₫/USD.
- */
-export function foreignFeeVND(
-  inst: InstrumentLite,
-  rule: ExecRule,
-  qty: number,
-  notionalVND: number,
-  fxRate: number | null
-): number {
-  if (inst.market === "FOREX") {
-    if (inst.symbol === "VND=X") return Math.round(qty * 2); // 2₫/USD
-    return fxRate != null ? Math.round(qty * 0.0002 * fxRate) : 0; // 2 pip
-  }
-  return Math.round(rule.feeRate * notionalVND);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -460,10 +405,10 @@ export async function markPositionsVND(list: MarkPositionInput[]): Promise<{ mv:
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Vũ trụ giao dịch được (cho khối prompt VŨ TRỤ GIAO DỊCH §5.5)
+// THỊ TRƯỜNG QUỐC TẾ — THAM CHIẾU (khối prompt #108 v2.2 §5.1)
 // ─────────────────────────────────────────────────────────────────
 
-export interface TradableForeignRow {
+export interface ForeignReferenceRow {
   symbol: string;
   market: string;
   type: string;
@@ -474,22 +419,24 @@ export interface TradableForeignRow {
 }
 
 /**
- * Liệt kê instrument PHI-VN đặt lệnh được + giá close + close phiên trước
- * (đổi ngày %) — nguồn cho khối prompt VŨ TRỤ GIAO DỊCH. Chỉ trả mã có
- * Quote.last > 0 (không giới thiệu mã chưa có dữ liệu — trung thực).
+ * Liệt kê TOÀN BỘ instrument phi-VN (kể cả INDEX/DXY/USDJPY — tất cả đều
+ * tham chiếu như nhau dưới chính sách VN-only) + giá close + close phiên
+ * trước (đổi ngày %) — nguồn cho khối prompt THỊ TRƯỜNG QUỐC TẾ (THAM
+ * CHIẾU). Chỉ trả mã có Quote.last > 0 (không giới thiệu mã chưa có dữ
+ * liệu — trung thực). KHÔNG lọc execRuleFor nữa: mọi mã phi-VN đều không
+ * đặt lệnh được — đúng nghĩa "theo dõi, không đầu tư".
  */
-export async function listTradableForeign(): Promise<TradableForeignRow[]> {
+export async function listForeignReference(): Promise<ForeignReferenceRow[]> {
   const insts = await db.instrument.findMany({
     where: {
       isActive: true,
       market: { in: ["US", "HK", "BOND", "FOREX", "COMMODITY"] },
-      type: { in: ["STOCK", "ETF", "BOND", "FX", "CMDTY"] },
+      type: { in: ["STOCK", "ETF", "BOND", "FX", "CMDTY", "INDEX"] },
     },
     select: { id: true, symbol: true, market: true, type: true, name: true },
   });
-  const tradable = insts.filter((i) => execRuleFor(i) != null);
-  if (tradable.length === 0) return [];
-  const ids = tradable.map((i) => i.id);
+  if (insts.length === 0) return [];
+  const ids = insts.map((i) => i.id);
   const [quotes, bars] = await Promise.all([
     db.quote.findMany({
       where: { instrumentId: { in: ids }, last: { gt: 0 } },
@@ -511,8 +458,8 @@ export async function listTradableForeign(): Promise<TradableForeignRow[]> {
     if (arr.length < 2) arr.push(b.close); // desc — [0]=mới nhất, [1]=trước
     barsByInst.set(b.instrumentId, arr);
   }
-  const out: TradableForeignRow[] = [];
-  for (const i of tradable) {
+  const out: ForeignReferenceRow[] = [];
+  for (const i of insts) {
     const last = lastById.get(i.id);
     if (last == null || last <= 0) continue;
     const closes = barsByInst.get(i.id) ?? [];
