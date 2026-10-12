@@ -525,23 +525,39 @@ export interface ChampionGateResult {
  * Brier uniform 0,667 (đưa vào qua CI deltas) · cap maxParamFactor ×
  * 5.000 = 10.000 mặc định (F4 — nhánh DB sạch, sau C0 serving luôn tồn tại).
  */
+
+/** F-100A-3 (#100-A Fixbug): số tiếng Việt trong thông điệp cổng — phẩy thập
+ *  phân · chấm nhóm nghìn (UI hiển thị swapReason nguyên văn; trước đây trộn
+ *  dấu chấm thập phân kiểu Anh "42.3%"/"[0.0000, 0.0000]" giữa câu tiếng Việt). */
+function fmtVi(n: number, digits = 0): string {
+  return n.toLocaleString("vi-VN", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+/** Hệ số (2 hoặc 2,5) — in nguyên phần đã có, thay dấu thập phân theo kiểu VN. */
+function fmtViFactor(n: number): string {
+  return String(n).replace(".", ",");
+}
+
 export function championGateCheck(p: ChampionGateParams): ChampionGateResult {
   const reasons: string[] = [];
   const baselineValAcc = p.servingValAcc ?? 1 / 3;
   if (!(p.championValAcc >= baselineValAcc + p.deltaSwap)) {
     reasons.push(
-      `Điều kiện 1 — valAcc champion ${(p.championValAcc * 100).toFixed(1)}% chưa vượt baseline ${(baselineValAcc * 100).toFixed(1)}% + δ ${(p.deltaSwap * 100).toFixed(1)} điểm %`
+      `Điều kiện 1 — valAcc champion ${fmtVi(p.championValAcc * 100, 1)}% chưa vượt baseline ${fmtVi(baselineValAcc * 100, 1)}% + δ ${fmtVi(p.deltaSwap * 100, 1)} điểm %`
     );
   }
   if (!(p.deltaBrierCiHigh < 0)) {
     reasons.push(
-      `Điều kiện 2 — ΔBrier CI 95% [${p.deltaBrierCiLow.toFixed(4)}, ${p.deltaBrierCiHigh.toFixed(4)}] không hoàn toàn < 0 (champion chưa thắng có ý nghĩa thống kê)`
+      `Điều kiện 2 — ΔBrier CI 95% [${fmtVi(p.deltaBrierCiLow, 4)}; ${fmtVi(p.deltaBrierCiHigh, 4)}] không hoàn toàn < 0 (champion chưa thắng có ý nghĩa thống kê)`
     );
   }
   const paramCap = p.maxParamFactor * (p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold);
   if (!(p.championParamCount <= paramCap)) {
     reasons.push(
-      `Điều kiện 3 — ${p.championParamCount} tham số vượt cap ${paramCap} (= ${p.maxParamFactor} × ${p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold}) — chống "thắng vì to"`
+      `Điều kiện 3 — ${fmtVi(p.championParamCount)} tham số vượt cap ${fmtVi(paramCap)} (= ${fmtViFactor(p.maxParamFactor)} × ${fmtVi(p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold)}) — chống "thắng vì to"`
     );
   }
   return { pass: reasons.length === 0, reasons };

@@ -279,15 +279,20 @@ export function SweepTab() {
 
   const [values, setValues] = React.useState<Record<string, string>>({});
   const [enabled, setEnabled] = React.useState(true);
-  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const lastHydratedAt = React.useRef<string | null>(null);
+  /** F-100A-2 (#100-A Fixbug): trader có chỉnh chưa lưu — hydrate không đè. */
+  const hasUnsavedEdits = React.useRef(false);
 
-  // Hydrate form từ config (updateAt/lastRunAt đổi) — KHÔNG đè khi trader đang gõ.
+  // Hydrate form từ config (updatedAt/lastRunAt đổi) — KHÔNG đè khi trader đang gõ.
+  // F-100A-2: trước đây chỉ chặn re-render cùng `at` — config ĐỔI THẬT giữa chừng
+  // (đợt sweep engine chạy xong, hoặc tab khác lưu) vẫn đè mất chữ đang gõ dở;
+  // giờ thêm cờ hasUnsavedEdits (reset khi lưu thành công để đồng bộ lại canonical).
   React.useEffect(() => {
     const data = sweep.data;
     if (!data) return;
     const at = data.config.updatedAt ?? data.config.lastRunAt ?? "";
     if (lastHydratedAt.current === at) return;
+    if (hasUnsavedEdits.current) return; // tay người đang có chỉnh chưa lưu — giữ
     lastHydratedAt.current = at;
     setValues({
       budgetCandidates: String(data.config.budgetCandidates),
@@ -296,8 +301,14 @@ export function SweepTab() {
       maxParamFactor: String(data.config.maxParamFactor),
     });
     setEnabled(data.config.enabled);
-    setFieldErrors({});
   }, [sweep.data]);
+
+  // Lưu xong → cho phép hydrate lại từ config vừa lưu (đồng bộ định dạng chuẩn).
+  React.useEffect(() => {
+    if (!saveConfig.isSuccess) return;
+    hasUnsavedEdits.current = false;
+    lastHydratedAt.current = null;
+  }, [saveConfig.isSuccess]);
 
   const serving = sweep.data?.serving ?? null;
   const runs = sweep.data?.runs ?? [];
@@ -340,15 +351,29 @@ export function SweepTab() {
 
   const dirty = payloadInfo.hasChange && payloadInfo.errors.length === 0;
 
-  const handleSave = () => {
-    if (payloadInfo.errors.length > 0) {
-      setFieldErrors(
-        Object.fromEntries(payloadInfo.errors.map((e) => [e.split(":")[0] ?? "?", e]))
-      );
-      return;
+  /** F-100A-1 (#100-A Fixbug): lỗi từng ô suy trực tiếp từ payloadInfo.errors,
+   *  hiển thị NGAY khi gõ sai (viền đỏ + dòng đỏ + aria-invalid). Trước đây
+   *  handleSave setFieldErrors bằng LABEL làm khoá ("Budget ứng viên/đợt") trong
+   *  khi ô nhập tra theo spec.key ("budgetCandidates") → không bao giờ trúng,
+   *  và nút Lưu disabled khiến nhánh đó thành code chết — trader gõ sai chỉ thấy
+   *  nút mờ im lặng, không biết sai ở đâu. */
+  const fieldErrors = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const e of payloadInfo.errors) {
+      const spec = CONFIG_FIELDS.find((s) => e.startsWith(`${s.label}:`));
+      if (spec != null) map[spec.key] = e;
+      else map._form = map._form != null ? `${map._form}; ${e}` : e;
     }
+    return map;
+  }, [payloadInfo.errors]);
+
+  const markEdited = () => {
+    hasUnsavedEdits.current = true;
+  };
+
+  const handleSave = () => {
+    if (payloadInfo.errors.length > 0) return; // đã hiển thị dưới từng ô
     if (!payloadInfo.hasChange) return; // không có gì đổi — nút đã disabled
-    setFieldErrors({});
     saveConfig.mutate(payloadInfo.payload);
   };
 
@@ -459,7 +484,10 @@ export function SweepTab() {
               <Switch
                 id="sweep-enabled"
                 checked={enabled}
-                onCheckedChange={setEnabled}
+                onCheckedChange={(v) => {
+                  markEdited();
+                  setEnabled(v);
+                }}
                 aria-label="Bật/tắt sweep tự động Chủ nhật 04:15 ICT"
               />
             </div>
@@ -470,7 +498,10 @@ export function SweepTab() {
                   spec={spec}
                   value={values[spec.key] ?? ""}
                   error={fieldErrors[spec.key] ?? null}
-                  onChange={(v) => setValues((prev) => ({ ...prev, [spec.key]: v }))}
+                  onChange={(v) => {
+                    markEdited();
+                    setValues((prev) => ({ ...prev, [spec.key]: v }));
+                  }}
                 />
               ))}
             </div>

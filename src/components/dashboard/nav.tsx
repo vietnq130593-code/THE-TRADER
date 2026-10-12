@@ -79,7 +79,7 @@ const WORKSPACE_ITEMS: {
   {
     id: "synthesis",
     label: "Tổng hợp",
-    description: "7 tab: Bayes · học máy · mạng thần kinh · tinh chỉnh",
+    description: "8 tab: Bayes · học máy · mạng thần kinh · tinh chỉnh · tự động tìm kiếm",
     icon: Brain,
   },
   {
