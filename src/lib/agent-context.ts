@@ -19,6 +19,7 @@ import { retrieveForCycle } from "@/lib/ml/rag";
 // (lead-lag + xác suất điều kiện trên 750 phiên) tiêm cho 3 agent nghiên cứu
 // trọng tâm quan hệ liên thị trường — fail-soft như RAG L1.
 import { buildXrelPromptBlock } from "@/lib/ml/xrel";
+import { buildCouncilVisionBlock } from "@/lib/council/vision";
 
 /**
  * Khối ngữ cảnh + role-prompt DÙNG CHUNG cho single-run & chat
@@ -850,7 +851,12 @@ export async function buildSingleRunPrompt(
     case "portfolio-strategist": {
       // F-73A-03: single-run cấp cùng block tỷ trọng như chu kỳ — hợp đồng
       // allocation cần currentPct đo từ DB, không để LLM bịa.
-      const weights = await buildPortfolioWeightsBlock().catch(() => null);
+      // #106 C-VISION: kèm TÀI KHOẢN HỘI ĐỒNG + kết quả quyết định + thí nghiệm
+      // phân bổ (fail-soft .catch như XREL — 3 đường parity #103).
+      const [weights, councilVision] = await Promise.all([
+        buildPortfolioWeightsBlock().catch(() => null),
+        buildCouncilVisionBlock().catch(() => null),
+      ]);
       return {
         system: role.system,
         user: [
@@ -863,6 +869,7 @@ export async function buildSingleRunPrompt(
           ...(ragBlock ? [ragBlock] : []),
           ...(xrelBlock ? [xrelBlock] : []),
           ...(weights ? ["", weights] : []),
+          ...(councilVision ? ["", councilVision] : []),
         ].join("\n\n"),
       };
     }
@@ -911,12 +918,19 @@ async function buildChatContextBlock(code: string): Promise<string> {
       return [market.compact, ...(xrel ? [xrel] : [])].join("\n\n");
     }
     case "portfolio-strategist": {
-      const [market, openSignals, xrel] = await Promise.all([
+      const [market, openSignals, xrel, councilVision] = await Promise.all([
         buildMarketBlock(),
         buildOpenSignalsBlock(),
         buildXrelPromptBlock().catch(() => null),
+        // #106 C-VISION — chat với Chủ tịch cũng thấy tài khoản hội đồng
+        buildCouncilVisionBlock().catch(() => null),
       ]);
-      return [market.compact, `TÍN HIỆU ĐANG MỞ:\n${openSignals}`, ...(xrel ? [xrel] : [])].join("\n\n");
+      return [
+        market.compact,
+        `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
+        ...(xrel ? [xrel] : []),
+        ...(councilVision ? [councilVision] : []),
+      ].join("\n\n");
     }
     case "fair-value": {
       const [market, valuation] = await Promise.all([buildMarketBlock(), buildValuationBlock()]);

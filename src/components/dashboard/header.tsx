@@ -43,6 +43,7 @@ const WORKSPACE_LABELS: Record<Workspace, string> = {
   signals: "Tín hiệu",
   agents: "Đội Agent",
   synthesis: "Tổng hợp",
+  council: "Hội đồng",
   settings: "Cài đặt",
 };
 

@@ -103,14 +103,28 @@ export function QuotesTable() {
 
   // B13 — group bảng giá theo SÀN (HOSE → HNX → UPCOM → US → HK) + nhóm Chỉ số
   // riêng (index VN + quốc tế); mỗi nhóm giữ thứ tự khối lượng của nguồn.
+  // #106 — thêm 3 nhóm lớp tài sản mới: BOND (trái phiếu) · FOREX (ngoại hối)
+  // · COMMODITY (hàng hoá) — cùng pattern section, đơn vị qua UnitKind.
   const groups = React.useMemo(() => {
-    const marketOrder = ["HOSE", "HNX", "UPCOM", "US", "HK"] as const;
+    const marketOrder = [
+      "HOSE",
+      "HNX",
+      "UPCOM",
+      "US",
+      "HK",
+      "BOND",
+      "FOREX",
+      "COMMODITY",
+    ] as const;
     const marketLabels: Record<string, string> = {
       HOSE: "HOSE — Sàn TP.HCM",
       HNX: "HNX — Sàn Hà Nội",
       UPCOM: "UPCOM — Niêm yết OTC",
       US: "Mỹ (US)",
       HK: "Hồng Kông (HK)",
+      BOND: "Trái phiếu (Treasury Mỹ — % lợi suất)",
+      FOREX: "Ngoại hối (cặp USD)",
+      COMMODITY: "Hàng hoá (vàng · dầu · kim loại)",
     };
     const sections: { key: string; label: string; rows: QuoteRow[] }[] = [];
     for (const m of marketOrder) {

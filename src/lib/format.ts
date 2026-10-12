@@ -36,16 +36,19 @@ export function formatPrice(n: number | null | undefined): string {
 
 /** B2 — tra loại đơn vị giá từ (market, type) — bản client-safe của bảng
  *  UNIT_SPECS trong src/lib/eod-sync.ts (server-only vì import db); giữ 2 bên
- *  đồng bộ theo bảng §3.2 MARKET_EXPANSION_BLUEPRINT. */
+ *  đồng bộ theo bảng §3.2 MARKET_EXPANSION_BLUEPRINT + #106 §2.1. */
 export function unitKindOf(market: string, type: string): UnitKind {
   if (type === "INDEX") return "INDEX_POINT";
   if (type === "BOND") return "BOND_PCT";
+  if (type === "FX") return "FX_RATE";
+  if (market === "COMMODITY") return "CENTS";
   if (market === "US" || market === "HK") return "CENTS";
   return "VND";
 }
 
 /** B2 — giá DB Int → chuỗi hiển thị theo loại tài sản (giá trị lưu: VND nguyên ·
- *  index điểm×100 · cents×100 · bond %×100 — chia lại đúng số hiển thị). */
+ *  index điểm×100 · cents×100 · bond %×100 · forex tỷ giá×10.000 — chia lại
+ *  đúng số hiển thị). */
 export function formatUnitPrice(
   n: number | null | undefined,
   kind: UnitKind,
@@ -59,6 +62,19 @@ export function formatUnitPrice(
       return `${currency === "HKD" ? "HK$" : "$"}${nf2.format(n / 100)}`;
     case "BOND_PCT":
       return `${nf2.format(n / 100)}%`;
+    case "FX_RATE": {
+      // #106 — cặp lớn (USD/VND ~25.886) hiển thị 2 số lẻ; cặp nhỏ
+      // (EURUSD ~1,0852) đủ 4 số lẻ cho pips.
+      const raw = n / 10_000;
+      const fmt =
+        Math.abs(raw) >= 100
+          ? nf2.format(raw)
+          : new Intl.NumberFormat("vi-VN", {
+              minimumFractionDigits: 4,
+              maximumFractionDigits: 4,
+            }).format(raw);
+      return currency && currency !== "USD" ? `${fmt} ${currency}` : fmt;
+    }
     case "VND":
     default:
       return nf.format(n);

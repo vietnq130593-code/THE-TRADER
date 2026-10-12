@@ -23,6 +23,7 @@ export type Workspace =
   | "signals"
   | "agents"
   | "synthesis"
+  | "council"
   | "settings";
 
 /** PHIÊN #105 — khoảng thời gian toàn cục do trader chọn trên thanh bar trên cùng.

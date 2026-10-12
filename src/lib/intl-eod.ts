@@ -44,14 +44,19 @@ import {
 } from "@/lib/eod-sync";
 
 export const YAHOO_BASE =
-  process.env.YAHOO_BASE_URL ?? "https://query1.finance.yahoo.com";
+  process.env.YAHOO_BASE_URL ?? "https://query2.finance.yahoo.com";
 
-/** Khoảng cách tối thiểu giữa 2 request Yahoo (tôn trọng nguồn công cộng). */
-const REQUEST_INTERVAL_MS = 1_200;
+/** Khoảng cách tối thiểu giữa 2 request Yahoo (tôn trọng nguồn công cộng).
+ * #106 — nâng 1.200ms → 2.500ms: đo thật 12/10/2026 từ sandbox cho thấy
+ * query1 bị 429 chặn hoàn toàn, query2 + UA Windows ổn 9/9 ở nhịp 2,5s
+ * (nhịp 1,2s + UA Linux dễ vướng quota IP). */
+const REQUEST_INTERVAL_MS = 2_500;
 
-/** UA bắt buộc — Yahoo chối request trần trụi bằng 429 (probe §2 blueprint). */
+/** UA bắt buộc — Yahoo chối request trần trụi bằng 429 (probe §2 blueprint);
+ * #106: đổi sang UA Windows Chrome (đo 12/10: UA Linux dễ dính 429 trên
+ * query2, UA Windows chạy thông 9/9). */
 const USER_AGENT =
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 /** Backoff retry 429/5xx/mạng: 5s → 15s → 45s (tối đa 3 lần retry — T12.2). */
 const RETRY_BACKOFF_MS = [5_000, 15_000, 45_000];
@@ -67,8 +72,8 @@ export const INTL_RANGES: readonly string[] = [
 ];
 export const DEFAULT_INTL_RANGE = "1y";
 
-/** Số request tối đa trong 1 chu kỳ sync (universe B12 = 14 mã; dư room cho
- * watcher mở rộng — vượt ngưỡng này cần chia lượt, giữ ngân sách maxDuration). */
+/** Số request tối đa trong 1 chu kỳ sync (universe #106 = 14 mã US/HK +
+ * 6 hàng hoá + 2 forex Yahoo-phụ ≈ 22 mã — trần 40 giữ room cho watcher). */
 const MAX_SYMBOLS_PER_SYNC = 40;
 
 /** DataSourceStatus key riêng cho adapter yahoo-intl (không đè "eod-history"). */
@@ -440,11 +445,27 @@ export async function syncIntlEod(opts?: {
   }
 
   const instruments = await db.instrument.findMany({
-    where: { isActive: true, market: { in: ["US", "HK"] } },
+    // #106 §2.3 — Yahoo query2 phụ trách: cổ phiếu/chỉ số US-HK + hàng hoá +
+    // các cặp forex Yahoo-phụ (VND=X, DX-Y.NYB). Trái phiếu (Treasury CSV) và
+    // 3 cặp forex chính (Frankfurter) có adapter riêng — loại khỏi lượt Yahoo
+    // để không đốt quota cho mã nguồn không sở hữu (US10Y không phải mã Yahoo).
+    where: {
+      isActive: true,
+      market: { in: ["US", "HK", "FOREX", "COMMODITY"] },
+    },
     select: { id: true, symbol: true, market: true, type: true },
     orderBy: { symbol: "asc" },
     take: MAX_SYMBOLS_PER_SYNC,
   });
+
+  // §2.3 — chỉ gọi Yahoo cho mã thực sự thuộc nguồn Yahoo (tránh xoá trạng
+  // thái tốt của các mã Frankfurter EURUSD=X/USDJPY=X/AUDUSD=X do miss):
+  // các cặp này vẫn đúng định dạng mã Yahoo nhưng adapter Frankfurter là
+  // CHỦ (lịch sử đầy) — Yahoo bỏ qua để dành quota.
+  const FRANKFURTER_OWNED = new Set(["EURUSD=X", "USDJPY=X", "AUDUSD=X"]);
+  const yahooInstruments = instruments.filter(
+    (i) => !FRANKFURTER_OWNED.has(i.symbol)
+  );
 
   const symbolsOk: string[] = [];
   const symbolsEmpty: string[] = [];
@@ -459,7 +480,7 @@ export async function syncIntlEod(opts?: {
   // P1-2 — đồng hồ sync dùng chung (firstSeenAt/lastSyncedAt)
   const syncAt = new Date();
 
-  for (const inst of instruments) {
+  for (const inst of yahooInstruments) {
     if (failStreak >= 3) {
       symbolsFailed.push({
         symbol: inst.symbol,
@@ -605,11 +626,11 @@ export async function syncIntlEod(opts?: {
   }
 
   const outcome: IntlSyncOutcome = {
-    // Universe US/HK chưa seed (0 instrument) → vẫn ok=true với 0 mã (route
+    // Universe chưa seed (0 instrument) → vẫn ok=true với 0 mã (route
     // sẽ kèm note hướng dẫn chạy expand-universe --intl trước)
     ok:
-      instruments.length === 0 ||
-      (symbolsOk.length > 0 && symbolsFailed.length < instruments.length),
+      yahooInstruments.length === 0 ||
+      (symbolsOk.length > 0 && symbolsFailed.length < yahooInstruments.length),
     range,
     symbolsOk,
     symbolsEmpty,
@@ -631,7 +652,7 @@ export async function syncIntlEod(opts?: {
     success: outcome.ok,
     lastError: outcome.ok
       ? null
-      : `sync quốc tế: ${symbolsFailed.length}/${instruments.length} mã lỗi`,
+      : `sync quốc tế: ${symbolsFailed.length}/${yahooInstruments.length} mã lỗi`,
     meta: {
       source: YAHOO_BASE,
       provider: "Yahoo Finance (v8 chart public)",

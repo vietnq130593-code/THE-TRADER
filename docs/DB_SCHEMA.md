@@ -1,9 +1,9 @@
 # The Trader — Data Dictionary & Database Schema
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (Multi-Agent Trading System) cho VNDIRECT
-> **Document:** `docs/DB_SCHEMA.md` · **Version:** 0.9.1 · **Updated:** 2026-10-12 (#95 fixbug)
+> **Document:** `docs/DB_SCHEMA.md` · **Version:** 0.9.4 · **Updated:** 2026-10-12 (#106 COUNCIL_STEWARDSHIP_BLUEPRINT)
 > **Source of truth:** [`prisma/schema.prisma`](../prisma/schema.prisma) — tài liệu này mô tả đúng schema đã implement. Mọi thay đổi schema phải được phản ánh lại đây.
-> **Cross-refs:** [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) (API surface) · [DATA_SOURCES.md](./DATA_SOURCES.md) (field mapping theo nguồn dữ liệu)
+> **Cross-refs:** [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) (API surface) · [DATA_SOURCES.md](./DATA_SOURCES.md) (field mapping theo nguồn dữ liệu) · [COUNCIL_STEWARDSHIP_BLUEPRINT.md](./COUNCIL_STEWARDSHIP_BLUEPRINT.md) (thiết kế 3 model mới)
 
 ---
 
@@ -1112,11 +1112,99 @@ model RelationInsight {
 - Dùng bởi: `src/lib/ml/xrel.ts` synthesizeRelationInsight · GET /api/market/relations (bản mới nhất cho UI) · service-run learning-rag.
 - Đo thật #103: 2 bản sinh qua nút UI — model space-bunny-free · 24,8s · dẫn đúng r/P/n từ bảng.
 
+### 6.36 `DecisionEvaluation` — Sổ đánh giá quyết định D-LEDGER (phiên #106 — COUNCIL_STEWARDSHIP_BLUEPRINT §3.1)
+
+```prisma
+model DecisionEvaluation {
+  id            String   @id @default(cuid())
+  signalId      String   @unique
+  signal        Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  instrumentId  String? // denormalise — lọc nhanh theo mã
+  direction     String // BUY | SELL | HOLD
+  decidedAt     DateTime // Signal.createdAt
+  agentId       String? // agent tạo tín hiệu (thường Chủ tịch)
+  entryPrice    Int? // Bar close ngày quyết định (đơn vị DB theo UnitSpec)
+  markPrice     Int? // close mới nhất (hoặc VWAP bán cho SELL thực thi)
+  markPnlPct    Float? // % theo HƯỚNG (SELL đảo dấu)
+  peakPnlPct    Float? // đỉnh lợi suất dự báo từ lúc quyết định
+  troughPnlPct  Float? // đáy lợi suất dự báo
+  executionKind String? // EXECUTED_CLOSED | EXECUTED_OPEN | UNEXECUTED
+  cashPnlVND    BigInt? // P&L quy kết: bán +, mua −, trừ phí/thuế, phần mở đánh giá mark
+  openQty       Int? // lượng còn mở
+  world         String? // sandbox | paper
+  verdict       String // WIN | LOSS | NEUTRAL — ngưỡng ±0,5% (khớp bandit #87)
+  driversJson   String? // JSON: fills, consensusGate, note SELL
+  evaluatedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([evaluatedAt(sort: Desc)])
+  @@index([verdict])
+  @@index([direction])
+}
+```
+
+- **1 Signal = 1 hàng** (upsert theo `signalId`), cập nhật hằng ngày 16:45 ICT t2–t6 (engine job `councilEvalDue` — sau k1 settle 16:30). Hai lớp kết quả song song: **(a) dự báo** (mọi tín hiệu — entry = close ngày quyết định → mark mới nhất, peak/trough dọc đường) · **(b) thực thi** (dòng tiền VND per-signal đối xứng `netRealisedFromTrades` k-sandbox.ts:747; SELL thực thi đánh giá VWAP bán vs giá quyết định, `cashPnlVND = null` — chi phí vốn thuộc tín hiệu MUA trước, không quy gộp giả tạo).
+- Dùng bởi: `src/lib/council/decision-eval.ts` evaluateDecisions · GET /api/council/overview (sổ + stats) · khối prompt C-VISION (7 quyết định gần nhất cho Chủ tịch — 3 đường).
+- Không thay thế 3 cơ chế đánh giá cũ (k1 settle-equity bandit kênh-2 · chairman-scorecard runtime · research-scorecard Brier) — D-LEDGER là lớp sổ cái persisted trung tâm.
+
+### 6.37 `AllocationExperiment` — Thí nghiệm phân bổ đa rổ E-ALLOC (phiên #106 — §5.1)
+
+```prisma
+model AllocationExperiment {
+  id             String   @id @default(cuid())
+  name           String
+  hypothesis     String // giả thuyết hội đồng tự viết
+  weightsJson    String // [{basket, weight}] — chuẩn hoá tổng 100
+  capitalVND     BigInt // vốn giấy ĐỘC LẬP (không đụng lệnh sandbox)
+  horizonDays    Int // 7..90 ngày giao dịch
+  startedAt      DateTime @default(now())
+  status         String   @default("RUNNING") // RUNNING | DONE | STOPPED
+  createdBy      String   @default("council") // council | trader | seed
+  finalEquityVND BigInt?
+  returnPct      Float?
+  maxDrawdownPct Float?
+  sharpe         Float? // mean/std × √252 trên chuỗi snapshot
+  perBasketJson  String? // [{basket, weight, contributionPct}]
+  lesson         String? // bài học — LLM hội nghị KẾ tiếp viết lại
+  endedAt        DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  snapshots      ExperimentSnapshot[]
+
+  @@index([status, startedAt(sort: Desc)])
+  @@index([createdBy])
+}
+```
+
+- Sinh bởi: hội nghị LLM CN 05:50 ICT (`runCouncilAllocationSession` — Chủ tịch đọc basket-stats + kết quả thí nghiệm trước + khối C-VISION → JSON proposal, parse fail-soft kiểu k4.ts) · trader tạo tay (dialog UI) · seed hồi tính (createdBy "seed", startedAt lùi — mark hồi tính trên dữ liệu rổ THẬT).
+- Mark hằng ngày 16:35 ICT (constant-mix: equity_t = equity_{t−1} × (1 + Σ w_b·r_b,t)) — đủ horizonDays → finalize DONE kèm return/maxDD/Sharpe/đóng góp từng rổ.
+
+### 6.38 `ExperimentSnapshot` — 1 dòng/ngày cho mỗi thí nghiệm (phiên #106 — §5.1)
+
+```prisma
+model ExperimentSnapshot {
+  id           String   @id @default(cuid())
+  experimentId String
+  experiment   AllocationExperiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  date         DateTime // ngày ICT — neo 15:00 UTC cùng convention Bar
+  equityVND    BigInt // mark-to-market theo chỉ số rổ
+  returnPct    Float // lũy kế từ vốn gốc
+  basketsJson  String // [{basket, value, retDay}] — đóng góp ngày (retDay null = rổ thiếu dữ liệu)
+  createdAt    DateTime @default(now())
+
+  @@unique([experimentId, date]) // idempotent — mark chạy lại không đổi số
+  @@index([experimentId, date])
+}
+```
+
+- Dùng bởi: `markExperimentsDaily()` (engine 16:35) · GET /api/council/overview (sparkline + latest) · finalizeExperiment (chuỗi equity → maxDD/Sharpe).
+
 ---
 
 ## 7. Enum Dictionary
 
-13 enum (native enum type trên Postgres schema `trader`, validate bởi Prisma Client — **fixbug #61 F-612R-04: sửa từ "12"**). `AgentRole` mở rộng đủ **23 giá trị** từ v0.5 (đúng kiến trúc Gen-1 DESIGN.md §4.1 — 4 dịch vụ S + 19 agent A; nhóm hiển thị theo `Agent.group`); `Market` mở rộng **5 giá trị** từ v0.6.0 (phiên #38); `CorporateEventKind` thêm ở v0.7.0 (phiên #60 — P1-1; `CorporateEvent.status` và `ForeignFlow.mode` là String validate ở tầng code, không phải enum):
+13 enum (native enum type trên Postgres schema `trader`, validate bởi Prisma Client — **fixbug #61 F-612R-04: sửa từ "12"**). `AgentRole` mở rộng đủ **23 giá trị** từ v0.5 (đúng kiến trúc Gen-1 DESIGN.md §4.1 — 4 dịch vụ S + 19 agent A; nhóm hiển thị theo `Agent.group`); `Market` mở rộng **8 giá trị** (5 từ v0.6.0 phiên #38 + BOND/FOREX/COMMODITY phiên #106); `InstrumentType` thêm FX/CMDTY (#106); `CorporateEventKind` thêm ở v0.7.0 (phiên #60 — P1-1; `CorporateEvent.status` và `ForeignFlow.mode` là String validate ở tầng code, không phải enum):
 
 | Enum | Giá trị | Diễn giải (VN) |
 |---|---|---|
@@ -1125,11 +1213,16 @@ model RelationInsight {
 | | `UPCOM` | Thị trường công khai phi tập trung (OTC) — dải ±15% |
 | | `US` | **Phiên #38** — sàn quốc tế Mỹ (Yahoo Finance: 8 cổ phiếu + ^GSPC · ^IXIC; giá cents ×100, không trần/sàn) |
 | | `HK` | **Phiên #38** — sàn quốc tế Hồng Kông (Yahoo Finance: 3 cổ phiếu + ^HSI; giá cents ×100) |
+| | `BOND` | **Phiên #106** — trái phiếu (US5Y/US10Y/US30Y — lợi suất Treasury Mỹ CSV chính thức, đơn vị %×100 BOND_PCT) |
+| | `FOREX` | **Phiên #106** — ngoại hối (EURUSD=X · USDJPY=X · AUDUSD=X Frankfurter ECB · VND=X er-api+Yahoo · DX-Y.NYB — tỷ giá ×10.000 FX_RATE) |
+| | `COMMODITY` | **Phiên #106** — hàng hoá (GC=F/SI=F/BZ=F/CL=F/HG=F/NG=F Yahoo query2 — cents ×100) |
 | `InstrumentType` | `STOCK` | Cổ phiếu thường |
 | | `ETF` | Quỹ hoán đổi danh mục |
 | | `FUND` | Quỹ mở/đóng |
 | | `BOND` | Trái phiếu |
 | | `INDEX` | Chỉ số (VN-Index, VN30) |
+| | `FX` | **Phiên #106** — cặp ngoại hối (bảng tra UNIT_SPECS "FOREX:FX" ×10.000) |
+| | `CMDTY` | **Phiên #106** — hàng hoá tương lai ("COMMODITY:CMDTY" cents ×100) |
 | `CorporateEventKind` | `SPLIT` | Chia tách / sáp nhập (f > 1 — hợp nhất; Yahoo split events) — **fixbug #61 F-612R-04: bổ sung dòng thiếu** |
 | | `BONUS` | Cổ thưởng / chia tách làm giá giảm (f < 1 — phổ biến VN 1,2/1,3/1,5) |
 | | `DIVIDEND` | Cổ tức tiền mặt (Yahoo dividends — không đổi hệ số giá) |
@@ -1208,6 +1301,7 @@ Seed **delete toàn bộ dữ liệu cũ trước khi ghi** (clean slate) — ch
 
 | Ngày | Thay đổi |
 |---|---|
+| 2026-10-12 | **v0.9.4 — Phiên #106 COUNCIL_STEWARDSHIP_BLUEPRINT (37 → 40 model, 3 model mới additive + 5 enum value mới, 0 cột đổi, 0 mất dữ liệu):** (1) **§6.36 `DecisionEvaluation`** MỚI — sổ đánh giá quyết định D-LEDGER: 1 Signal = 1 hàng (unique signalId, relation onDelete Cascade), 2 lớp kết quả song song (dự báo markPnlPct ± peak/trough + thực thi cashPnlVND dòng tiền đối xứng k-sandbox), verdict WIN/LOSS/NEUTRAL ngưỡng ±0,5% khớp bandit #87, engine 16:45 ICT t2–t6; (2) **§6.37 `AllocationExperiment`** MỚI — thí nghiệm phân bổ 5 rổ do Hội đồng TỰ đề xuất (hội nghị LLM CN 05:50 / trader / seed): weightsJson chuẩn hoá 100 + capitalVND giấy độc lập + horizon 7–90 + kết quả return/maxDD/Sharpe/perBasketJson/lesson (LLM viết lại kỳ sau); (3) **§6.38 `ExperimentSnapshot`** MỚI — 1 dòng/ngày unique(experimentId,date), constant-mix mark-to-market theo chỉ số rổ thật; (4) enum: `Market` + BOND/FOREX/COMMODITY · `InstrumentType` + FX/CMDTY — UnitSpec mới FX_RATE ×10.000 (format 4 số lẻ <100, 2 số lẻ ≥100) + FOREX:INDEX (DXY); (5) vũ trụ seed 30 instrument phi-VN mới (14 US/HK + 3 Treasury + 5 forex + 6 hàng hoá + DXY) qua 4 adapter đo thật: Treasury CSV chính thức (1.332 bar 2 năm) · Frankfurter ECB (2.898 bar 2023→nay) · er-api VND=X (forward) · Yahoo **query2** + UA Windows throttle 2,5s (query1 429 chặn toàn bộ — đổi nguồn 5.481 bar 22/22 mã); (6) API 6 route /api/council/* + khối prompt C-VISION 3 đường (wave E + single-run + chat strategist — Hội đồng NHÌN THẤY tài khoản sandbox, phê duyệt riêng của trader cho thay đổi quarantine P0 #87) + engine 3 job (16:35 mark · 16:45 evaluate · CN 05:50 hội nghị) + module UI "Hội đồng" + card Đa rổ; nghiệm thu: hội nghị LLM thật 44s tạo thí nghiệm "Bám dẫn đầu: hàng hoá + CP quốc tế" từ kết quả thí nghiệm thất bại trước (vòng học khép kín) · đánh giá 9 tín hiệu idempotent · E2E desktop+mobile 390 0 console error. |
 | 2026-10-12 | **v0.9.3 — Phiên #103 M2_RELATION_BLUEPRINT (35 → 37 model, 2 model mới additive, 0 cột đổi, 0 mất dữ liệu):** (1) **§6.34 `MarketRelation`** MỚI — quan hệ liên thị trường ĐÃ HỌC có hướng `{sourceKey/targetKey/lag/kind unique, corr, condUp/condDown (P đích|cú sốc ±0,75%), obs, shockUpN/DownN, strength, windowFrom/To}` + 2 index — engine `src/lib/ml/xrel.ts` học 12 phân đoạn (VN30/VN100 ETF + 10 ngành HOSE equal-weight) trên 750 phiên: lead-lag Pearson lag {0,1} + xác suất điều kiện, top-40 giá→giá (đo thật: Ngân hàng↔VN30 r=+0,77 n=749, P(↓|↓)=82-88%, 298ms) + top-20 tin→giá event-study (ngưỡng trung thực ≥15 ngày có tin — kho tin đang 4 ngày nên lớp này tự báo "đang tích luỹ"); (2) **§6.35 `RelationInsight`** MỚI — nhận định LLM 4-7 câu dẫn số liệu, sinh 1 lần/tuần trong nhiệm vụ SUN:05:00 learning-rag (A13 mở rộng, bản cũ <6 ngày skip) + nút tay UI; không đủ quan hệ → không gọi LLM; (3) serving: khối prompt "QUAN HỆ THỊ TRƯỜNG ĐÃ HỌC" top-10 dòng ≤900 ký tự tiêm market-analyst · news-sentiment · portfolio-strategist (chu kỳ + single-run + chat) fail-soft như RAG L1; (4) API mới: `GET /api/market/relations` (lazy-refresh stale >12h) · `POST .../refresh` · `POST .../insight`; (5) UI card "Quan hệ thị trường" module Thị trường (badge loại · A→B · lag · r + thanh sức mạnh · P điều kiện tooltip · n=· nhận định LLM truy vết · 2 nút Học lại/Tổng hợp nhận định); nghiệm thu: E2E browser 0 console error · mobile 390 sw=cw=390 · insight thật 24,8s dẫn đúng r/P/n · lint/tsc 0 lỗi src. |
 | 2026-10-12 | **v0.9.2 — Phiên #99 (ML_AUTOML_BLUEPRINT v1.1 — 35 model, 1 model mới additive, 0 cột đổi, 0 mất dữ liệu):** (1) **§6.33 `SweepRun`** MỚI — lịch sử đợt sweep AutoML L1 deterministic (windowHash · featureSet mặc định v2-lag16 · candidates/evaluated · seed · status running/done/failed · championJson cổng 4 điều kiện · logJson toàn bộ ứng viên kể cả thua · `@@index([startedAt(sort: Desc)])` cho UI lịch sử); (2) **§6.23 `MlModel.meta`** thêm trường additive `sweepRunId` + `sweepIndex` trên các bản do sweep train (mọi ứng viên archived — chỉ champion qua cổng mới serving + AuditLog `ML_SWEEP_SWAP`); twin lag-10 baseline của gate tự lành ghi `meta {featureSet "v1-lag10", twin:true, twinOf}`; (3) **§6.20 AppSetting** thêm key **`ml-sweep`** `{enabled, budgetCandidates, seed, deltaSwap, maxParamFactor, lastRunAt}` — kill-switch từng đợt; key `ml-gate` được ghi lại bởi gate tự lành (verdict FAIL + measuredAt + twin baseline — đo 2026-10-11T20:15:31Z); (4) không bảng nào cho C2-pipeline (đo coverage tin tức đọc `NewsItem` trực tiếp — 0 bảng mới); nghiễm thu: `bun run db:push` additive sạch · sweep thật budget 3 → SweepRun done + swap v5→v9 + audit · 15/15 verify PASS · lint/tsc 0. |
 | 2026-10-12 | **v0.9.1 — fixbug #95 (giao thức FB-1→FB-6, 34 model — 0 model mới, 0 cột mới, 1 index additive, 0 mất dữ liệu):** (1) **§6.7 `AgentRun`** bổ sung dòng `taskId` (cột có từ #94 nhưng thiếu trong bảng docs) + **`@@index([taskId])`** (F-K3-06 — tra cứu run theo nhiệm vụ cho verify V4 + guard route; index additive, không đổi cột); (2) **§6.8 `AgentTask.schedule`** chú thích **F-K4-02**: K4 giao việc BẮT BUỘC có lịch — engine due-check chỉ dispatch nhiệm vụ `schedule≠null`, nhiệm vụ "một lần" từ Chủ tịch là dead-letter chiếm hạn mức nên prompt yêu cầu lịch tường minh + validate từ chối; (3) các bug fixbug khác (F-K4-01 parser 2-khối JSON · F-K3-01 watchdog RUNNING · F-K3-02 DELETE 409 theo `Agent.status` · F-K4-03 $transaction lô create) không đổi schema — chi tiết chuỗi FB-1→FB-6 xem `worklog.md` + TECHNICAL_BLUEPRINT Changelog v1.8.1. Nghiệm thu `scripts/k3k4-verify.ts` 47/47 PASS (hermetic tự dọn). |

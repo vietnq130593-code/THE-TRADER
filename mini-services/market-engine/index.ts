@@ -134,6 +134,17 @@ const ML_SWEEP_DISABLED = process.env.ML_SWEEP_DISABLED === "1";
  *  4-việc: kênh-2 reward → CashSnapshot → telemetry → audit tổng kết). */
 const K1_EQUITY_AT = process.env.K1_EQUITY_AT ?? "16:30";
 const K1_EQUITY_DISABLED = process.env.K1_EQUITY_DISABLED === "1";
+/** #106 — COUNCIL_STEWARDSHIP_BLUEPRINT §6: 3 job Hội đồng.
+ *  16:35 mark thí nghiệm phân bổ (sau k1 settle 16:30 — cùng dùng bar EOD
+ *  15:45 + intl 06:15 đã vào DB; t2–t6) · 16:45 đánh giá sổ quyết định D-LEDGER
+ *  (sau k1 — tránh tranh lock; t2–t6, gate eodSync hôm đó) · CN 05:50 hội nghị
+ *  phân bổ LLM (SAU chuỗi học Chủ nhật 05:00–05:40 của learning-rag→…→model-registry). */
+const COUNCIL_MARK_AT = process.env.COUNCIL_MARK_AT ?? "16:35";
+const COUNCIL_MARK_DISABLED = process.env.COUNCIL_MARK_DISABLED === "1";
+const COUNCIL_EVAL_AT = process.env.COUNCIL_EVAL_AT ?? "16:45";
+const COUNCIL_EVAL_DISABLED = process.env.COUNCIL_EVAL_DISABLED === "1";
+const COUNCIL_SESSION_AT = process.env.COUNCIL_SESSION_AT ?? "SUN:05:50";
+const COUNCIL_SESSION_DISABLED = process.env.COUNCIL_SESSION_DISABLED === "1";
 
 /** "HH:MM" ICT → phút kể từ nửa đêm ICT (UTC+7). */
 function parseHhMm(s: string): number | null {
@@ -148,6 +159,9 @@ const EOD_SYNC_MINUTES = parseHhMm(EOD_SYNC_AT) ?? parseHhMm("15:45")!;
 const INTL_SYNC_MINUTES = parseHhMm(INTL_SYNC_AT) ?? parseHhMm("06:15")!;
 const SETTLE_MINUTES = parseHhMm(SETTLE_AT) ?? parseHhMm("16:15")!;
 const K1_EQUITY_MINUTES = parseHhMm(K1_EQUITY_AT) ?? parseHhMm("16:30")!;
+// #106 — 2 job hằng ngày của Hội đồng (fail-safe parseHhMm như K1)
+const COUNCIL_MARK_MINUTES = parseHhMm(COUNCIL_MARK_AT) ?? parseHhMm("16:35")!;
+const COUNCIL_EVAL_MINUTES = parseHhMm(COUNCIL_EVAL_AT) ?? parseHhMm("16:45")!;
 
 /** "SUN:HH:MM" (tên ngày 3 chữ) hoặc "0:HH:MM" (0=CN..6=T7) → { dow, minutes } — lịch hằng tuần. */
 const DOW_NAMES: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
@@ -181,6 +195,9 @@ const ML_TRAIN_SCHEDULE: { dow: number; minutes: number } =
 // bài học #42: schedule null → TypeError mỗi phút giết event loop engine).
 const ML_SWEEP_SCHEDULE: { dow: number; minutes: number } =
   parseWeekly(ML_SWEEP_AT) ?? parseWeekly("SUN:04:15") ?? { dow: 0, minutes: 4 * 60 + 15 };
+// #106 — lịch hội nghị phân bổ LLM CN 05:50 (cùng fail-safe 3 lớp)
+const COUNCIL_SESSION_SCHEDULE: { dow: number; minutes: number } =
+  parseWeekly(COUNCIL_SESSION_AT) ?? parseWeekly("SUN:05:50") ?? { dow: 0, minutes: 5 * 60 + 50 };
 
 function ictNow(): { date: string; minutes: number; dow: number } {
   const now = new Date(Date.now() + 7 * 3_600_000); // ICT = UTC+7
@@ -231,6 +248,20 @@ const stats = {
   lastK1EquityDate: null as string | null,
   lastK1EquityError: null as string | null,
   k1EquityRuns: 0,
+  // #106 — COUNCIL: mark thí nghiệm 16:35 + đánh giá quyết định 16:45 +
+  // hội nghị phân bổ LLM CN 05:50 (P0-5 sống sót restart)
+  lastCouncilMarkAt: null as string | null,
+  lastCouncilMarkDate: null as string | null,
+  lastCouncilMarkError: null as string | null,
+  councilMarkRuns: 0,
+  lastCouncilEvalAt: null as string | null,
+  lastCouncilEvalDate: null as string | null,
+  lastCouncilEvalError: null as string | null,
+  councilEvalRuns: 0,
+  lastCouncilSessionAt: null as string | null,
+  lastCouncilSessionSunday: null as string | null,
+  lastCouncilSessionError: null as string | null,
+  councilSessionRuns: 0,
   lastCycleAt: null as string | null,
   cycles: 0,
   // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chế độ chạy liên tục
@@ -267,6 +298,9 @@ const http = createServer((req, res) => {
         mlTrainAt: ML_TRAIN_AT,
         mlSweepAt: ML_SWEEP_AT,
         k1EquityAt: K1_EQUITY_AT,
+        councilMarkAt: COUNCIL_MARK_AT,
+        councilEvalAt: COUNCIL_EVAL_AT,
+        councilSessionAt: COUNCIL_SESSION_AT,
         ...stats,
       })
     );
@@ -317,6 +351,13 @@ interface EngineState {
   // K1 (#87) — ngày đã settle-equity sandbox + mốc gần nhất (P0-5)
   lastK1EquityDate?: string | null;
   lastK1EquityAt?: string | null;
+  // #106 — COUNCIL: ngày đã mark/đánh giá + Chủ nhật đã họp hội nghị (P0-5)
+  lastCouncilMarkDate?: string | null;
+  lastCouncilMarkAt?: string | null;
+  lastCouncilEvalDate?: string | null;
+  lastCouncilEvalAt?: string | null;
+  lastCouncilSessionSunday?: string | null;
+  lastCouncilSessionAt?: string | null;
 }
 
 /** Boot: đọc state từ DB → đổ vào stats + biến backoff (restart không quên). */
@@ -358,6 +399,14 @@ async function hydrateEngineState(): Promise<void> {
     // nhưng tránh cả lần gọi thừa)
     if (typeof s.lastK1EquityDate === "string") stats.lastK1EquityDate = s.lastK1EquityDate;
     if (typeof s.lastK1EquityAt === "string") stats.lastK1EquityAt = s.lastK1EquityAt;
+    // #106 — COUNCIL: phục hồi lịch 3 job (restart giữa chừng không double —
+    // route mark/evaluate idempotent nhưng tránh cả lần gọi thừa)
+    if (typeof s.lastCouncilMarkDate === "string") stats.lastCouncilMarkDate = s.lastCouncilMarkDate;
+    if (typeof s.lastCouncilMarkAt === "string") stats.lastCouncilMarkAt = s.lastCouncilMarkAt;
+    if (typeof s.lastCouncilEvalDate === "string") stats.lastCouncilEvalDate = s.lastCouncilEvalDate;
+    if (typeof s.lastCouncilEvalAt === "string") stats.lastCouncilEvalAt = s.lastCouncilEvalAt;
+    if (typeof s.lastCouncilSessionSunday === "string") stats.lastCouncilSessionSunday = s.lastCouncilSessionSunday;
+    if (typeof s.lastCouncilSessionAt === "string") stats.lastCouncilSessionAt = s.lastCouncilSessionAt;
     if (typeof s.intlFailStreak === "number") intlFailStreak = s.intlFailStreak;
     if (typeof s.lastIntlFailAt === "number") lastIntlFailAt = s.lastIntlFailAt;
     log(
@@ -396,6 +445,13 @@ async function persistEngineState(): Promise<void> {
         lastMlSweepAt: stats.lastMlSweepAt,
         lastK1EquityDate: stats.lastK1EquityDate,
         lastK1EquityAt: stats.lastK1EquityAt,
+        // #106 — COUNCIL: 3 lịch sống sót restart (P0-5)
+        lastCouncilMarkDate: stats.lastCouncilMarkDate,
+        lastCouncilMarkAt: stats.lastCouncilMarkAt,
+        lastCouncilEvalDate: stats.lastCouncilEvalDate,
+        lastCouncilEvalAt: stats.lastCouncilEvalAt,
+        lastCouncilSessionSunday: stats.lastCouncilSessionSunday,
+        lastCouncilSessionAt: stats.lastCouncilSessionAt,
       } satisfies EngineState),
       signal: AbortSignal.timeout(15_000),
     });
@@ -1003,6 +1059,92 @@ function eodSyncDue(): boolean {
   return ict.minutes >= EOD_SYNC_MINUTES && stats.lastEodSyncDate !== ict.date;
 }
 
+/** #106 — COUNCIL mark thí nghiệm 16:35 ICT t2–t6 (sau k1 16:30; gate eodSync
+ *  hôm đó — dùng bar EOD 15:45 + intl 06:15 đã vào). Route idempotent
+ *  (unique(experimentId, date)) nên chạy nhắc lại vô hại $0. */
+let councilMarkInFlight = false;
+async function councilMarkAndBroadcast(): Promise<void> {
+  councilMarkInFlight = true;
+  try {
+    const data = await postJson("/api/council/experiments/mark", undefined, {
+      timeoutMs: 60_000,
+    });
+    stats.lastCouncilMarkAt = new Date().toISOString();
+    stats.councilMarkRuns++;
+    stats.lastCouncilMarkError = null;
+    stats.lastCouncilMarkDate = ictNow().date;
+    io.emit("council-mark", data);
+    log(
+      "council",
+      `mark thí nghiệm xong: ${data.running ?? 0} chạy · ${data.snapshotsWritten ?? 0} snapshot mới · ${Array.isArray(data.finalized) ? (data.finalized as string[]).length : 0} đóng`
+    );
+  } catch (err) {
+    stats.lastCouncilMarkError = err instanceof Error ? err.message : String(err);
+    log("council", `LỖI mark (thử lại phút sau): ${stats.lastCouncilMarkError}`);
+  } finally {
+    councilMarkInFlight = false;
+    void persistEngineState();
+  }
+}
+
+/** #106 — COUNCIL đánh giá sổ quyết định D-LEDGER 16:45 ICT t2–t6 (sau k1
+ *  16:30 — tránh tranh lock). Route idempotent (upsert signalId). */
+let councilEvalInFlight = false;
+async function councilEvalAndBroadcast(): Promise<void> {
+  councilEvalInFlight = true;
+  try {
+    const data = await postJson("/api/council/evaluate", undefined, {
+      timeoutMs: 60_000,
+    });
+    stats.lastCouncilEvalAt = new Date().toISOString();
+    stats.councilEvalRuns++;
+    stats.lastCouncilEvalError = null;
+    stats.lastCouncilEvalDate = ictNow().date;
+    io.emit("council-eval", data);
+    log(
+      "council",
+      `đánh giá quyết định xong: ${data.evaluated ?? 0} tín hiệu · WIN ${
+        (data.byVerdict as { WIN?: number } | undefined)?.WIN ?? 0
+      } · LOSS ${(data.byVerdict as { LOSS?: number } | undefined)?.LOSS ?? 0}`
+    );
+  } catch (err) {
+    stats.lastCouncilEvalError = err instanceof Error ? err.message : String(err);
+    log("council", `LỖI evaluate (thử lại phút sau): ${stats.lastCouncilEvalError}`);
+  } finally {
+    councilEvalInFlight = false;
+    void persistEngineState();
+  }
+}
+
+/** #106 — COUNCIL hội nghị phân bổ LLM CN 05:50 ICT (SAU chuỗi học Chủ nhật
+ *  05:00–05:40). Route cooldown 60s + fail-soft parse — LLM trượt thì Chủ
+ *  nhật sau tự phục hồi; KHÔNG đánh dấu Chủ nhật đã họp khi lỗi (thử lại
+ *  60s sau trong cùng sáng). */
+let councilSessionInFlight = false;
+async function councilSessionAndBroadcast(): Promise<void> {
+  councilSessionInFlight = true;
+  try {
+    const data = await postJson("/api/council/allocation-session", undefined, {
+      timeoutMs: 90_000,
+    });
+    stats.lastCouncilSessionAt = new Date().toISOString();
+    stats.councilSessionRuns++;
+    stats.lastCouncilSessionError = null;
+    stats.lastCouncilSessionSunday = ictNow().date;
+    io.emit("council-session", data);
+    log(
+      "council",
+      `hội nghị phân bổ xong: ${data.created ? `TẠO "${data.experimentName}"` : "không tạo thí nghiệm mới"} · lesson ${data.lessonsUpdated ?? 0} · ${(data.durationMs ?? 0)}ms`
+    );
+  } catch (err) {
+    stats.lastCouncilSessionError = err instanceof Error ? err.message : String(err);
+    log("council", `LỖI hội nghị (thử lại 60s sau): ${stats.lastCouncilSessionError}`);
+  } finally {
+    councilSessionInFlight = false;
+    void persistEngineState();
+  }
+}
+
 /** A1 (#79) — đã qua 16:15 ICT · EOD hôm nay ĐÃ sync (bar đã vào DB trước khi
  *  kết toán) · chưa settle ngày này → kết toán bandit. Gate `lastEodSyncDate
  *  === ict.date` là điều kiện "chỉ settle sau EOD hôm đó" (blueprint A1.2);
@@ -1094,6 +1236,47 @@ function k1EquityDue(): boolean {
   );
 }
 
+/** #106 — COUNCIL mark: đã qua 16:35 ICT t2–t6 · EOD hôm nay ĐÃ sync · chưa
+ *  mark ngày này → đánh giá thí nghiệm (clone k1EquityDue). */
+function councilMarkDue(): boolean {
+  if (COUNCIL_MARK_DISABLED) return false;
+  if (councilMarkInFlight) return false;
+  const ict = ictNow();
+  if (ict.dow === 0 || ict.dow === 6) return false;
+  return (
+    ict.minutes >= COUNCIL_MARK_MINUTES &&
+    stats.lastEodSyncDate === ict.date &&
+    stats.lastCouncilMarkDate !== ict.date
+  );
+}
+
+/** #106 — COUNCIL evaluate: đã qua 16:45 ICT t2–t6 · EOD hôm nay ĐÃ sync ·
+ *  chưa đánh giá ngày này → chạy D-LEDGER (sau k1 16:30 — tránh tranh lock). */
+function councilEvalDue(): boolean {
+  if (COUNCIL_EVAL_DISABLED) return false;
+  if (councilEvalInFlight) return false;
+  const ict = ictNow();
+  if (ict.dow === 0 || ict.dow === 6) return false;
+  return (
+    ict.minutes >= COUNCIL_EVAL_MINUTES &&
+    stats.lastEodSyncDate === ict.date &&
+    stats.lastCouncilEvalDate !== ict.date
+  );
+}
+
+/** #106 — COUNCIL session: Chủ nhật đã qua 05:50 ICT, chưa họp tuần này →
+ *  hội nghị phân bổ LLM (clone mlSweepDue — sau chuỗi học 05:00–05:40). */
+function councilSessionDue(): boolean {
+  if (COUNCIL_SESSION_DISABLED || !COUNCIL_SESSION_SCHEDULE) return false;
+  if (councilSessionInFlight) return false;
+  const ict = ictNow();
+  return (
+    ict.dow === COUNCIL_SESSION_SCHEDULE.dow &&
+    ict.minutes >= COUNCIL_SESSION_SCHEDULE.minutes &&
+    stats.lastCouncilSessionSunday !== ict.date
+  );
+}
+
 /** B14 — Chủ nhật, đã qua 04:00 ICT, chưa chạy tuần này → re-probe.
  * F-481-01: probe cũ chưa xong → không bắn thêm. */
 function reprobeDue(): boolean {
@@ -1111,7 +1294,7 @@ http.listen(PORT, () => {
   log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL}`);
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-mark ${COUNCIL_MARK_AT} ICT${COUNCIL_MARK_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · council-session ${COUNCIL_SESSION_AT} ICT${COUNCIL_SESSION_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
@@ -1153,6 +1336,11 @@ http.listen(PORT, () => {
       // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
       // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
       if (k1EquityDue()) void k1EquityAndBroadcast();
+      // #106 — COUNCIL_STEWARDSHIP_BLUEPRINT §6: mark thí nghiệm 16:35 → đánh giá
+      // quyết định 16:45 → hội nghị phân bổ LLM CN 05:50 (cùng try/catch chung)
+      if (councilMarkDue()) void councilMarkAndBroadcast();
+      if (councilEvalDue()) void councilEvalAndBroadcast();
+      if (councilSessionDue()) void councilSessionAndBroadcast();
       // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chạy liên tục —
       // async + .catch bổ sung theo nguyên tắc vàng Fixbug #2 (timer callback
       // không được phép ném uncaught exception giết event loop).

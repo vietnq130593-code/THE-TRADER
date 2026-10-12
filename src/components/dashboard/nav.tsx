@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Radar,
   Settings,
+  Users,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -81,6 +82,12 @@ const WORKSPACE_ITEMS: {
     label: "Tổng hợp",
     description: "8 tab: Bayes · học máy · mạng thần kinh · tinh chỉnh · tự động tìm kiếm",
     icon: Brain,
+  },
+  {
+    id: "council",
+    label: "Hội đồng",
+    description: "Tài khoản toàn cục · sổ đánh giá quyết định · thí nghiệm phân bổ 5 rổ",
+    icon: Users,
   },
   {
     id: "settings",
@@ -241,7 +248,7 @@ export function AppSidebar() {
               <span className="size-2 rounded-sm bg-flat" aria-hidden="true" /> đứng giá
             </span>
           </p>
-          <p>7 module · nhấp logo “The Trader” trên cùng để mở/đóng</p>
+          <p>8 module · nhấp logo “The Trader” trên cùng để mở/đóng</p>
         </div>
       </aside>
     </>

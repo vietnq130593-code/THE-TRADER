@@ -16,3 +16,5 @@ export const db =
   })
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+
+// #106 — chạm file để Turbopack nạp lại Prisma client sau generate (enum Market/InstrumentType mở rộng)

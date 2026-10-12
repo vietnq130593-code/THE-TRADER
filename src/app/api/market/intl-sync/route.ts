@@ -2,30 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { toPlain } from "@/lib/serialize";
 import { db } from "@/lib/db";
 import {
-  syncIntlEod,
   INTL_RANGES,
   DEFAULT_INTL_RANGE,
 } from "@/lib/intl-eod";
+import { syncMultiMarkets } from "@/lib/multi-market-sync";
 import { runPostIngestChecks } from "@/lib/ingest-pipeline";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * POST /api/market/intl-sync — kéo bar EOD QUỐC TẾ (US/HK) từ Yahoo Finance
- * v8 chart (src/lib/intl-eod.ts — Bước 12) và neo Quote theo UnitSpec
- * (STOCK/ETF → cents ×100 · INDEX → điểm ×100 · KHÔNG trần/sàn ±7%).
+ * POST /api/market/intl-sync — đồng bộ ĐA THỊ TRƯỜNG #106
+ * (COUNCIL_STEWARDSHIP_BLUEPRINT §2.3): 3 adapter nhanh (Treasury CSV trái
+ * phiếu · Frankfurter forex majors · er-api USD/VND) + Yahoo query2 (hàng
+ * hoá + cổ phiếu US/HK + forex phụ) — orchestrator syncMultiMarkets.
  *
  * Body (tuỳ chọn): { range?: string } — whitelist 5d|1mo|3mo|6mo|1y|2y|auto,
- * mặc định "auto": universe quốc tế chưa có bar → "1y" (backfill lần đầu),
+ * mặc định "auto": universe phi-VN chưa có bar → "1y" (backfill lần đầu),
  * đã có → "5d" (đủ cho sync hằng ngày 06:15 ICT). Sai whitelist → 400.
- * Được market-engine gọi 06:15 ICT (sau đóng cửa Mỹ — orchestrator thêm job)
- * và có thể trigger thủ công. Cooldown 30s giữa 2 lần gọi → 429 kèm
- * Retry-After (pattern /api/assessment/synthesize + /api/ml/train).
- *
- * Response: IntlSyncOutcome (kèm durationMs) + range + note khi universe
- * US/HK chưa seed (0 instrument match — ok=true với 0 mã, hướng dẫn chạy
- * prisma/expand-universe.ts --intl trước).
+ * Được market-engine gọi 06:15 ICT và có thể trigger thủ công. Cooldown 30s
+ * giữa 2 lần gọi → 429 kèm Retry-After (pattern /api/assessment/synthesize).
  */
 const COOLDOWN_MS = 30_000;
 let lastSyncAt = 0;
@@ -69,11 +65,16 @@ export async function POST(req: NextRequest) {
   } catch {
     // body rỗng — giữ default
   }
-  // "auto": chưa có bar quốc tế → backfill "1y"; đã có → "5d" (B12 job 06:15)
+  // "auto": chưa có bar phi-VN → backfill "1y"; đã có → "5d" (job 06:15)
+  // #106 — đếm cả 4 thị trường phi-VN (US/HK/FOREX/COMMODITY/BOND): chỉ cần
+  // 1 rổ còn trống là cần backfill (Treasury/Frankfurter tự lấy đủ lịch sử
+  // riêng của chúng bất kể range — range chỉ điều khiển nhịp Yahoo).
   if (range === "auto") {
     const intlBars = await db.bar
       .count({
-        where: { instrument: { market: { in: ["US", "HK"] } } },
+        where: {
+          instrument: { market: { in: ["US", "HK", "FOREX", "COMMODITY", "BOND"] } },
+        },
       })
       .catch(() => 0);
     range = intlBars > 0 ? "5d" : DEFAULT_INTL_RANGE;
@@ -88,7 +89,11 @@ export async function POST(req: NextRequest) {
   lastSyncAt = now;
   inFlight = true;
   try {
-    const outcome = await syncIntlEod({ range });
+    // #106 — orchestrator đa thị trường: 3 adapter nhanh chạy TRƯỚC (Treasury
+    // CSV / Frankfurter / er-api — không quota), Yahoo query2 sau cùng. Mọi
+    // adapter fail-soft độc lập; kết quả trả đủ 4 khối để audit.
+    const multi = await syncMultiMarkets({ yahooRange: range });
+    const outcome = multi.yahoo ?? null;
     // Cooldown tính từ lúc HOÀN THÀNH (F-441-01) — không phải lúc bắt đầu
     lastSyncAt = Date.now();
     // P1-6 — chuỗi hậu kiểm một cửa: A9-check cấu trúc cho các mã vừa nạp
@@ -102,15 +107,31 @@ export async function POST(req: NextRequest) {
       console.error("[api/market/intl-sync] postIngestChecks lỗi (bỏ qua):", err);
       return null;
     });
-    // Universe US/HK chưa seed (0 mã ok + 0 mã lỗi) → kèm note hướng dẫn
-    // (outcome vẫn ok=true — hợp lệ, không phải lỗi hệ thống)
+    // Universe phi-VN chưa seed → kèm note hướng dẫn (outcome vẫn ok=true)
+    const anyBars =
+      multi.treasury.barsUpserted +
+      multi.frankfurter.barsUpserted +
+      multi.erapi.barsUpserted +
+      (outcome?.barsUpserted ?? 0);
     const note =
-      outcome.symbolsOk.length === 0 && outcome.symbolsFailed.length === 0
-        ? "Chạy prisma/expand-universe.ts --intl để seed universe US/HK trước"
+      anyBars === 0
+        ? "Chạy prisma/expand-universe.ts --intl + scripts/p106-seed-markets.ts để seed universe phi-VN trước"
         : undefined;
-    const payload = note ? { ...outcome, note } : { ...outcome };
+    const ok =
+      multi.treasury.ok &&
+      multi.frankfurter.ok &&
+      multi.erapi.ok &&
+      (outcome?.ok ?? true);
+    const payload = {
+      treasury: multi.treasury,
+      frankfurter: multi.frankfurter,
+      erapi: multi.erapi,
+      yahoo: outcome,
+      durationMs: multi.durationMs,
+      ...(note ? { note } : {}),
+    };
     return NextResponse.json(toPlain(postCheck ? { ...payload, postCheck } : payload), {
-      status: outcome.ok ? 200 : 502,
+      status: ok ? 200 : 502,
     });
   } catch (err) {
     // Lỗi hệ thống (throw) — cho phép retry ngay, không giữ cooldown vô ích
@@ -125,11 +146,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Id các instrument US/HK active (tập hậu kiểm P1-6 của route này). */
+/** Id các instrument phi-VN active (tập hậu kiểm P1-6 của route này). */
 async function intlInstrumentIds(): Promise<string[]> {
   const rows = await db.instrument
     .findMany({
-      where: { isActive: true, market: { in: ["US", "HK"] } },
+      where: {
+        isActive: true,
+        market: { in: ["US", "HK", "FOREX", "COMMODITY", "BOND"] },
+      },
       select: { id: true },
     })
     .catch(() => [] as { id: string }[]);

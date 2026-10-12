@@ -86,7 +86,7 @@ const UNIT_CENTS: UnitSpec = {
   hasPriceBand: false, // quốc tế KHÔNG có trần/sàn ±7% kiểu VN
   tickUnit: 1,
 };
-const UNIT_BOND: UnitSpec = {
+export const UNIT_BOND: UnitSpec = {
   kind: "BOND_PCT",
   multiplier: 100,
   roundTo: 1,
@@ -94,6 +94,19 @@ const UNIT_BOND: UnitSpec = {
   maxPrice: 10_000, // 100% mệnh giá
   hasPriceBand: false,
   tickUnit: 1,
+};
+// #106 COUNCIL_STEWARDSHIP_BLUEPRINT §2.1 — cặp ngoại hối: tỷ giá thô
+// (EURUSD 1,0852 · USD/VND 25.886) ×10.000 → Int (10.852 · 258.860.000).
+// minPrice 1 = 0,0001 — cận dưới hợp lệ mọi cặp; maxPrice 1 tỷ đơn vị DB
+// = 100.000 đồng vị giá thô — trùm USD/VND (Int32 an toàn: ≤ 2,147 tỷ).
+export const UNIT_FX: UnitSpec = {
+  kind: "FX_RATE",
+  multiplier: 10_000,
+  roundTo: 1,
+  minPrice: 1,
+  maxPrice: 1_000_000_000,
+  hasPriceBand: false, // forex không có trần/sàn kiểu VN
+  tickUnit: 1, // 0,0001 tỷ giá = 1 đơn vị DB
 };
 
 /** Bảng tra (market:type) → UnitSpec — key thường hoa như enum Prisma. */
@@ -120,6 +133,13 @@ export const UNIT_SPECS: Record<string, UnitSpec> = {
   "HOSE:BOND": UNIT_BOND,
   "HNX:BOND": UNIT_BOND,
   "UPCOM:BOND": UNIT_BOND,
+  // #106 §2.1 — vũ trụ đa thị trường (Treasury CSV / Frankfurter / er-api /
+  // Yahoo query2): trái phiếu = % lợi suất ×100; forex = tỷ giá ×10.000;
+  // hàng hoá = cents ×100 (tái dùng UNIT_CENTS — GC=F 4.150,5 → 415.050).
+  "BOND:BOND": UNIT_BOND,
+  "FOREX:FX": UNIT_FX,
+  "COMMODITY:CMDTY": UNIT_CENTS,
+  "FOREX:INDEX": UNIT_FX, // DXY (DX-Y.NYB) — chỉ số tỷ giá, tính như rate
 };
 
 /** Tra UnitSpec theo (market, type) — fallback an toàn về VND (hành vi #33). */

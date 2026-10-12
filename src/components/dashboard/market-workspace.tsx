@@ -5,11 +5,14 @@ import { QuotesTable } from "@/components/dashboard/quotes-table";
 import { PriceChart } from "@/components/dashboard/price-chart";
 import { NewsCard } from "@/components/dashboard/news-card";
 import { RelationsCard } from "@/components/dashboard/relations-card";
+import { MultiMarketCard } from "@/components/dashboard/multi-market-card";
 
 /**
  * Phiên #34 — workspace "Thị trường": tách khỏi module Tổng quan cũ.
  * Bảng giá + biểu đồ + tin tức — dữ liệu EOD thật VNDIRECT (dchart).
  * M2 #103: card Quan hệ thị trường (cơ chế số 2 — học quan hệ liên thị trường).
+ * #106: card Đa rổ thị trường (5 lớp tài sản — trái phiếu/forex/hàng hoá/
+ * quốc tế cho nghiên cứu phân bổ của Hội đồng).
  */
 export function MarketWorkspace() {
   return (
@@ -49,6 +52,9 @@ export function MarketWorkspace() {
 
       {/* 5. Quan hệ thị trường đã học (M2 #103 — cơ chế số 2) */}
       <RelationsCard />
+
+      {/* 6. Đa rổ thị trường — 5 lớp tài sản (#106 COUNCIL_BLUEPRINT §2.4) */}
+      <MultiMarketCard />
     </div>
   );
 }

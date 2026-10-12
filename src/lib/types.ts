@@ -998,8 +998,11 @@ export interface SymbolAssessment {
  *  STOCK/ETF VN lưu VND nguyên (nguồn nghìn VND ×1000, bội 100) ·
  *  INDEX lưu điểm×100 (nguồn điểm thô ×100, KHÔNG round100, KHÔNG ×1000) ·
  *  STOCK/ETF QT lưu cents USD/HKD (nguồn thô ×100) · INDEX QT điểm×100 ·
- *  BOND (khi có nguồn) % mệnh giá ×100. */
-export type UnitKind = "VND" | "INDEX_POINT" | "CENTS" | "BOND_PCT";
+ *  BOND (khi có nguồn) % mệnh giá ×100.
+ *  #106 §2.1 — FOREX:FX lưu tỷ giá×10.000 (EURUSD 1,0852 → 10.852;
+ *  USD/VND 25.886 → 258.860.000 — trong Int) · COMMODITY:CMDTY cents×100
+ *  (GC=F 4.150,5 USD → 415.050) tái dùng CENTs. */
+export type UnitKind = "VND" | "INDEX_POINT" | "CENTS" | "BOND_PCT" | "FX_RATE";
 
 /** Quy tắc biến đổi giá của một tổ hợp (market × instrumentType). */
 export interface UnitSpec {
@@ -1247,4 +1250,173 @@ export interface XrelInsightResponse {
   insight: RelationInsightView;
   created: boolean;
   skippedReason?: string;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * #106 — COUNCIL_STEWARDSHIP_BLUEPRINT: module Hội đồng + đa thị trường
+ * (tài khoản toàn cục C-VISION · sổ đánh giá D-LEDGER · thí nghiệm E-ALLOC)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** Vị thế sandbox trong tầm nhìn hội đồng (close mới nhất để tính uPnL). */
+export interface CouncilPositionView {
+  symbol: string;
+  quantity: number;
+  avgPrice: number;
+  lastPrice: number | null;
+  unrealizedPnl: number | null;
+}
+
+/** Tài khoản Hội đồng (sandbox K1) — GET /api/council/overview. */
+export interface CouncilAccountView {
+  configured: boolean;
+  equity?: number;
+  cash?: number;
+  initial?: number | null;
+  activatedAt?: string | null;
+  pnlSinceActivation?: number | null;
+  pnlPctSinceActivation?: number | null;
+  dayChange?: number | null;
+  equityCurve?: Array<{ createdAt: string; equity: number }>;
+  positions?: CouncilPositionView[];
+}
+
+/** 1 hàng sổ đánh giá quyết định (1 Signal = 1 hàng, cập nhật hằng ngày). */
+export interface DecisionLedgerRowView {
+  id: string;
+  signalId: string;
+  symbol: string;
+  direction: string;
+  decidedAt: string;
+  agentName: string | null;
+  verdict: "WIN" | "LOSS" | "NEUTRAL";
+  markPnlPct: number | null;
+  peakPnlPct: number | null;
+  troughPnlPct: number | null;
+  cashPnlVND: number | null;
+  openQty: number | null;
+  executionKind: "EXECUTED_CLOSED" | "EXECUTED_OPEN" | "UNEXECUTED" | null;
+  world: "sandbox" | "paper" | null;
+  evaluatedAt: string;
+}
+
+export interface DecisionLedgerStatsView {
+  total: number;
+  WIN: number;
+  LOSS: number;
+  NEUTRAL: number;
+  winRate: number | null;
+  executed: number;
+  totalCashPnlVND: number;
+}
+
+/** Trọng số rổ của thí nghiệm phân bổ (chuẩn hoá về tổng 100). */
+export interface ExperimentWeightView {
+  basket: string;
+  weight: number;
+}
+
+export interface ExperimentResultView {
+  finalEquityVND: number | null;
+  returnPct: number | null;
+  maxDrawdownPct: number | null;
+  sharpe: number | null;
+  perBasket: Array<{ basket: string; weight: number; contributionPct: number }> | null;
+  lesson: string | null;
+}
+
+export interface CouncilExperimentView {
+  id: string;
+  name: string;
+  hypothesis: string;
+  weights: ExperimentWeightView[];
+  capitalVND: number;
+  horizonDays: number;
+  startedAt: string;
+  status: "RUNNING" | "DONE" | "STOPPED";
+  createdBy: string;
+  endedAt: string | null;
+  daysRun: number;
+  latest: { date: string; equityVND: number; returnPct: number } | null;
+  snapshots: Array<{ date: string; returnPct: number }>;
+  result: ExperimentResultView | null;
+}
+
+export interface CouncilOverviewResponse {
+  account: CouncilAccountView;
+  decisions: { rows: DecisionLedgerRowView[]; stats: DecisionLedgerStatsView };
+  experiments: { running: CouncilExperimentView[]; closed: CouncilExperimentView[] };
+  meta: { range: { from: string | null; to: string | null }; evaluatedAt: string };
+}
+
+/** Thống kê 1 rổ thị trường — GET /api/council/baskets. */
+export interface BasketStatView {
+  key: string;
+  label: string;
+  short: string;
+  description: string;
+  members: string[];
+  coverageDays: number;
+  firstDate: string | null;
+  lastDate: string | null;
+  ret1d: number | null;
+  ret5d: number | null;
+  ret30d: number | null;
+  vol30d: number | null;
+  bestDay: number | null;
+  worstDay: number | null;
+}
+
+export interface CouncilBasketsResponse {
+  baskets: BasketStatView[];
+  meta: { cachedTtlSec: number; generatedAt: string };
+}
+
+/** POST /api/council/evaluate — tóm tắt lượt đánh giá. */
+export interface CouncilEvalResponse {
+  evaluated: number;
+  byVerdict: { WIN: number; LOSS: number; NEUTRAL: number };
+  executed: number;
+  unexecuted: number;
+  durationMs: number;
+}
+
+/** POST /api/council/experiments/mark — tóm tắt lượt mark. */
+export interface CouncilMarkResponse {
+  running: number;
+  snapshotsWritten: number;
+  finalized: string[];
+  skippedNoData: number;
+  durationMs: number;
+}
+
+/** POST /api/council/allocation-session — kết quả hội nghị phân bổ LLM. */
+export interface CouncilSessionResponse {
+  ok: boolean;
+  created: boolean;
+  experimentId?: string;
+  experimentName?: string;
+  weights?: ExperimentWeightView[];
+  reflection?: string;
+  narrative?: string;
+  lessonsUpdated: number;
+  parseFail?: string;
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+  durationMs: number;
+}
+
+/** POST /api/council/experiments — tạo thí nghiệm tay. */
+export interface CouncilCreateExperimentResponse {
+  ok: boolean;
+  error?: string;
+  experiment?: {
+    id: string;
+    name: string;
+    weightsJson: string;
+    capitalVND: number;
+    horizonDays: number;
+    status: string;
+    startedAt: string;
+  };
 }

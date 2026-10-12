@@ -34,7 +34,7 @@ import {
 import { apiGet } from "@/lib/api";
 import { useDateRange } from "@/hooks/use-date-range";
 import { useUiStore } from "@/lib/store";
-import { changeColor, formatPct, formatPrice, formatVndCompact, formatVolume } from "@/lib/format";
+import { changeColor, formatPct, formatUnitPrice, formatVndCompact, formatVolume, unitKindOf } from "@/lib/format";
 import type { BarPoint, BarsResponse, QuotesResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -141,6 +141,21 @@ export function PriceChart() {
     staleTime: 30_000,
   });
 
+  // F-106-01 (fixbug #106) — đơn vị giá theo loại tài sản của MÃ ĐANG XEM:
+  // trước đây biểu đồ formatPrice + " ₫" cứng cho mọi mã → mã phi-VN sai đơn
+  // vị (VND=X hiển thị 258.860.000 ₫ thay vì 25.886 · GC=F 415.050 ₫ thay vì
+  // $4.150,50 · US10Y "425 ₫" thay vì 4,25%). Tra QuoteRow của mã trong cache
+  // quotes dùng chung → UnitKind → formatUnitPrice (một nguồn sự thật).
+  const quoteRow = quotesData?.quotes.find((q) => q.symbol === symbol);
+  const unitKind = quoteRow
+    ? unitKindOf(quoteRow.market, quoteRow.type)
+    : ("VND" as const);
+  const quoteCurrency = quoteRow?.currency;
+  const fmtP = React.useCallback(
+    (n: number | null | undefined) => formatUnitPrice(n, unitKind, quoteCurrency),
+    [unitKind, quoteCurrency]
+  );
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["bars", symbol, dateRange != null ? rangeKey : days],
     queryFn: () =>
@@ -211,22 +226,22 @@ export function PriceChart() {
             {`${label.slice(8, 10)}/${label.slice(5, 7)}/${label.slice(0, 4)}`}
           </p>
           <p className="tabular-nums">
-            M: <span className="font-semibold">{formatPrice(bar.open)} ₫</span>
+            M: <span className="font-semibold">{fmtP(bar.open)}</span>
             <span
               className={cn(
                 "ml-1.5 font-semibold",
                 barFlat ? "text-flat" : barUp ? "text-up" : "text-down"
               )}
             >
-              ⋯ Đ: {formatPrice(bar.close)} ₫
+              ⋯ Đ: {fmtP(bar.close)}
             </span>
           </p>
           <p className="tabular-nums text-muted-foreground">
-            Cao: {formatPrice(bar.high)} ₫ · Thấp: {formatPrice(bar.low)} ₫
+            Cao: {fmtP(bar.high)} · Thấp: {fmtP(bar.low)}
           </p>
           {bar.sma20 != null && (
             <p className="tabular-nums text-muted-foreground">
-              SMA20: {formatPrice(bar.sma20)} ₫
+              SMA20: {fmtP(bar.sma20)}
             </p>
           )}
           <p className="tabular-nums text-muted-foreground">
@@ -235,7 +250,7 @@ export function PriceChart() {
         </div>
       );
     },
-    [bars]
+    [bars, fmtP]
   );
 
   const renderRsiTip = React.useCallback(
@@ -271,7 +286,7 @@ export function PriceChart() {
           {data ? (
             <>
               <span className="text-lg font-bold tracking-tight">{data.symbol}</span>
-              <span className="tabular-nums font-semibold">{formatPrice(data.last)}</span>
+              <span className="tabular-nums font-semibold">{fmtP(data.last)}</span>
               <span
                 className={cn("tabular-nums text-sm font-medium", changeColor(data.changePct))}
               >
@@ -308,7 +323,7 @@ export function PriceChart() {
                 >
                   <span className="w-12 font-mono font-medium">{q.symbol}</span>
                   <span className="tabular-nums ml-auto text-xs text-muted-foreground">
-                    {formatPrice(q.last)}
+                    {formatUnitPrice(q.last, unitKindOf(q.market, q.type), q.currency)}
                   </span>
                 </DropdownMenuItem>
               ))}
@@ -397,7 +412,7 @@ export function PriceChart() {
                 <YAxis
                   yAxisId="price"
                   domain={domain}
-                  tickFormatter={(v: number) => formatPrice(v)}
+                  tickFormatter={(v: number) => fmtP(v)}
                   tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                   tickLine={false}
                   axisLine={false}

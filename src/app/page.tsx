@@ -9,6 +9,7 @@ import { PortfolioWorkspace } from "@/components/dashboard/portfolio-workspace";
 import { SignalsWorkspace } from "@/components/dashboard/signals-workspace";
 import { AgentsWorkspace } from "@/components/dashboard/agents-workspace";
 import { SynthesisWorkspace } from "@/components/dashboard/synthesis-workspace";
+import { CouncilWorkspace } from "@/components/dashboard/council-workspace";
 import { SettingsWorkspace } from "@/components/dashboard/settings-workspace";
 import { Footer } from "@/components/dashboard/footer";
 import { useRealtimeMarket } from "@/hooks/use-realtime";
@@ -38,6 +39,7 @@ const WORKSPACES: readonly Workspace[] = [
   "signals",
   "agents",
   "synthesis",
+  "council",
   "settings",
 ] as const;
 
@@ -85,6 +87,8 @@ export default function Page() {
           <AgentsWorkspace />
         ) : activeWorkspace === "synthesis" ? (
           <SynthesisWorkspace />
+        ) : activeWorkspace === "council" ? (
+          <CouncilWorkspace />
         ) : (
           <SettingsWorkspace />
         )}

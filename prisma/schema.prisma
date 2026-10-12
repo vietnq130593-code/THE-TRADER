@@ -22,6 +22,11 @@ enum Market {
   UPCOM // Thị trường OTC niêm yết
   US // Sàn quốc tế Mỹ (Yahoo Finance — MARKET_EXPANSION_BLUEPRINT B12)
   HK // Sàn quốc tế Hồng Kông (Yahoo Finance — MARKET_EXPANSION_BLUEPRINT B12)
+  // #106 COUNCIL_STEWARDSHIP_BLUEPRINT §2.1 — 3 lớp tài sản phi cổ phiếu:
+  // dữ liệu thật qua 4 adapter (Treasury CSV / Frankfurter ECB / er-api / Yahoo query2)
+  BOND // Trái phiếu — lợi suất Treasury Mỹ (US5Y/US10Y/US30Y), đơn vị %×100
+  FOREX // Ngoại hối — các cặp USD (Yahoo/Frankfurter/er-api), đơn vị tỷ giá×10.000
+  COMMODITY // Hàng hoá — kim loại/năng lượng (Yahoo query2), đơn vị cents×100
 }
 
 enum InstrumentType {
@@ -30,6 +35,10 @@ enum InstrumentType {
   FUND
   BOND
   INDEX
+  // #106 §2.1 — đơn vị tra qua UNIT_SPECS "FOREX:FX" (×10.000) và
+  // "COMMODITY:CMDTY" (cents ×100, tái dùng UNIT_CENTS)
+  FX // Cặp ngoại hối (EURUSD=X, VND=X, DX-Y.NYB...)
+  CMDTY // Hàng hoá tương lai (GC=F vàng, BZ=F Brent, HG=F đồng...)
 }
 
 enum AgentRole {
@@ -428,6 +437,9 @@ model Signal {
   updatedAt DateTime @updatedAt
 
   orders Order[]
+
+  // #106 D-LEDGER — sổ đánh giá quyết định (1-1 theo signalId)
+  evaluations DecisionEvaluation[]
 
   @@index([instrumentId, createdAt(sort: Desc)])
   @@index([direction, createdAt(sort: Desc)])
@@ -986,4 +998,98 @@ model RelationInsight {
   generatedAt    DateTime @default(now())
 
   @@index([generatedAt(sort: Desc)])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// #106 COUNCIL_STEWARDSHIP_BLUEPRINT — Hội đồng thấy tài khoản ·
+// sổ đánh giá quyết định · thí nghiệm phân bổ (D-LEDGER + E-ALLOC)
+// ─────────────────────────────────────────────────────────────────
+
+// D-LEDGER §3.1 — 1 Signal = 1 hàng, cập nhật hằng ngày (upsert theo
+// signalId, engine 16:45 ICT t2–t6 sau k1 settle 16:30). Hai lớp kết quả
+// song song: (a) dự báo — mọi tín hiệu, theo hướng từ close ngày quyết
+// định → close mới nhất; (b) thực thi — dòng tiền VND của các Trade thuộc
+// Order.signalId (mua −, bán +, trừ phí/thuế — đối xứng netRealised
+// k-sandbox.ts). Phán quyết ±0,5% khớp ngưỡng bandit #87.
+model DecisionEvaluation {
+  id            String   @id @default(cuid())
+  signalId      String   @unique
+  signal        Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  instrumentId  String? // denormalise — lọc nhanh theo mã
+  direction     String // BUY | SELL | HOLD
+  decidedAt     DateTime // Signal.createdAt
+  agentId       String? // agent tạo tín hiệu (thường Chủ tịch)
+
+  // (a) KẾT QUẢ DỰ BÁO — tính cho MỌI tín hiệu (kể cả chưa thực thi)
+  entryPrice    Int? // Bar close ngày quyết định (đơn vị DB theo UnitSpec)
+  markPrice     Int? // close mới nhất hoặc giá thoát khi vị thế đóng
+  markPnlPct    Float? // % theo HƯỚNG (SELL đảo dấu)
+  peakPnlPct    Float? // đỉnh lợi suất dự báo từ lúc quyết định
+  troughPnlPct  Float? // đáy lợi suất dự báo
+
+  // (b) KẾT QUẢ THỰC THI — chỉ tín hiệu có lệnh khớp (sandbox + giấy)
+  executionKind String? // EXECUTED_CLOSED | EXECUTED_OPEN | UNEXECUTED
+  cashPnlVND    BigInt? // dòng thuần đã chốt (bán +, mua −, trừ phí/thuế)
+  openQty       Int? // lượng còn mở (unrealised tại markPrice)
+  world         String? // sandbox | paper — thế giới lệnh gốc
+
+  verdict       String // WIN | LOSS | NEUTRAL (ngưỡng ±0,5%)
+  driversJson   String? // JSON: fills, consensusGate, số liệu phân tích
+  evaluatedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([evaluatedAt(sort: Desc)])
+  @@index([verdict])
+  @@index([direction])
+}
+
+// E-ALLOC §5.1 — thí nghiệm phân bổ đa rổ do HỘI ĐỒNG tự đề xuất (hoặc
+// trader tạo tay): vốn giấy ĐỘC LẬP, đánh giá mark-to-market hằng ngày
+// theo chỉ số rổ (constant-mix — tái cân bằng về trọng số gốc mỗi ngày).
+// KHÔNG đặt lệnh thật/sandbox — đúng chỉ đạo “đầu tư bao nhiêu, bao nhiêu
+// phần bỏ vào rổ nào là việc hội đồng tự nghiên cứu, thử nghiệm”.
+model AllocationExperiment {
+  id             String   @id @default(cuid())
+  name           String
+  hypothesis     String // giả thuyết hội đồng tự viết
+  weightsJson    String // [{basket, weight}] — trọng số %, tổng 100
+  capitalVND     BigInt // vốn giấy của thí nghiệm
+  horizonDays    Int // 7..90 ngày giao dịch
+  startedAt      DateTime @default(now())
+  status         String   @default("RUNNING") // RUNNING | DONE | STOPPED
+  createdBy      String   @default("council") // council | trader | seed
+
+  // Kết quả — ghi 1 lần khi chuyển DONE (engine tổng kết)
+  finalEquityVND BigInt?
+  returnPct      Float?
+  maxDrawdownPct Float?
+  sharpe         Float? // mean/std × √252 trên chuỗi snapshot
+  perBasketJson  String? // JSON đóng góp lợi suất từng rổ
+  lesson         String? // bài học (LLM hội nghị phân bổ KẾ tiếp viết lại)
+  endedAt        DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  snapshots      ExperimentSnapshot[]
+
+  @@index([status, startedAt(sort: Desc)])
+  @@index([createdBy])
+}
+
+// 1 dòng/ngày cho mỗi thí nghiệm đang chạy (unique(experimentId, date) —
+// idempotent, engine 16:35 ICT t2–t6). basketsJson giữ per-basket value +
+// return NGÀY đó để hồi cứu đóng góp từng rổ.
+model ExperimentSnapshot {
+  id           String   @id @default(cuid())
+  experimentId String
+  experiment   AllocationExperiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  date         DateTime // ngày ICT — neo 15:00 UTC cùng convention Bar
+  equityVND    BigInt // mark-to-market theo chỉ số rổ
+  returnPct    Float // lũy kế từ vốn gốc
+  basketsJson  String // [{basket, value, retDay}] — đóng góp ngày
+  createdAt    DateTime @default(now())
+
+  @@unique([experimentId, date])
+  @@index([experimentId, date])
 }

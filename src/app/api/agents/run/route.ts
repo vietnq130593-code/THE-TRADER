@@ -27,6 +27,8 @@ import {
   buildLiquidityBlock,
   buildPortfolioWeightsBlock,
 } from "@/lib/agent-context";
+// #106 C-VISION — tầm nhìn toàn cục hội đồng cho Chủ tịch (wave E)
+import { buildCouncilVisionBlock } from "@/lib/council/vision";
 import { AGENT_ROSTER } from "@/lib/agent-roster";
 // E-P1-1 (EXECUTION_OPS_BLUEPRINT v1.2): parse khối đề xuất phân bổ của Chủ tịch.
 import {
@@ -903,6 +905,13 @@ export async function POST() {
     // đề xuất phân bổ của Chủ tịch (currentPct không bịa — đo từ DB).
     const portfolioWeightsBlock = await buildPortfolioWeightsBlock().catch(() => null);
 
+    // #106 C-VISION — TÀI KHOẢN HỘI ĐỒNG (sandbox K1) + kết quả 7 quyết định
+    // gần nhất (D-LEDGER) + thí nghiệm phân bổ đang chạy: Chủ tịch đánh giá
+    // TOÀN CỘC lợi ích/tổn thất các quyết định đã đưa ra. Fail-soft như
+    // RAG/XREL — 3 đường parity (đây là đường chu kỳ; 2 đường kia ở
+    // agent-context.ts single-run + chat).
+    const councilVisionBlock = await buildCouncilVisionBlock().catch(() => null);
+
     const strategistUserPrompt = [
       [marketBlock, newsBlock, flowsBlock, valuationBlock, liquidityBlock].join("\n\n"),
       `TÍN HIỆU ĐANG MỞ:\n${openSignalsBlock}`,
@@ -923,6 +932,8 @@ export async function POST() {
       ...(riskQuant?.ok ? ["", buildQuantChairmanBlock(riskQuant)] : []),
       // E-P1-1 — tỷ trọng hiện tại cho khối đề xuất phân bổ
       ...(portfolioWeightsBlock ? ["", portfolioWeightsBlock] : []),
+      // #106 C-VISION — tầm nhìn toàn cục hội đồng (tài khoản + kết quả quyết định + thí nghiệm)
+      ...(councilVisionBlock ? ["", councilVisionBlock] : []),
       "",
       `BÁO CÁO TỪ ${digestLines.length} AGENTS CỦA HỘI ĐỒNG (để tổng hợp):`,
       ...digestLines,

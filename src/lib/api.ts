@@ -46,6 +46,16 @@ export async function apiPatchJson<T>(path: string, body: unknown): Promise<T> {
   return data;
 }
 
+/** PUT — #106 (dừng thí nghiệm phân bổ /api/council/experiments?id=…). */
+export async function apiPut<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: "PUT" });
+  const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!res.ok || data == null) {
+    throw new Error(data?.error ?? `Yêu cầu thất bại (${res.status})`);
+  }
+  return data;
+}
+
 /** DELETE — K3 #94 (xoá nhiệm vụ). */
 export async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(path, { method: "DELETE" });
