@@ -30,8 +30,9 @@ import { RAG_TUNING_DEFAULT, readMlTuning, type RagTuning } from "@/lib/ml/tunin
 
 /** 500 tin broadcast gần nhất — khớp config A13 memoryWindow: 500. */
 const CORPUS_MESSAGES = 500;
-/** 200 tin tức gần nhất — cùng nhịp ingest RSS 15 phút. */
-const CORPUS_NEWS = 200;
+/** 200 tin tức gần nhất — cùng nhịp ingest RSS 15 phút.
+ * #101: export cho /api/news/archive chỉ báo inRagCorpus (một nguồn sự thật). */
+export const CORPUS_NEWS = 200;
 /** Top-K mặc định — nguồn sự thật: RAG_TUNING_DEFAULT (ml/tuning.ts #89). */
 export const RAG_TOP_K = RAG_TUNING_DEFAULT.topK;
 /** BM25 k₁ · b mặc định (Robertsen) — tinh chỉnh được qua AppSetting ml-tuning (#89). */

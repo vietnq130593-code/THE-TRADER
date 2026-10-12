@@ -714,6 +714,38 @@ export interface NewsResponse {
   };
 }
 
+/** #101 — 1 tin trong kho tin tức kèm chỉ báo làm giàu tri thức agents. */
+export interface NewsArchiveItem extends NewsItemRow {
+  /** Điểm lexicon quant ∈ [−1, 1] (0 = trung tính thật sự). */
+  lexiconScore: number;
+  /** Trong 10 tin mới nhất News & Sentiment (A4) đọc mỗi chu kỳ. */
+  inA4Window: boolean;
+  /** Trong corpus 200 tin mới nhất của RAG BM25 (truy hồi prompt nghiên cứu). */
+  inRagCorpus: boolean;
+}
+
+/** #101 — GET /api/news/archive?from=&to=&take=&offset= */
+export interface NewsArchiveResponse {
+  items: NewsArchiveItem[];
+  meta: {
+    total: number;
+    from: string;
+    to: string;
+    take: number;
+    offset: number;
+    /** Phạm vi publishedAt thực tế toàn kho (giới hạn min/max cho date input). */
+    bounds: { min: string | null; max: string | null };
+    counts: {
+      bySource: Record<string, number>;
+      byCategory: Record<string, number>;
+      inA4Window: number;
+      inRagCorpus: number;
+      lexiconPos: number;
+      lexiconNeg: number;
+    };
+  };
+}
+
 export interface NewsIngestResponse {
   added: number;
   updated: number;

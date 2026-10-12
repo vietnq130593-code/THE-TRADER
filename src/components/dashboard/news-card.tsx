@@ -4,7 +4,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
-import { ExternalLink, Loader2, Newspaper, RefreshCw, Rss, ShieldCheck } from "lucide-react";
+import { ExternalLink, Library, Loader2, Newspaper, RefreshCw, Rss, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { NewsArchiveDialog } from "@/components/dashboard/news-archive-dialog";
 import type { NewsIngestResponse, NewsResponse } from "@/lib/types";
 
 /**
@@ -22,6 +23,7 @@ import type { NewsIngestResponse, NewsResponse } from "@/lib/types";
  */
 export function NewsCard() {
   const queryClient = useQueryClient();
+  const [archiveOpen, setArchiveOpen] = React.useState(false);
 
   const newsQuery = useQuery({
     queryKey: ["news"],
@@ -90,6 +92,16 @@ export function NewsCard() {
                   : "Cache (offline)"}
               </Badge>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 px-2.5"
+              onClick={() => setArchiveOpen(true)}
+              aria-label="Mở kho tin tức theo ngày"
+            >
+              <Library className="size-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Kho tin</span>
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -206,6 +218,7 @@ export function NewsCard() {
           </>
         )}
       </CardContent>
+      <NewsArchiveDialog open={archiveOpen} onOpenChange={setArchiveOpen} />
     </Card>
   );
 }

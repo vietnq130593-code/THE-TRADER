@@ -3322,3 +3322,26 @@ Stage Summary:
 - File đổi: scripts/p100b-seed-tasks.ts (MỚI, giữ lại để tái tạo idempotent) + 3 screenshot. KHÔNG đụng file sân 100-A. Không restart gì.
 - Còn treo (P2, ngoài scope): nav.tsx:82 description nút module "Tổng hợp" còn ghi "7 tab" (đã có 8 tab từ #99) — 1 chuỗi string, để trader quyết định.
 - VÁ NỐT P2 ngoài scope 100-A để lại (quy tắc #37 vá ngay): nav.tsx:82 description module "Tổng hợp" "7 tab" → "8 tab: Bayes · học máy · mạng thần kinh · tinh chỉnh · tự động tìm kiếm" — GET / 200 · lint 0 lỗi (socket.io 404 polling = pattern gateway có sẵn, không phải lỗi).
+
+---
+Task ID: 101 (phiên #101)
+Agent: main-orchestrator (Z.ai Code)
+Task: Yêu cầu trader — module Thị trường > Tin tức thị trường cần nút mở dialog danh sách tin tức + bộ lọc từ ngày → đến ngày, để đọc tin VÀ xác định chính xác tin nào đang làm giàu tri thức agents.
+
+Work Log:
+- Khảo sát: NewsCard (market workspace) hiện chỉ 12 tin mới nhất · /api/news?limit=30 không có lọc ngày · 4 đường tiêu thụ tin: A4 buildNewsBlock latestNewsForContext(10) · RAG corpus CORPUS_NEWS=200 (rag.ts, chưa export) · lexicon scoreNews (quant/sentiment.ts, đã export) · bandit theo NGUỒN không theo tin.
+- FRONTEND (viết trước): src/components/dashboard/news-archive-dialog.tsx MỚI — Dialog sm:max-w-3xl max-h-[92vh] custom-scrollbar: 2 Input type="date" Từ/Đến ngày (min/max = bounds toàn kho) + 4 preset (Hôm nay/7 ngày/30 ngày/Toàn bộ) + nút Áp dụng; khối thống kê khoảng (tổng tin · A4 đọc n · RAG n · Lexicon p+/q− · per-source); danh sách max-h-[52vh] custom-scrollbar mỗi tin có badge nguồn + Thị trường/Vĩ mô + A4 (up) + RAG (primary) + Lexicon +x,−x (vi-VN) + giờ ICT formatDateTime; phân trang Trước/Sau (30 tin/trang); legend 4 đường tiêu thụ; empty state trung thực; query key ["news-archive",from,to,page] enabled:open, lazy-initializer tránh set-state-in-effect (eslint rule mới).
+- news-card.tsx: nút "Kho tin" (icon Library, aria-label "Mở kho tin tức theo ngày") cạnh "Nạp tin" trong CardAction + render NewsArchiveDialog.
+- BACKEND: src/app/api/news/archive/route.ts MỚI — GET ?from&to&take(1..100)&offset, ranh giới ngày ICT +07:00 (T00:00:00+07:00 → T23:59:59.999+07:00), mặc định 7 ngày ICT, validate 422 {fields[]} (sai format + to<from); Promise.all 8 truy vấn (page/total/a4Ids 10/ragIds 200/lexScan cap 5.000/bounds/groupBy nguồn+category) + 2 count giao (∩ khoảng); per-item: lexiconScore scoreNews(title+summary) · inA4Window · inRagCorpus; rag.ts export CORPUS_NEWS (một nguồn sự thật, 0 đổi giá trị).
+- types.ts: NewsArchiveItem (extends NewsItemRow + lexiconScore/inA4Window/inRagCorpus) + NewsArchiveResponse (meta.bounds/counts).
+
+Nghiệm thu:
+- Lint 0 lỗi · tsc 0 lỗi src (vá 2 lỗi TS: onChange e.target.value không null; bỏ useEffect initializer).
+- API smoke: 7 request 200 (56-91ms) · 422 đúng 2 ca (from=abc · to<from) · từ 2026-10-05→12: 104 tin · A4=10 · RAG=104 (kho<200 → toàn bộ trong corpus, trung thực) · lexicon 38+/22− · per-source CafeF 29/Tuổi Trẻ 24/VNExpress 16/VietnamNet 23/VnEconomy 12 · lexiconScore phân hoá thật (+1,00 "trợ cấp lãi suất thúc đẩy" · −1,00 "giá cá tra giảm").
+- Browser E2E (agent-browser, desktop 1440): tab Thị trường → card Tin tức thị trường → nút "Kho tin" → dialog mở: date input 2026-10-06→12 (mặc định 7 ngày) · stats khớp API · danh sách badge A4/RAG/Lexicon +1,0 vi-VN · preset "Hôm nay" → 49 tin A4:10 RAG:49 Lexicon 17+/10− · phân trang Trước/Sau hoạt động (trang 2/2, Sau disabled ở cuối) · 0 console error · 0 page error · mobile 390: scrollWidth=clientWidth=390 (0 tràn) dialog render đủ — screenshots docs/p101-verify-archive-{dialog,mobile}.png.
+- dev.log sạch: chỉ request archive 200 + socket.io 404 pattern có sẵn từ trước.
+
+Stage Summary:
+- TÍNH NĂNG HOÀN CHỈNH đúng yêu cầu trader: nút "Kho tin" trong card Tin tức thị trường (module Thị trường) mở dialog lọc từ ngày → đến ngày (input date + 4 preset + phân trang 30 tin/trang) — ĐỌC TIN (link gốc từng bài) + XÁC ĐỊNH CHÍNH XÁC tin đang nuôi tri thức agents qua 3 chỉ báo per-tin (A4: trong 10 tin chu kỳ · RAG: trong corpus 200 · Lexicon: điểm quant −1..+1) + legend đường thứ 4 (bandit học theo nguồn) + thống kê khoảng.
+- File đổi (6 + 2 ảnh): news-archive-dialog.tsx MỚI · news-card.tsx (+nút+dialog) · api/news/archive/route.ts MỚI · rag.ts (export CORPUS_NEWS) · types.ts (+2 interface) · 2 screenshot. KHÔNG đổi logic 4 đường tiêu thụ · KHÔNG đụng file sân khác.
+- ICT ranh giới ngày +07:00 khớp timezone trader (Asia/Shanghai = UTC+7) · query chỉ chạy khi dialog mở (enabled: open).
