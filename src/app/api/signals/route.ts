@@ -9,15 +9,49 @@ export const dynamic = "force-dynamic";
  * GET /api/signals — recent trading signals with instrument + agent info.
  * PHASE3 B2 §4.1: map thêm status / rejectedAt / rejectNote.
  */
-export async function GET() {
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Ngày bắt đầu ICT (00:00 +07:00) của chuỗi "YYYY-MM-DD". */
+function ictDayStart(date: string): Date {
+  return new Date(`${date}T00:00:00+07:00`);
+}
+
+/** Ngày kết thúc ICT (cuối ngày +07:00) của chuỗi "YYYY-MM-DD". */
+function ictDayEnd(date: string): Date {
+  return new Date(`${date}T23:59:59.999+07:00`);
+}
+
+export async function GET(req: Request) {
   try {
+    // #105 — khoảng thời gian toàn cục: from/to ngày ICT "YYYY-MM-DD".
+    // Hợp lệ → lọc createdAt trong khoảng (take nới 12 → 60 vì khoảng dài
+    // có thể nhiều tín hiệu hơn mặc định). Không có/không hợp lệ → hành vi cũ.
+    const sp = new URL(req.url).searchParams;
+    const fromParam = sp.get("from");
+    const toRaw = sp.get("to");
+    const hasRange = Boolean(
+      fromParam &&
+        toRaw &&
+        DATE_RE.test(fromParam) &&
+        DATE_RE.test(toRaw) &&
+        fromParam <= toRaw,
+    );
+
     // P1 AUD-CODE #1: sweep tín hiệu hết hạn trước khi trả — UI/prompt luôn thấy
     // đúng trạng thái vòng đời (ACTIVE chỉ còn tín hiệu còn hạn)
     await expireDueSignals();
 
     const signals = await db.signal.findMany({
+      where: hasRange
+        ? {
+            createdAt: {
+              gte: ictDayStart(fromParam!),
+              lte: ictDayEnd(toRaw!),
+            },
+          }
+        : undefined,
       orderBy: { createdAt: "desc" },
-      take: 12,
+      take: hasRange ? 60 : 12,
       include: {
         instrument: { select: { symbol: true, name: true } },
         agent: { select: { code: true, name: true } },

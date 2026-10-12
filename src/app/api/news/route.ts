@@ -10,6 +10,18 @@ export const dynamic = "force-dynamic";
  * + P2-2/#62: reliability per-feed (tỉ lệ parse lỗi/tin trùng tích luỹ).
  * POST /api/news — chạy crawler RSS ngay (rate-limit 60s giữa 2 lần nạp).
  */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Ngày bắt đầu ICT (00:00 +07:00) của chuỗi "YYYY-MM-DD". */
+function ictDayStart(date: string): Date {
+  return new Date(`${date}T00:00:00+07:00`);
+}
+
+/** Ngày kết thúc ICT (cuối ngày +07:00) của chuỗi "YYYY-MM-DD". */
+function ictDayEnd(date: string): Date {
+  return new Date(`${date}T23:59:59.999+07:00`);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const limitParam = Number(req.nextUrl.searchParams.get("limit") ?? 12);
@@ -17,11 +29,27 @@ export async function GET(req: NextRequest) {
       30,
       Math.max(1, Number.isFinite(limitParam) ? limitParam : 12)
     );
+    // #105 — khoảng thời gian toàn cục: from/to ngày ICT "YYYY-MM-DD".
+    // Hợp lệ → lọc publishedAt trong khoảng (take nới tối đa 60).
+    const fromParam = req.nextUrl.searchParams.get("from");
+    const toRaw = req.nextUrl.searchParams.get("to");
+    const hasRange = Boolean(
+      fromParam &&
+        toRaw &&
+        DATE_RE.test(fromParam) &&
+        DATE_RE.test(toRaw) &&
+        fromParam <= toRaw
+    );
 
     const [items, sources, total] = await Promise.all([
       db.newsItem.findMany({
+        where: hasRange
+          ? {
+              publishedAt: { gte: ictDayStart(fromParam!), lte: ictDayEnd(toRaw!) },
+            }
+          : undefined,
         orderBy: { publishedAt: "desc" },
-        take: limit,
+        take: hasRange ? Math.max(limit, 60) : limit,
         select: {
           id: true,
           title: true,

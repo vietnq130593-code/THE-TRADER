@@ -24,6 +24,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet } from "@/lib/api";
+import { useDateRange } from "@/hooks/use-date-range";
 import { useSignalDecision } from "@/hooks/use-agent-actions";
 import { RUN_AGENTS_MUTATION_KEY } from "@/hooks/use-run-agents";
 import { useUiStore } from "@/lib/store";
@@ -170,16 +171,19 @@ export function AgentsPanel() {
  * tín hiệu strategist PHASE3 B2 §4.5 + hàng pulse khi chu kỳ đang chạy).
  */
 export function AgentDiscussionCard() {
+  // #105 — khoảng thời gian toàn cục: lọc thảo luận + tín hiệu theo khoảng.
+  const { rangeQuery, rangeKey, dateRange } = useDateRange();
   const messagesQuery = useQuery({
-    queryKey: ["agent-messages"],
+    queryKey: ["agent-messages", rangeKey],
     queryFn: () =>
-      apiGet<{ messages: AgentMessageRow[] }>("/api/agents/messages"),
+      apiGet<{ messages: AgentMessageRow[] }>(`/api/agents/messages${rangeQuery ? `?${rangeQuery}` : ""}`),
     staleTime: 30_000,
   });
   // PHASE3 B2: signals ACTIVE để gắn nút Phê duyệt / Từ chối vào tin strategist.
   const signalsQuery = useQuery({
-    queryKey: ["signals"],
-    queryFn: () => apiGet<{ signals: SignalRow[] }>("/api/signals"),
+    queryKey: ["signals", rangeKey],
+    queryFn: () =>
+      apiGet<{ signals: SignalRow[] }>(`/api/signals${rangeQuery ? `?${rangeQuery}` : ""}`),
     staleTime: 30_000,
   });
   // Phiên #47 — đếm mutation đang chạy TOÀN APP qua useIsMutating +
@@ -196,7 +200,11 @@ export function AgentDiscussionCard() {
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="text-sm">Luồng thảo luận giữa các agent</CardTitle>
-        <CardDescription>30 tin nhắn gần nhất (mới nhất trước)</CardDescription>
+        <CardDescription>
+          {dateRange != null
+            ? `Thảo luận trong khoảng ${dateRange.from.split("-").reverse().join("/")} → ${dateRange.to.split("-").reverse().join("/")} (mới nhất trước)`
+            : "30 tin nhắn gần nhất (mới nhất trước)"}
+        </CardDescription>
       </CardHeader>
       <CardContent className="pb-0">
         {messagesQuery.isLoading ? (

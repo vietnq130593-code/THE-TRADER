@@ -4,14 +4,32 @@ import { toPlain } from "@/lib/serialize";
 
 export const dynamic = "force-dynamic";
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
  * GET /api/instruments/bars?symbol=VCB&days=90
+ * GET /api/instruments/bars?symbol=VCB&from=2026-09-12&to=2026-10-12 (#105)
  * OHLCV bars for charting + SMA20 (computed over full history before slicing).
+ *
+ * #105 — khoảng thời gian toàn cục: from/to là ngày "YYYY-MM-DD" theo ICT.
+ * Khi hợp lệ, lọc nến theo ngày ISO của nến (so sánh chuỗi — không lệch múi
+ * giờ lưu trữ) và NÂNG trần từ 90 nến (F-208) lên 1.200 nến (~5 năm) vì
+ * trader chủ động chọn khoảng dài qua bộ chọn trên thanh bar. days= vẫn giữ
+ * nguyên hành vi cũ 10..90 khi không có from/to.
  */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const symbol = (searchParams.get("symbol") ?? "VCB").toUpperCase().trim();
+    const fromParam = searchParams.get("from");
+    const toParam = searchParams.get("to");
+    const hasRange = Boolean(
+      fromParam &&
+        toParam &&
+        DATE_RE.test(fromParam) &&
+        DATE_RE.test(toParam) &&
+        fromParam <= toParam,
+    );
     const daysRaw = Number(searchParams.get("days") ?? 90);
     const days = Number.isFinite(daysRaw)
       ? Math.min(Math.max(Math.round(daysRaw), 10), 90) // F-208 (audit 19-b): đồng bộ với doc — cap 90 ngày
@@ -57,8 +75,19 @@ export async function GET(req: NextRequest) {
       return window.reduce((s, c) => s + c, 0) / 20;
     });
 
-    const bars = allBars.slice(-days).map((b, i) => {
-      const idx = allBars.length - days + i;
+    // #105: có from/to → lọc trực tiếp theo ngày ISO của nến (SMA20 vẫn tính
+    // trên TOÀN BỘ lịch sử nên đầu chuỗi chính xác). Trần 1.200 nến.
+    const selected = hasRange
+      ? allBars
+          .map((b, idx) => ({ b, idx }))
+          .filter(({ b }) => {
+            const iso = b.date.toISOString().slice(0, 10);
+            return iso >= fromParam! && iso <= toParam!;
+          })
+          .slice(-1200)
+      : allBars.map((b, idx) => ({ b, idx })).slice(-days);
+
+    const bars = selected.map(({ b, idx }) => {
       return {
         date: b.date.toISOString().slice(0, 10),
         open: b.open,
@@ -75,7 +104,9 @@ export async function GET(req: NextRequest) {
       toPlain({
         symbol: instrument.symbol,
         name: instrument.name,
-        days,
+        days: hasRange ? bars.length : days,
+        from: hasRange ? fromParam : null,
+        to: hasRange ? toParam : null,
         last: quote?.last ?? bars.at(-1)?.close ?? 0,
         change: quote?.change ?? 0,
         changePct: quote?.changePct ?? 0,

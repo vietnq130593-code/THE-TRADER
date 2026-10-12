@@ -32,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { apiGet } from "@/lib/api";
+import { useDateRange } from "@/hooks/use-date-range";
 import { useUiStore } from "@/lib/store";
 import { changeColor, formatPct, formatPrice, formatVndCompact, formatVolume } from "@/lib/format";
 import type { BarPoint, BarsResponse, QuotesResponse } from "@/lib/types";
@@ -129,6 +130,10 @@ export function PriceChart() {
   const setDays = useUiStore((s) => s.setChartDays);
   const chartMode = useUiStore((s) => s.chartMode);
   const setChartMode = useUiStore((s) => s.setChartMode);
+  // #105 — khoảng thời gian toàn cục: khi trader chọn khoảng trên thanh bar,
+  // cửa sổ biểu đồ theo NGUYÊN khoảng (API nâng trần 1.200 nến); tab 30/60/90N
+  // tạm khoá để tránh 2 nguồn thật khiên nhau.
+  const { dateRange, rangeQuery, rangeKey } = useDateRange();
 
   const { data: quotesData } = useQuery({
     queryKey: ["quotes"],
@@ -137,10 +142,12 @@ export function PriceChart() {
   });
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["bars", symbol, days],
+    queryKey: ["bars", symbol, dateRange != null ? rangeKey : days],
     queryFn: () =>
       apiGet<BarsResponse>(
-        `/api/instruments/bars?symbol=${encodeURIComponent(symbol)}&days=${days}`
+        rangeQuery
+          ? `/api/instruments/bars?symbol=${encodeURIComponent(symbol)}&${rangeQuery}`
+          : `/api/instruments/bars?symbol=${encodeURIComponent(symbol)}&days=${days}`
       ),
     staleTime: 5 * 60_000,
   });
@@ -328,9 +335,19 @@ export function PriceChart() {
               value={String(days)}
               onValueChange={(v) => setDays(Number(v))}
             >
-              <TabsList className="h-9">
+              <TabsList className="h-9" aria-disabled={dateRange != null}>
                 {TIMEFRAMES.map((d) => (
-                  <TabsTrigger key={d} value={String(d)} className="px-2.5 text-xs">
+                  <TabsTrigger
+                    key={d}
+                    value={String(d)}
+                    className="px-2.5 text-xs data-[state=active]:data-[disabled]:text-muted-foreground"
+                    disabled={dateRange != null}
+                    title={
+                      dateRange != null
+                        ? "Cửa sổ biểu đồ đang theo khoảng thời gian đã chọn trên thanh bar — xoá khoảng để dùng lại tab nhanh"
+                        : `${d} phiên giao dịch gần nhất`
+                    }
+                  >
                     {d}N
                   </TabsTrigger>
                 ))}

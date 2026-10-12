@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost } from "@/lib/api";
+import { useDateRange } from "@/hooks/use-date-range";
 import { cn } from "@/lib/utils";
 import { NewsArchiveDialog } from "@/components/dashboard/news-archive-dialog";
 import type { NewsIngestResponse, NewsResponse } from "@/lib/types";
@@ -24,10 +25,13 @@ import type { NewsIngestResponse, NewsResponse } from "@/lib/types";
 export function NewsCard() {
   const queryClient = useQueryClient();
   const [archiveOpen, setArchiveOpen] = React.useState(false);
+  // #105 — khoảng thời gian toàn cục: lọc tin theo khoảng đã chọn.
+  const { rangeQuery, rangeKey } = useDateRange();
 
   const newsQuery = useQuery({
-    queryKey: ["news"],
-    queryFn: () => apiGet<NewsResponse>("/api/news?limit=12"),
+    queryKey: ["news", rangeKey],
+    queryFn: () =>
+      apiGet<NewsResponse>(`/api/news?limit=12${rangeQuery ? `&${rangeQuery}` : ""}`),
     staleTime: 5 * 60_000,
   });
 

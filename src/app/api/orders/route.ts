@@ -21,10 +21,40 @@ export const dynamic = "force-dynamic";
  * thế giới tiền — sổ lệnh sandbox do agents tự giữ hiển thị riêng tab Danh mục
  * khi trader chọn "Thử nghiệm".
  */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Ngày bắt đầu ICT (00:00 +07:00) của chuỗi "YYYY-MM-DD". */
+function ictDayStart(date: string): Date {
+  return new Date(`${date}T00:00:00+07:00`);
+}
+
+/** Ngày kết thúc ICT (cuối ngày +07:00) của chuỗi "YYYY-MM-DD". */
+function ictDayEnd(date: string): Date {
+  return new Date(`${date}T23:59:59.999+07:00`);
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const accountType = url.searchParams.get("accountType") === "sandbox" ? "sandbox" : "paper";
+    // #105 — khoảng thời gian toàn cục: from/to ngày ICT "YYYY-MM-DD".
+    // Hợp lệ → lọc lệnh theo createdAt · giao dịch theo executedAt trong khoảng
+    // (take nới 20 → 100 vì khoảng dài nhiều bản ghi hơn).
+    const fromParam = url.searchParams.get("from");
+    const toRaw = url.searchParams.get("to");
+    const hasRange = Boolean(
+      fromParam &&
+        toRaw &&
+        DATE_RE.test(fromParam) &&
+        DATE_RE.test(toRaw) &&
+        fromParam <= toRaw,
+    );
+    const rangeFilter = hasRange
+      ? {
+          gte: ictDayStart(fromParam!),
+          lte: ictDayEnd(toRaw!),
+        }
+      : undefined;
     const account = await db.brokerAccount.findFirst({
       where:
         accountType === "sandbox"
@@ -39,15 +69,19 @@ export async function GET(req: Request) {
 
     const [orders, trades] = await Promise.all([
       db.order.findMany({
-        where: accountFilter,
+        where: hasRange
+          ? { ...accountFilter, createdAt: rangeFilter }
+          : accountFilter,
         orderBy: { createdAt: "desc" },
-        take: 20,
+        take: hasRange ? 100 : 20,
         include: { instrument: { select: { symbol: true, name: true } } },
       }),
       db.trade.findMany({
-        where: { order: accountFilter },
+        where: hasRange
+          ? { order: accountFilter, executedAt: rangeFilter }
+          : { order: accountFilter },
         orderBy: { executedAt: "desc" },
-        take: 20,
+        take: hasRange ? 100 : 20,
         include: { instrument: { select: { symbol: true, name: true } } },
       }),
     ]);

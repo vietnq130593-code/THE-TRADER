@@ -12,7 +12,7 @@ import { SynthesisWorkspace } from "@/components/dashboard/synthesis-workspace";
 import { SettingsWorkspace } from "@/components/dashboard/settings-workspace";
 import { Footer } from "@/components/dashboard/footer";
 import { useRealtimeMarket } from "@/hooks/use-realtime";
-import { useUiStore, type Workspace } from "@/lib/store";
+import { useUiStore, hydrateDateRangeFromSession, type Workspace } from "@/lib/store";
 
 /**
  * PHASE3_BLUEPRINT §3 — App shell (single route `/`):
@@ -56,6 +56,12 @@ export default function Page() {
     const ws = new URLSearchParams(window.location.search).get("ws");
     if (isWorkspace(ws)) setActiveWorkspace(ws);
   }, [setActiveWorkspace]);
+
+  // #105 — khoảng thời gian toàn cục sống qua tải lại trang (sessionStorage;
+  // hydrate SAU mount → không lệch hydration SSR/CSR).
+  React.useEffect(() => {
+    hydrateDateRangeFromSession();
+  }, []);
 
   return (
     <div className="flex min-h-screen flex-col">

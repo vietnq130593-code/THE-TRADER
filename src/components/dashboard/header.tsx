@@ -12,11 +12,11 @@ import {
   RefreshCw,
   Sun,
   TrendingUp,
-  Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
@@ -30,6 +30,7 @@ import { apiGet, apiPostJson } from "@/lib/api";
 import { useRunAgents } from "@/hooks/use-run-agents";
 import { usePortfolioWorld } from "@/hooks/use-portfolio-world";
 import { useUiStore, type Workspace } from "@/lib/store";
+import { GlobalDateRange } from "@/components/dashboard/global-date-range";
 import { cn } from "@/lib/utils";
 import { formatVnd, isMarketOpen, vnClock, vnDate } from "@/lib/format";
 import type { KRunState, PortfolioResponse } from "@/lib/types";
@@ -100,6 +101,25 @@ function useNow(): Date | null {
   );
 }
 
+/**
+ * PHIÊN #105 — THANH BAR TRÊN CÙNG THIẾT KẾ LẠI (audit UI/UX #105: "header
+ * quá tải — 11-12 phần tử riêng lẻ không có nhóm").
+ *
+ * Bố cục 3 VÙNG rõ ràng, ngăn bằng Separator dọc (desktop):
+ *   [Nhận diện]  logo (mở/đóng sidebar) + nhãn module đang mở
+ *   [Thời gian]  BỘ CHỌN KHOẢNG THỜI GIAN TOÀN CỤC (yêu cầu trader) + đồng
+ *                hồ ICT + trạng thái phiên + chấm realtime
+ *   [Hành động]  chip tài khoản (kèm sức mua ước tính trong tooltip) + cụm
+ *                vận hành (Chạy agent + công tắc Liên tục K2) + giao diện + làm mới
+ *
+ * Giảm nhiễu so với bản cũ:
+ *   - chip Sức mua riêng (lg:) GỘP vào tooltip chip tài khoản — bớt 1 số lớn
+ *     cạnh thương hiệu; sức mua vẫn thấy đầy đủ ở module Danh mục.
+ *   - badge đếm ngược chu kỳ riêng GỘP vào tooltip công tắc Liên tục.
+ *   - mọi nút/badge cao đúng 36px (h-9) — hàng ngang thẳng tắp, không nhấp nhô.
+ * Mobile: flex-wrap 2 hàng tự nhiên — hàng 1 logo + khoảng thời gian + hành
+ * động chính, hàng 2 đồng hồ + phiên + tài khoản.
+ */
 export function Header() {
   const { theme, setTheme } = useTheme();
   const mounted = useMounted();
@@ -192,6 +212,8 @@ export function Header() {
   //   buyingPower = cash + marginRoom,  marginRoom = positionsMv × RATIO − marginUsed
   //   (AUD-CODE #15b: trước đây equity×RATIO đếm kép tiền mặt — equity = cash + GTTH)
   //   MARGIN_ROOM_RATIO default 0.5 (giả lập ký quỹ 50% — KHÔNG phải hạn mức thật VNDIRECT)
+  // #105: giá trị này không còn hiện chip riêng trên header (giảm nhiễu) —
+  // nằm trong TOOLTIP chip tài khoản + đầy đủ ở module Danh mục.
   const MARGIN_ROOM_RATIO = 0.5;
   const cash = portfolio?.account.cashBalance ?? 0;
   const equity = portfolio?.account.equity ?? 0;
@@ -213,12 +235,12 @@ export function Header() {
   return (
     <header
       ref={headerRef}
-      className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+      className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70"
     >
-      <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
-        {/* Phiên #45/#46 — logo "The Trader" CHÍNH LÀ nút bật/tắt sidebar trái:
-         * nhấp logo để mở, nhấp lại đúng logo để đóng — không còn nút icon
-         * nhỏ bên cạnh (yêu cầu user phiên #46). Sidebar trượt ra BÊN DƯỚI
+      <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-6">
+        {/* ═══ VÙNG 1 — NHẬN DIỆN ═══
+         * Phiên #45/#46 — logo "The Trader" CHÍNH LÀ nút bật/tắt sidebar trái:
+         * nhấp logo để mở, nhấp lại đúng logo để đóng. Sidebar trượt ra BÊN DƯỚI
          * thanh header này nên logo luôn nhìn thấy & bấm được khi sidebar mở. */}
         <button
           type="button"
@@ -232,19 +254,19 @@ export function Header() {
           }
           onClick={toggleSidebar}
           className={cn(
-            "flex min-h-11 items-center gap-2.5 rounded-lg px-1.5 py-1 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/40 sm:min-h-0",
+            "flex min-h-9 items-center gap-2.5 rounded-lg px-1.5 py-1 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/40",
             sidebarOpen && "bg-accent/70"
           )}
         >
           <div
-            className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"
+            className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground"
             aria-hidden="true"
           >
-            <TrendingUp className="size-5" />
+            <TrendingUp className="size-4.5" />
           </div>
           <div className="leading-tight text-left">
-            <p className="text-base font-semibold tracking-tight">The Trader</p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-sm font-semibold tracking-tight">The Trader</p>
+            <p className="hidden text-[11px] text-muted-foreground sm:block">
               Multi-Agent Trading · VNDIRECT
             </p>
           </div>
@@ -253,77 +275,79 @@ export function Header() {
         {/* Module hiện tại — định vị nhanh khi sidebar đóng (phiên #45) */}
         <Badge
           variant="outline"
-          className="hidden items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground md:inline-flex"
+          className="hidden items-center gap-1.5 px-2.5 py-1 text-xs text-foreground md:inline-flex"
           title={`Module đang mở: ${WORKSPACE_LABELS[activeWorkspace]} — nhấp logo “The Trader” để đổi`}
         >
           {WORKSPACE_LABELS[activeWorkspace]}
         </Badge>
 
-        {/* Right cluster */}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* Clock + market state */}
-          <div className="hidden flex-col items-end leading-tight sm:flex">
-            <span className="tabular-nums text-sm font-medium" suppressHydrationWarning>
-              {now ? vnClock(now) : "--:--:--"}
-            </span>
-            <span className="text-[11px] text-muted-foreground" suppressHydrationWarning>
-              {now ? vnDate(now) : "—"}
-            </span>
-          </div>
-          <Badge
-            variant="outline"
-            className={cn(
-              "gap-1.5 px-2.5 py-1 text-xs",
-              open
-                ? "border-up/40 text-up"
-                : "text-muted-foreground"
-            )}
-          >
-            <span className="relative flex size-2">
-              <span
-                className={cn(
-                  "absolute inline-flex h-full w-full rounded-full opacity-60",
-                  open ? "animate-ping bg-up" : "bg-muted-foreground"
-                )}
-              />
-              <span
-                className={cn(
-                  "relative inline-flex size-2 rounded-full",
-                  open ? "bg-up" : "bg-muted-foreground"
-                )}
-              />
-            </span>
-            {open ? "Mở cửa" : "Đóng cửa"}
-          </Badge>
+        <Separator orientation="vertical" className="hidden h-7 md:block" />
 
-          {/* Realtime badge — WebSocket market-engine (cổng 3003) */}
-          <Badge
-            variant="outline"
-            className={cn(
-              "hidden gap-1.5 px-2.5 py-1 text-xs sm:inline-flex",
-              realtimeConnected ? "border-up/40 text-up" : "text-muted-foreground"
-            )}
-            title={
-              realtimeConnected
-                ? "market-engine (WebSocket) đang phát tick bảng giá mỗi 10 giây"
-                : "WebSocket chưa kết nối — làm mới bằng polling"
-            }
-          >
-            <Radio
-              className={cn("size-3", realtimeConnected && "animate-pulse")}
-              aria-hidden="true"
+        {/* ═══ VÙNG 2 — THỜI GIAN ═══
+         * #105 — bộ chọn khoảng thời gian toàn cục (yêu cầu trader) + đồng hồ
+         * ICT + trạng thái phiên gộp 1 badge với chấm realtime. */}
+        <div className="flex min-w-0 items-center gap-2">
+          <GlobalDateRange />
+        </div>
+
+        <div className="hidden flex-col items-end leading-tight lg:flex">
+          <span className="tabular-nums text-sm font-medium" suppressHydrationWarning>
+            {now ? vnClock(now) : "--:--:--"}
+          </span>
+          <span className="text-[11px] text-muted-foreground" suppressHydrationWarning>
+            {now ? vnDate(now) : "—"}
+          </span>
+        </div>
+
+        <Badge
+          variant="outline"
+          className={cn(
+            "gap-1.5 px-2.5 py-1 text-xs",
+            open ? "border-up/40 text-up" : "text-muted-foreground"
+          )}
+          title={
+            open
+              ? "Phiên giao dịch HOSE đang mở (09:15–11:30 · 13:00–14:45, T2–T6)"
+              : "Ngoài phiên giao dịch HOSE"
+          }
+        >
+          <span className="relative flex size-2">
+            <span
+              className={cn(
+                "absolute inline-flex h-full w-full rounded-full opacity-60",
+                open ? "animate-ping bg-up" : "bg-muted-foreground"
+              )}
             />
-            Live
-          </Badge>
+            <span
+              className={cn(
+                "relative inline-flex size-2 rounded-full",
+                open ? "bg-up" : "bg-muted-foreground"
+              )}
+            />
+          </span>
+          {open ? "Mở cửa" : "Đóng cửa"}
+          {realtimeConnected && (
+            <>
+              <span aria-hidden="true">·</span>
+              <Radio
+                className="size-3 animate-pulse text-primary"
+                aria-label="WebSocket market-engine đang nối"
+              />
+            </>
+          )}
+        </Badge>
 
-          {/* Account chip — #90: theo thế giới tiền đang xem (thử nghiệm khi
-           * cơ chế K1 bật & chưa chọn tay — đồng bộ Danh mục) */}
+        {/* ═══ VÙNG 3 — HÀNH ĐỘNG ═══ */}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* Chip tài khoản — #90: theo thế giới tiền đang xem (thử nghiệm khi
+           * cơ chế K1 bật & chưa chọn tay — đồng bộ Danh mục). #105: tooltip
+           * gộp THÊM sức mua ước tính (bỏ chip riêng đỡ nhiễu). */}
           <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <div
                   className={cn(
-                    "hidden items-center gap-2 rounded-lg border px-3 py-1.5 md:flex",
+                    "hidden h-9 items-center gap-2 rounded-lg border px-3 md:flex",
                     isSandboxView && "border-primary/40 bg-primary/5"
                   )}
                 >
@@ -342,195 +366,155 @@ export function Header() {
                   </div>
                 </div>
               </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-64 text-left">
+              <TooltipContent side="bottom" className="max-w-72 text-left">
                 {isSandboxView ? (
-                  <p className="text-xs leading-relaxed">
-                    Tiền ảo của <b>cơ chế thử nghiệm (K1)</b> — agents tự giao dịch qua cổng
-                    đồng thuận. Xem chi tiết: Danh mục → Thử nghiệm · quản lý vốn: Cài đặt →
-                    Cơ chế thử nghiệm. Bấm “{paperLabel}” trong Danh mục để chip này quay về
-                    tài khoản {vndirectConfigured ? "THỰC TẾ" : "giấy"} VNDIRECT.
-                    {vndirectConfigured &&
-                      " Cơ chế này đã TỰ ĐỘNG tạm dừng vì VNDIRECT thật đã kết nối."}
-                  </p>
+                  <div className="space-y-1.5">
+                    <p className="text-xs leading-relaxed">
+                      Tiền ảo của <b>cơ chế thử nghiệm (K1)</b> — agents tự giao dịch qua cổng
+                      đồng thuận. Xem chi tiết: Danh mục → Thử nghiệm · quản lý vốn: Cài đặt →
+                      Cơ chế thử nghiệm. Bấm “{paperLabel}” trong Danh mục để chip này quay về
+                      tài khoản {vndirectConfigured ? "THỰC TẾ" : "giấy"} VNDIRECT.
+                      {vndirectConfigured &&
+                        " Cơ chế này đã TỰ ĐỘNG tạm dừng vì VNDIRECT thật đã kết nối."}
+                    </p>
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Sức mua ước tính: {formatVnd(buyingPower)} (tiền mặt {formatVnd(cash)} + phòng
+                      ký quỹ ước tính {formatVnd(marginRoom)}) — chi tiết đầy đủ ở module Danh mục.
+                    </p>
+                  </div>
                 ) : vndirectConfigured ? (
-                  <p className="text-xs leading-relaxed">
-                    Tài khoản VNDIRECT <b>THẬT</b> của trader — đã kết nối (creds đầy đủ). Lệnh
-                    thật vẫn qua duyệt từng lệnh của bạn; agents tiếp tục đề xuất như thường.
-                  </p>
+                  <div className="space-y-1.5">
+                    <p className="text-xs leading-relaxed">
+                      Tài khoản VNDIRECT <b>THẬT</b> của trader — đã kết nối (creds đầy đủ). Lệnh
+                      thật vẫn qua duyệt từng lệnh của bạn; agents tiếp tục đề xuất như thường.
+                    </p>
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Sức mua ước tính: {formatVnd(buyingPower)} (tiền mặt {formatVnd(cash)} + phòng
+                      ký quỹ ước tính {formatVnd(marginRoom)}).
+                    </p>
+                  </div>
                 ) : (
-                  <p className="text-xs leading-relaxed">Tài khoản giấy VNDIRECT của trader.</p>
+                  <div className="space-y-1.5">
+                    <p className="text-xs leading-relaxed">Tài khoản giấy VNDIRECT của trader.</p>
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Sức mua ước tính: {formatVnd(buyingPower)} = tiền mặt {formatVnd(cash)} + phòng
+                      ký quỹ ước tính {formatVnd(marginRoom)} (hệ số giả lập 0,5 — không phải hạn
+                      mức thật VNDIRECT)
+                      {overMargin && " — ⚠ Vượt hạn mức ước tính."}
+                    </p>
+                  </div>
                 )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
 
-          {/* PHASE3 B3: chip Sức mua (ước tính) — công thức minh bạch qua tooltip */}
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className={cn(
-                    "hidden items-center gap-2 rounded-lg border px-3 py-1.5 lg:flex",
-                    overMargin && "border-down/50 bg-down/5"
-                  )}
-                >
-                  <Wallet
-                    className={cn("size-4 shrink-0", overMargin ? "text-down" : "text-muted-foreground")}
-                    aria-hidden="true"
-                  />
-                  <div className="leading-tight">
-                    <p className="text-[11px] text-muted-foreground">
-                      Sức mua <span className="text-[10px]">(ước tính)</span>
-                      {overMargin && (
-                        <span className="ml-1 rounded-sm bg-down/15 px-1 font-medium text-down">
-                          Vượt hạn mức ước tính
-                        </span>
-                      )}
-                    </p>
-                    <p className="tabular-nums text-sm font-semibold">
-                      {portfolio ? formatVnd(buyingPower) : "— ₫"}
-                    </p>
-                  </div>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-72 text-left">
-                <p className="mb-1 text-xs font-semibold">Công thức sức mua (ước tính)</p>
-                <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-                  <li>Tiền mặt: {formatVnd(cash)}</li>
-                  <li>
-                    Phòng ký quỹ ước tính: {formatVnd(marginRoom)}
-                    <br />= {formatVnd(equity)} × {MARGIN_ROOM_RATIO} − {formatVnd(marginUsed)}
-                  </li>
-                  <li className="font-medium text-foreground">
-                    Sức mua = {formatVnd(buyingPower)}
-                  </li>
-                  <li className="pt-1 text-amber-600 dark:text-amber-400">
-                    Giả lập hệ số 0.5 — không phải hạn mức thật của VNDIRECT.
-                  </li>
-                </ul>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          {/* Run agents (blueprint §3 — header action) */}
-          <Button
-            onClick={() => runAgents.mutate()}
-            disabled={runAgents.isPending}
-            className="min-h-9 gap-2"
-            size="sm"
-          >
-            {runAgents.isPending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                <span className="hidden sm:inline">Đang phân tích…</span>
-                <span className="sm:hidden">Phân tích…</span>
-              </>
-            ) : (
-              <>
-                <Play className="size-4" aria-hidden="true" />
-                <span className="hidden sm:inline">Chạy agent</span>
-                <span className="sm:hidden">Agent</span>
-              </>
-            )}
-          </Button>
-
-          {/* K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.4): chế độ chạy liên tục.
-           * Bật → chu kỳ 23 agents tự chạy theo nhịp cho tới khi trader tắt.
-           * Tắt hiệu lực từ chu kỳ kế (không giết giữa dòng). Khi key k-run
-           * tồn tại, AppSetting thắng tuyệt đối — env AGENT_CYCLE_MINUTES chỉ
-           * còn là mặc định hậu phương (exists=false). */}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className="flex min-h-9 items-center gap-2 rounded-lg border border-border/60 px-3"
-                  aria-label="Chế độ chạy agent liên tục"
-                >
-                  <Switch
-                    size="sm"
-                    checked={!!kRun?.enabled}
-                    disabled={kRunMutation.isPending || !kRun}
-                    onCheckedChange={(checked) =>
-                      kRunMutation.mutate({
-                        action: checked ? "start" : "stop",
-                        intervalMinutes: kRun?.intervalMinutes ?? 240,
-                      })
-                    }
-                    aria-label={
-                      kRun?.enabled
-                        ? "Tắt chế độ chạy agent liên tục"
-                        : "Bật chế độ chạy agent liên tục"
-                    }
-                  />
-                  <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
-                    Liên tục
-                  </span>
-                  {kRun?.enabled && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="rounded px-1 text-xs font-semibold tabular-nums text-primary outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/40"
-                          aria-label={`Nhịp chu kỳ hiện tại: mỗi ${kRun.intervalMinutes} phút — bấm để đổi`}
-                        >
-                          {kRun.intervalMinutes}ph
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="min-w-36">
-                        <DropdownMenuRadioGroup
-                          value={String(kRun.intervalMinutes)}
-                          onValueChange={(v) =>
-                            kRunMutation.mutate({
-                              action: "interval",
-                              intervalMinutes: Number(v),
-                            })
-                          }
-                        >
-                          {K2_INTERVALS.map((m) => (
-                            <DropdownMenuRadioItem key={m} value={String(m)}>
-                              {K2_INTERVAL_LABELS[m]} ({m} phút)
-                            </DropdownMenuRadioItem>
-                          ))}
-                        </DropdownMenuRadioGroup>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-72 text-left">
-                <p className="mb-1 text-xs font-semibold">Chế độ chạy liên tục (K2)</p>
-                <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-                  <li>Bật: chu kỳ 23 agents tự chạy lặp theo nhịp đã chọn.</li>
-                  <li>Tắt: dừng từ chu kỳ kế tiếp — không giắt giữa dòng.</li>
-                  <li>
-                    Đã chạy tích luỹ: {kRun?.cyclesRun ?? 0} chu kỳ
-                    {kRun?.enabled && k2Countdown ? ` · kế tiếp ${k2Countdown}` : ""}
-                  </li>
-                  {!kRun?.exists && (
-                    <li className="pt-1 text-amber-600 dark:text-amber-400">
-                      Chưa từng bật — nhịp env AGENT_CYCLE_MINUTES đang hiệu lực.
-                    </li>
-                  )}
-                </ul>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          {/* Badge đếm ngược chu kỳ kế — desktop only (mobile hTooltip đã có) */}
-          {kRun?.enabled && k2Countdown && (
-            <Badge
-              variant="outline"
-              className="hidden items-center gap-1.5 px-2.5 py-1 text-[10px] tabular-nums text-muted-foreground md:inline-flex"
-              title={
-                kRun.nextCycleAt
-                  ? `Chu kỳ kế tiếp: ${vnDate(new Date(kRun.nextCycleAt))}`
-                  : "Chu kỳ kế tiếp đang chờ tính lại"
-              }
+          {/* Cụm vận hành — #105: nút chạy chu kỳ + công tắc liên tục K2 đứng
+           * cạnh nhau trong 1 cụm viền chung (trước đây 2 khối rời + badge
+           * đếm ngược + chip riêng — 4 mảnh rời rạc). */}
+          <div className="flex h-9 items-center gap-1 rounded-lg border border-border/60 bg-card/60 p-1 pl-1.5">
+            <Button
+              onClick={() => runAgents.mutate()}
+              disabled={runAgents.isPending}
+              className="h-7 gap-1.5 px-2.5 text-xs sm:px-3 sm:text-[13px]"
+              size="sm"
             >
-              <Radio className="size-3 animate-pulse text-primary" aria-hidden="true" />
-              {k2Countdown}
-            </Badge>
-          )}
+              {runAgents.isPending ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                  <span className="hidden sm:inline">Đang phân tích…</span>
+                  <span className="sm:hidden">Phân tích…</span>
+                </>
+              ) : (
+                <>
+                  <Play className="size-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">Chạy agent</span>
+                  <span className="sm:hidden">Agent</span>
+                </>
+              )}
+            </Button>
+
+            {/* K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.4): chế độ chạy liên tục.
+             * Bật → chu kỳ 23 agents tự chạy theo nhịp cho tới khi trader tắt.
+             * Tắt hiệu lực từ chu kỳ kế (không giết giữa dòng). Khi key k-run
+             * tồn tại, AppSetting thắng tuyệt đối — env AGENT_CYCLE_MINUTES chỉ
+             * còn là mặc định hậu phương (exists=false). */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className="flex h-7 items-center gap-1.5 rounded-md px-1.5"
+                    aria-label="Chế độ chạy agent liên tục"
+                  >
+                    <Switch
+                      size="sm"
+                      checked={!!kRun?.enabled}
+                      disabled={kRunMutation.isPending || !kRun}
+                      onCheckedChange={(checked) =>
+                        kRunMutation.mutate({
+                          action: checked ? "start" : "stop",
+                          intervalMinutes: kRun?.intervalMinutes ?? 240,
+                        })
+                      }
+                      aria-label={
+                        kRun?.enabled
+                          ? "Tắt chế độ chạy agent liên tục"
+                          : "Bật chế độ chạy agent liên tục"
+                      }
+                    />
+                    <span className="hidden text-xs font-medium text-muted-foreground md:inline">
+                      Liên tục
+                    </span>
+                    {kRun?.enabled && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="rounded px-1 text-xs font-semibold tabular-nums text-primary outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/40"
+                            aria-label={`Nhịp chu kỳ hiện tại: mỗi ${kRun.intervalMinutes} phút — bấm để đổi`}
+                          >
+                            {kRun.intervalMinutes}ph
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-36">
+                          <DropdownMenuRadioGroup
+                            value={String(kRun.intervalMinutes)}
+                            onValueChange={(v) =>
+                              kRunMutation.mutate({
+                                action: "interval",
+                                intervalMinutes: Number(v),
+                              })
+                            }
+                          >
+                            {K2_INTERVALS.map((m) => (
+                              <DropdownMenuRadioItem key={m} value={String(m)}>
+                                {K2_INTERVAL_LABELS[m]} ({m} phút)
+                              </DropdownMenuRadioItem>
+                            ))}
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-72 text-left">
+                  <p className="mb-1 text-xs font-semibold">Chế độ chạy liên tục (K2)</p>
+                  <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                    <li>Bật: chu kỳ 23 agents tự chạy lặp theo nhịp đã chọn.</li>
+                    <li>Tắt: dừng từ chu kỳ kế tiếp — không giắt giữa dòng.</li>
+                    <li>
+                      Đã chạy tích luỹ: {kRun?.cyclesRun ?? 0} chu kỳ
+                      {kRun?.enabled && k2Countdown ? ` · kế tiếp ${k2Countdown}` : ""}
+                    </li>
+                    {!kRun?.exists && (
+                      <li className="pt-1 text-amber-600 dark:text-amber-400">
+                        Chưa từng bật — nhịp env AGENT_CYCLE_MINUTES đang hiệu lực.
+                      </li>
+                    )}
+                  </ul>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
 
           {/* Theme toggle */}
           <Button

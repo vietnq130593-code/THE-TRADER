@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiGet, apiPost } from "@/lib/api";
+import { useDateRange } from "@/hooks/use-date-range";
 import { useUiStore } from "@/lib/store";
 import { usePortfolioWorld, useResetPaperWorld } from "@/hooks/use-portfolio-world";
 import { AllocationDonut } from "@/components/dashboard/allocation-donut";
@@ -111,11 +112,14 @@ export function PortfolioSection() {
       ),
     staleTime: 60_000,
   });
+  // #105 — khoảng thời gian toàn cục: lọc lệnh + giao dịch theo khoảng
+  // (vị thế/danh mục là trạng-thái HIỆN TẠI — không lọc theo thời gian).
+  const { rangeQuery, rangeKey } = useDateRange();
   const ordersQuery = useQuery({
-    queryKey: ["orders", viewAccountType],
+    queryKey: ["orders", viewAccountType, rangeKey],
     queryFn: () =>
       apiGet<OrdersResponse>(
-        viewAccountType === "sandbox" ? "/api/orders?accountType=sandbox" : "/api/orders"
+        `${viewAccountType === "sandbox" ? "/api/orders?accountType=sandbox" : "/api/orders"}${rangeQuery ? (viewAccountType === "sandbox" ? "&" : "?") : ""}${rangeQuery}`
       ),
     staleTime: 60_000,
   });

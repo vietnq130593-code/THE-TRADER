@@ -27,8 +27,10 @@ interface Preset {
 }
 
 interface Props {
-  /** Khoảng đang áp dụng — đóng khung highlight + tháng mở khởi đầu. */
-  value: NewsDayRange;
+  /** Khoảng đang áp dụng — đóng khung highlight + tháng mở khởi đầu.
+   * PHIÊN #105: null = chưa chọn khoảng nào (toàn bộ thời gian) — lịch mở
+   * tại tháng hiện tại, không highlight ngày nào (dùng cho bộ chọn toàn cục). */
+  value: NewsDayRange | null;
   /** Ngày nhỏ nhất cho phép (bounds kho tin) — null → không giới hạn dưới. */
   minDay?: string | null;
   /** Ngày lớn nhất cho phép — caller cap ở hôm nay ICT. */
@@ -104,7 +106,8 @@ export function NewsRangeCalendar({ value, minDay, maxDay, onSelect, presets }: 
   const today = React.useMemo(() => ictToday(), []);
   // Mở lịch tại tháng của ngày BẮT ĐẦU đang áp dụng (mount 1 lần — dialog
   // key-remount mỗi lần áp dụng khoảng mới nên view luôn về đúng chỗ).
-  const [view, setView] = React.useState(() => monthOf(value.from));
+  // #105: chưa chọn khoảng → mở tại tháng hiện tại ICT.
+  const [view, setView] = React.useState(() => monthOf(value?.from ?? today));
   const [anchor, setAnchor] = React.useState<string | null>(null);
 
   const right = addMonth(view, 1);
@@ -123,7 +126,7 @@ export function NewsRangeCalendar({ value, minDay, maxDay, onSelect, presets }: 
     onSelect({ from, to });
   };
 
-  const single = value.from === value.to;
+  const single = value != null && value.from === value.to;
 
   return (
     <div
@@ -195,6 +198,8 @@ export function NewsRangeCalendar({ value, minDay, maxDay, onSelect, presets }: 
               <span className="font-medium text-foreground">{fmtVi(anchor)}</span>{" "}
               — bấm ngày kết thúc (hoặc bấm lại chính nó để chỉ xem ngày này)
             </>
+          ) : value == null ? (
+            <>Chưa giới hạn — đang xem toàn bộ thời gian</>
           ) : single ? (
             <>
               Đang xem: <span className="font-medium text-foreground">ngày {fmtVi(value.from)}</span>
@@ -233,7 +238,7 @@ export function NewsRangeCalendar({ value, minDay, maxDay, onSelect, presets }: 
 
 interface MonthPanelProps {
   view: { y: number; m: number };
-  value: NewsDayRange;
+  value: NewsDayRange | null;
   anchor: string | null;
   lo: string;
   hi: string;
@@ -272,9 +277,9 @@ function MonthPanel({ view, value, anchor, lo, hi, today, single, onDay, onDayDo
         {cells.map((day, i) => {
           if (day === null) return <span key={`e${i}`} className="size-9" aria-hidden="true" />;
           const disabled = day < lo || day > hi;
-          const isFrom = day === value.from;
-          const isTo = day === value.to && !single;
-          const inRange = !single && value.from < day && day < value.to;
+          const isFrom = value != null && day === value.from;
+          const isTo = value != null && !single && day === value.to;
+          const inRange = value != null && !single && value.from < day && day < value.to;
           const isAnchor = day === anchor;
           const isToday = day === today;
           return (

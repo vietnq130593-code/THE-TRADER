@@ -20,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiGet, apiPost } from "@/lib/api";
+import { useDateRange } from "@/hooks/use-date-range";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { SignalRow } from "@/lib/types";
@@ -66,9 +67,12 @@ export interface SignalsFeedProps {
 
 export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedProps) {
   const queryClient = useQueryClient();
+  // #105 — khoảng thời gian toàn cục trên thanh bar: lọc tín hiệu theo khoảng.
+  const { rangeQuery, rangeKey, dateRange } = useDateRange();
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["signals"],
-    queryFn: () => apiGet<{ signals: SignalRow[] }>("/api/signals"),
+    queryKey: ["signals", rangeKey],
+    queryFn: () =>
+      apiGet<{ signals: SignalRow[] }>(`/api/signals${rangeQuery ? `?${rangeQuery}` : ""}`),
     staleTime: 60_000,
   });
 
@@ -101,6 +105,11 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
         <CardTitle className="flex items-center gap-2 text-base">
           <Radar className="size-4 text-muted-foreground" aria-hidden="true" />
           Tín hiệu giao dịch
+          {dateRange != null && (
+            <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              theo khoảng đã chọn
+            </span>
+          )}
         </CardTitle>
         <CardDescription>
           {compact

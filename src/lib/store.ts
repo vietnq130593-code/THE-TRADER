@@ -25,6 +25,14 @@ export type Workspace =
   | "synthesis"
   | "settings";
 
+/** PHIÊN #105 — khoảng thời gian toàn cục do trader chọn trên thanh bar trên cùng.
+ * from/to là ngày dạng "YYYY-MM-DD" theo ICT (UTC+7) — cùng quy ước với kho
+ * tin tức #101/#102 (ranh giới ngày +07:00, không phải ngày UTC).
+ * null = "Toàn bộ thời gian" — hành vi mặc định như cũ (không lọc).
+ * Các module có dữ liệu theo thời gian (tín hiệu · lệnh/giao dịch · thảo luận
+ * agent · tin tức · cửa sổ biểu đồ) đọc giá trị này để refetch theo khoảng. */
+export type DateRange = { from: string; to: string };
+
 /** PHASE3_BLUEPRINT §5.1 — chế độ render biểu đồ giá. */
 export type ChartMode = "candle" | "line";
 
@@ -89,6 +97,10 @@ interface UiState {
   setRealtimeConnected: (value: boolean) => void;
   lastTickAt: number | null;
   setLastTickAt: (ts: number | null) => void;
+
+  /** PHIÊN #105 — khoảng thời gian toàn cục (null = toàn bộ). */
+  dateRange: DateRange | null;
+  setDateRange: (range: DateRange | null) => void;
 }
 
 export const useUiStore = create<UiState>()((set) => ({
@@ -129,4 +141,53 @@ export const useUiStore = create<UiState>()((set) => ({
   setRealtimeConnected: (value) => set({ realtimeConnected: value }),
   lastTickAt: null,
   setLastTickAt: (ts) => set({ lastTickAt: ts }),
+
+  dateRange: null,
+  setDateRange: (range) => set({ dateRange: range }),
 }));
+
+/* ── PHIÊN #105 — nhớ khoảng thời gian toàn cục qua TẢI LẠI TRANG ──
+ * sessionStorage (mỗi tab riêng — đóng tab là về mặc định "Toàn bộ").
+ * KHÔNG dùng zustand/persist cho cả store: chỉ dateRange cần sống qua reload,
+ * phần còn lại là UI state thoáng qua đúng thiết kế TECHNICAL_BLUEPRINT §3.
+ * Hydrate SAU mount (hàm do page.tsx gọi trong useEffect) để tránh lệch
+ * hydration SSR/CSR — không setState ở module-init. */
+const DATE_RANGE_STORAGE_KEY = "the-trader:date-range";
+
+/** Gọi một lần sau mount (useEffect ở page) — đọc khoảng đã lưu vào store. */
+export function hydrateDateRangeFromSession(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const saved = window.sessionStorage.getItem(DATE_RANGE_STORAGE_KEY);
+    if (!saved) return;
+    const parsed = JSON.parse(saved) as { from?: unknown; to?: unknown };
+    if (
+      typeof parsed?.from === "string" &&
+      typeof parsed?.to === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(parsed.from) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(parsed.to) &&
+      parsed.from <= parsed.to
+    ) {
+      useUiStore.setState({ dateRange: { from: parsed.from, to: parsed.to } });
+    }
+  } catch {
+    // chuỗi hỏng / storage bị chặn → im lặng dùng mặc định (null)
+  }
+}
+
+// Ghi mỗi lần đổi (đăng ký một lần ở module — client only, sau hydrate an toàn
+// vì subscribe không setState).
+if (typeof window !== "undefined") {
+  useUiStore.subscribe((s, prev) => {
+    if (s.dateRange === prev.dateRange) return;
+    try {
+      if (s.dateRange != null) {
+        window.sessionStorage.setItem(DATE_RANGE_STORAGE_KEY, JSON.stringify(s.dateRange));
+      } else {
+        window.sessionStorage.removeItem(DATE_RANGE_STORAGE_KEY);
+      }
+    } catch {
+      // storage đầy/bị chặn — bỏ qua, không làm hỏng UI
+    }
+  });
+}
