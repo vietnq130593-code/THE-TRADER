@@ -10,6 +10,10 @@ import {
   SESSION_PHASE_LABEL,
   nextTradingSessionOpen,
 } from "@/lib/market-session";
+// F-1091-01 (fixbug api #109): validate ngày chia sẻ — regex-only cũ cho
+// "2026-13-01" vượt DATE_RE → Invalid Date → Prisma 500 (verify live). Không
+// hợp lệ → hasRange=false → hành vi cũ đúng comment thiết kế #105.
+import { isValidIctDay, ictDayStart, ictDayEnd } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
 
@@ -21,17 +25,6 @@ export const dynamic = "force-dynamic";
  * thế giới tiền — sổ lệnh sandbox do agents tự giữ hiển thị riêng tab Danh mục
  * khi trader chọn "Thử nghiệm".
  */
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Ngày bắt đầu ICT (00:00 +07:00) của chuỗi "YYYY-MM-DD". */
-function ictDayStart(date: string): Date {
-  return new Date(`${date}T00:00:00+07:00`);
-}
-
-/** Ngày kết thúc ICT (cuối ngày +07:00) của chuỗi "YYYY-MM-DD". */
-function ictDayEnd(date: string): Date {
-  return new Date(`${date}T23:59:59.999+07:00`);
-}
 
 export async function GET(req: Request) {
   try {
@@ -45,8 +38,8 @@ export async function GET(req: Request) {
     const hasRange = Boolean(
       fromParam &&
         toRaw &&
-        DATE_RE.test(fromParam) &&
-        DATE_RE.test(toRaw) &&
+        isValidIctDay(fromParam) &&
+        isValidIctDay(toRaw) &&
         fromParam <= toRaw,
     );
     const rangeFilter = hasRange

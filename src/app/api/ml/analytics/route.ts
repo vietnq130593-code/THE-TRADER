@@ -74,8 +74,12 @@ export async function GET() {
 
 /** Nạp dữ liệu + tính toàn bộ payload A2 (chỉ SELECT — 0 ghi DB). */
 async function buildAnalyticsPayload(): Promise<AnalyticsPayload> {
-  // 2 query parallel: 6 arm + toàn bộ event đã settle (chỉ trường cần).
-  const [armRows, eventRows] = await Promise.all([
+  // 2 query parallel: 6 arm + event đã settle (chỉ trường cần).
+  // F-1091-10 (fixbug api #109): trần 2.000 event settle GẦN NHẤT (desc +
+  // take) rồi reverse về asc cho trajectory — trước đây KHÔNG take, scan/toàn
+  // bộ event phình theo thời gian (~chục dòng/ngày). Wilson/Brier/calibration
+  // ổn định thống kê ở n ≤ 2.000; response vốn đã bounded (trajectory 250 điểm).
+  const [armRows, eventRowsDesc] = await Promise.all([
     db.banditArm.findMany({
       where: { agentCode: { in: [...BANDIT_ARM_CODES] } },
     }),
@@ -88,9 +92,11 @@ async function buildAnalyticsPayload(): Promise<AnalyticsPayload> {
         reward: true,
         confidence: true,
       },
-      orderBy: { settledAt: "asc" },
+      orderBy: { settledAt: "desc" },
+      take: 2_000,
     }),
   ]);
+  const eventRows = eventRowsDesc.slice().reverse();
 
   // Event hợp lệ = đã settle + có reward (settle luôn ghi cả hai; phòng dòng lệch)
   const events = eventRows.filter(

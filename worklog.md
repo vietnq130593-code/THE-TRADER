@@ -3636,3 +3636,38 @@ Stage Summary:
 - Findings: 3 (P0: 0 · P1: 1 · P2: 2) — cả 3 đã vá + kiểm định bằng chứng.
 - Phát hiện ngoài phạm vi (ghi "còn treo"): 6 route #105 cùng lớp lỗi validate ngày regex-only của F-1081-01 — orders · news · news/archive · signals · agents/messages · instruments/bars ("2026-13-01" → 500 thay vì 422) — đề xuất chạy Fixbug scope `api`; socket.io 404 khi duyệt localhost trực tiếp (artifact môi trường, qua gateway preview đúng).
 - Ghi trung thực: cơn 500 17:33–17:34 trong dev.log là cửa sổ hot-reload giữa chừng chỉnh sửa của phiên #108 (không phải bug code) — engine fail-soft xử lý đúng, tự hồi phục.
+
+---
+Task ID: 109-FIXBUG-api
+Agent: main-orchestrator (Z.ai Code)
+Task: GIAO THỨC FIXBUG (Fixbug.md §1–§9) scope `api` — toàn bộ 63 route src/app/api/** (theo chỉ thị trader phiên #109 "Tiến hành chạy fixbug api đi", kế thừa 6 route lỗi date-regex phát hiện ngoài phạm vi ở #108-FIXBUG-council-exec).
+
+Work Log:
+- VÒNG 1 (4 lớp):
+  * Tĩnh-code: tự đọc 20 route trọng yếu (orders · signals · news · news/archive · agents/messages · instruments/bars · market/intraday · market/calendar · data-quality · settings · council/* · portfolio · market/tick ~970 dòng · orders/[id]/cancel · watchlist/toggle · coverage) + 2 subagent song song (FB-API-A: 23 route nhóm agents/k/exec/dev/llm/notify/system/research/risk · FB-API-B: 22 route nhóm market/ml/portfolio/settings/signals) — đủ 63/63 route.
+  * Tĩnh-dữ liệu: DB counts (banditEvent 0 · chat 1-1 2 · broadcast 294 · agentRuns 312 · signals 9 · orders 1) — không dữ liệu bất thường; 2 query không giới hạn (banditEvent · chat thread) chưa phình nhưng sẽ lớn dần.
+  * Động-runtime: probe live 8 route lớp lỗi date — orders/signals/news/news-archive/agents-messages/market-intraday → 500 PrismaClientValidationError (dev.log dòng 48.588–53.715) · instruments/bars → 200-im-lặng 0 nến · council/overview → 422 (fix #108 giữ) · phát hiện PHÂN LỚP mới: "2026-02-30" roll-over sang 03-02 (200 lọc sai khoảng im lặng — JS parse KHÔNG NaN) mà isValidIctDay của fix #108 cũ KHÔNG bắt.
+  * Động-browser: trang / 200 · 0 console error (baseline từ #108 còn nguyên).
+- FINDINGS V1: 12 (P0: 0 · P1: 2 · P2: 10) — fix tất cả:
+  * F-1091-01 (P1, lớp): 7 route date regex-only (orders · signals · news · news/archive · agents/messages · instruments/bars · market/intraday — route cuối là finding MỚI của vòng này, #108 chỉ liệt kê 6). VÁ GỐC: src/lib/api-dates.ts MỚI — isValidIctDay chuẩn round-trip UTC (regex + NaN + toISOString()===s — bắt cả tháng-13/ngày-32 NaN LẶN roll-over 02-30/11-31/02-29-năm-thường, đã chứng minh bằng node test 8 biến thể) + ictDayStart/ictDayEnd chia sẻ; 8 route import thay thế bản sao cục bộ (council/overview gồm cả — nâng cấp fix F-1081-01 lên round-trip). Hành vi: route hasRange → fallback đúng comment thiết kế #105 ("Không có/không hợp lệ → hành vi cũ") · news/archive → 422 fields[] đúng hợp đồng · council/overview → 422.
+  * F-1091-02 (P1): agents/run TOCTOU — cooldown check → 2+ await → set: engine tick + click tay cùng lúc chạy chu kép (2× LLM). VÁ: claim lastCycleStartedAt ĐỒNG BỘ ngay sau check (0 await giữa check-claim) + restore mốc cũ khi validate fail sớm (giữ nghĩa AUD-CODE #10). KIỂM ĐỊNH: 2 POST đồng thời → POST#2 429 trong 12ms · POST#1 200 chu kỳ thật 2,4min.
+  * F-1091-03 (P2): đoạn pre-cycle agents/run (reap/findMany/updateMany) ngoài try/catch → 500 non-JSON khi DB lỗi. VÁ: bọc try/catch trả JSON {error} + hoist agents/byCode/k4 ra ngoài try (thân chu kỳ dùng tiếp).
+  * F-1091-04 (P2): agents/[id] chat 1-1 findMany KHÔNG take → payload phình vô hạn. VÁ: desc+take 200+reverse (giữ contract oldest-first — kiểm định 2 tin thật USER→AGENT đúng thứ tự).
+  * F-1091-05 (P2): agents list lastRuns take 50 / errorRuns take 25 bị eviction (1 agent dồn đẩy agent khác khỏi cửa sổ → "lần chạy cuối"/lastError hiển thị stale). VÁ: nới 250.
+  * F-1091-06 (P2): agents/[id]/run lộ errorMessage thô (Prisma/DB nội bộ) cho client. VÁ: thông điệp chung + 502 (đồng bộ đường LLM), log server giữ chi tiết.
+  * F-1091-07 (P2): corporate-events PUT reverseEventId không tồn tại → 400. VÁ: lib ReverseResult +httpStatus (404 không tồn tại · 409 đã REVERSED · 400 pre-values) — kiểm định: id rác → 404.
+  * F-1091-08 (P2): engine-state POST whitelist key nhưng KHÔNG kiểm kiểu giá trị — {"eodSyncDate":12345} persist thẳng meta. VÁ: mirror guard engine (string|null cho ISO-date · number≥0 cho counter · number|null cho mốc ms) → 422 khi sai. KIỂM ĐỊNH: 12345 → 422 · intlFailStreak hợp lệ → 200 (đã khôi phục giá trị probe về 0).
+  * F-1091-09 (P2): relations/insight POST (LLM đắt) KHÔNG cooldown — double-click = 2 lần gọi LLM. VÁ: cooldown 30s → 429 + Retry-After (pattern assessment/synthesize), lỗi → reset cho retry. KIỂM ĐỊNH: POST đồng thời #2 → 429 trong 8ms · #1 200 (20s LLM thật) · sau 65s → 200 đúng.
+  * F-1091-10 (P2): ml/analytics banditEvent findMany KHÔNG take (scan toàn bộ phình theo thời gian). VÁ: desc+take 2000+reverse — thống kê ổn định ở n≤2000, response vốn bounded 250 điểm.
+  * F-1091-11 (P2): dev/prisma-reload key hardcode "k3k4-reload" + lộ process.pid. VÁ: NODE_ENV=development gate (prod → 404) + key từ env PRISMA_RELOAD_KEY + bỏ pid. KIỂM ĐỊNH: sai key → 403.
+  * F-1091-12 (P2, phát hiện runtime browser): council/overview fix #108 cũ (m/d range check) KHÔNG bắt roll-over "2026-02-30" — gộp vào F-1091-01c nâng cấp round-trip.
+- VÒNG 2 (rà lại toàn scope): soi lại toàn bộ diff 18 file (266+/175−) · quét curl 43 GET endpoint (200 hết, 2 route POST-only 405 đúng ngữ nghĩa) · POST validate-path (watchlist 400 · k/run 422 · ml/train 400) · p108-verify 53/53 PASS · p108-sig-e2e PASS (EURUSD=X chặn 400 chính sách · TCB lot-100 · cash 96.725.095₫ nguyên vẹn) · static re-scan (DATE_RE chỉ còn trong comment · 8 route import api-dates · 0 ictDayStart bản địa · 0 new Date từ input chưa validate) → 0 finding mới.
+- VÒNG XÁC NHẬN §7 (độc lập, góc nhìn khác): edge dates mới (2026-00-10/2026-04-31/abcd/rỗng → 0 lỗi 500 · 2024-02-29 nhuận + 2026-12-31 → 200 không loại nhầm) · dev.log 60 dòng cuối 0 lỗi · engine :3003 health 200 + tick chảy thật (TCB tradedAt 12s tuổi; blip tick-500 02:56:44 = cửa sổ hot-reload khi đang vá — engine fail-soft tự hồi phục như thiết kế #42) · browser tươi: / 200 · 43/43 API request 200 · workspace Đội Agent mở tương tác được · console sạch · mobile 390 sw=cw=390 không cuộn ngang · 4 screenshot p109-* · lint 0 · tsc src 0.
+
+Stage Summary:
+- Trạng thái: TRIỆT ĐỂ (2 vòng rà + 1 vòng xác nhận sạch, §7 thoả).
+- Findings: 12 (P0: 0 · P1: 2 · P2: 10) — cả 12 vá + kiểm định bằng chứng (HTTP code/12ms-guard/log/screenshot).
+- Điểm nhấn kiến trúc: lớp lỗi date rải rác 8 bản sao cục bộ thu về 1 nguồn src/lib/api-dates.ts chuẩn round-trip (bắt được CẢ 2 phân lớp NaN + roll-over mà fix #108 cũ bỏ sót); agents/run đóng cửa sổ TOCTOU bằng claim đồng bộ — pattern đáng nhân rộng.
+- Chu kỳ agents/run đã được tái cấu trúc (pre-cycle try/catch + hoist vars) và kiểm định bằng chu kỳ THẬT 2,4 phút 200.
+- Còn treo (P2/ý kiến chờ trader, không tự vá theo §8-2 vì là thiết kế đã ghi chú chủ ý): settings GET trả accountNumber nguyên + webhookUrl đầy đủ (hiện trống — chỉnh sửa round-trip cần mask-marker pattern như VNDIRECT creds nếu muốn) · ml/train partial-failure trả 200 ok:true kèm error string (documented "1 cái fail không chặn cái kia").
+- File: 1 mới (src/lib/api-dates.ts) + 17 sửa (8 route date + agents/run + agents + agents/[id] + agents/[id]/run + corporate-events + engine-state + relations/insight + ml/analytics + prisma-reload + corporate-events.ts lib) + 4 screenshot docs/p109-*.

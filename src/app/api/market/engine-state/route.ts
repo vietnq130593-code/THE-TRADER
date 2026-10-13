@@ -90,8 +90,37 @@ export async function POST(request: Request) {
       "lastMlSweepAt",
     ];
     const clean: EngineState = { updatedAt: new Date().toISOString() };
+    // F-1091-08 (fixbug api #109): key-whitelist TRƯỚC đây không kiểm KIỂU GIÁ
+    // TRỊ — {"eodSyncDate": 12345} được persist thẳng vào meta. Engine hydrate
+    // tự typeof-check từng trường (bỏ qua giá trị hỏng) nên không crash, nhưng
+    // state rác vẫn nằm DB. Giờ mirror đúng guard của engine: string|null cho
+    // các trường ISO-date · number cho counter · number|null cho mốc ms.
+    const invalid: string[] = [];
     for (const k of allowed) {
-      if (patch[k] !== undefined) (clean as Record<string, unknown>)[k] = patch[k];
+      const v = patch[k];
+      if (v === undefined) continue;
+      const ok =
+        k === "intlFailStreak"
+          ? typeof v === "number" && Number.isFinite(v) && v >= 0
+          : k === "lastIntlFailAt"
+            ? v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0)
+            : k === "updatedAt"
+              ? typeof v === "string"
+              : v === null || typeof v === "string";
+      if (!ok) {
+        invalid.push(k);
+        continue;
+      }
+      (clean as Record<string, unknown>)[k] = v;
+    }
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Trường ${invalid.join(", ")} kiểu không hợp lệ (cần chuỗi ISO/ngày, số nguyên ≥ 0, hoặc null).`,
+        },
+        { status: 422 }
+      );
     }
     const existing = await db.dataSourceStatus.findUnique({ where: { key: STATE_KEY } });
     const merged: EngineState = {

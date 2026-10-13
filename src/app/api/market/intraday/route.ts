@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
+// F-1091-01b (fixbug api #109 — phát hiện vòng 1): day regex-only cho
+// "2026-13-01" vượt test → new Date(...) Invalid → Prisma 500 (verify live
+// dev.log). Dùng isValidIctDay chia sẻ; sai → rơi nhánh mặc định N ngày gần
+// nhất (đúng thiết kế "day tuỳ chọn" — không differs hành vi cũ hợp lệ).
+import { isValidIctDay } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +62,7 @@ export async function GET(req: Request) {
 
     let dateFilter: Date | null = null;
     let dateEnd: Date | null = null; // F-841-02/#84 — biên trên độc quyền khi có day
-    if (dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam)) {
+    if (dayParam && isValidIctDay(dayParam)) {
       dateFilter = new Date(`${dayParam}T15:00:00.000Z`);
       dateEnd = new Date(dateFilter.getTime() + 86_400_000);
     } else if (latestDay) {

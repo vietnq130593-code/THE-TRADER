@@ -761,6 +761,9 @@ export interface ReverseResult {
   eventDate?: string;
   barsRestored?: number;
   status?: string;
+  /** F-1091-07 (fixbug api #109): mã HTTP đúng ngữ nghĩa cho route PUT map —
+   * 404 không tồn tại · 409 xung đột trạng thái · mặc định 400 lỗi dữ liệu. */
+  httpStatus?: number;
   error?: string;
 }
 
@@ -780,9 +783,10 @@ export interface ReverseResult {
 export async function reverseCorporateEvent(eventId: string): Promise<ReverseResult> {
   try {
     const row = await db.corporateEvent.findUnique({ where: { id: eventId } });
-    if (!row) return { ok: false, error: "CorporateEvent không tồn tại" };
+    // F-1091-07: 404 (không tồn tại) / 409 (đã REVERSED) thay vì 400 mặc định
+    if (!row) return { ok: false, error: "CorporateEvent không tồn tại", httpStatus: 404 };
     if (row.status === "REVERSED") {
-      return { ok: false, error: "sự kiện đã REVERSED từ trước", status: row.status };
+      return { ok: false, error: "sự kiện đã REVERSED từ trước", status: row.status, httpStatus: 409 };
     }
     // F-611A-03/#61 + F-611A-11: lấy TẤT CẢ audit của event theo ngày TĂNG
     // DẦN (audit cũ nhất = vòng adjust ĐẦU TIÊN chứa pre-values gốc đầy đủ
@@ -805,7 +809,7 @@ export async function reverseCorporateEvent(eventId: string): Promise<ReverseRes
       }
     });
     if (matches.length === 0) {
-      return { ok: false, error: "không tìm thấy AuditLog pre-values của event này" };
+      return { ok: false, error: "không tìm thấy AuditLog pre-values của event này", httpStatus: 404 };
     }
     // Union pre-values theo NGÀY — audit cũ nhất thắng (vòng adjust đầu ghi
     // giá GỐC của toàn chuỗi; các vòng sau chỉ ghi lại tập con đã bị nguồn đè

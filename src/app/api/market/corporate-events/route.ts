@@ -140,7 +140,12 @@ export async function PUT(req: NextRequest) {
 
     if (typeof body.reverseEventId === "string" && body.reverseEventId.length > 0) {
       const result = await reverseCorporateEvent(body.reverseEventId);
-      return NextResponse.json(result, { status: result.ok ? 200 : 400 });
+      // F-1091-07 (fixbug api #109): map httpStatus từ lib — 404 (event/audit
+      // không tồn tại) · 409 (đã REVERSED) · 400 (lỗi pre-values) thay vì
+      // flatten mọi thất bại thành 400 như trước.
+      return NextResponse.json(result, {
+        status: result.ok ? 200 : (result.httpStatus ?? 400),
+      });
     }
 
     return NextResponse.json(

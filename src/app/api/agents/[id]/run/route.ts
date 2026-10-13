@@ -485,9 +485,13 @@ export async function POST(
             null
           );
         }
+        // F-1091-06 (fixbug api #109): KHÔNG đưa errorMessage thô (có thể là
+        // lỗi Prisma/DB nội bộ) vào response — log server giữ chi tiết, client
+        // nhận thông điệp chung (đồng bộ pattern đường LLM lỗi ở dưới: 502 +
+        // thông điệp chung). persistRun vẫn ghi errorMessage đầy đủ để truy vết.
         return NextResponse.json(
-          { error: `Agent dịch vụ lỗi: ${errorMessage}` },
-          { status: 500 }
+          { error: "Agent dịch vụ lỗi — xem log server để biết chi tiết." },
+          { status: 502 }
         );
       }
     }

@@ -36,9 +36,13 @@ export async function GET() {
           where: { status: { in: ["PENDING", "RUNNING"] } },
           _count: { _all: true },
         }),
+        // Run gần nhất mỗi agent (first-per-agent sau khi sort desc).
+        // F-1091-05 (fixbug api #109): trần 50 bị 1 agent chạy dồn đẩy run
+        // gần nhất của agent khác ra khỏi cửa sổ → "lần chạy cuối" hiển thị
+        // null/stale. 250 ≈ 23 agent × ~10 run — vẫn bounded, hết eviction.
         db.agentRun.findMany({
           orderBy: { startedAt: "desc" },
-          take: 50,
+          take: 250,
           select: {
             agentId: true,
             taskStatus: true,
@@ -61,11 +65,12 @@ export async function GET() {
           where: { broadcast: false },
           _count: { _all: true },
         }),
-        // Run lỗi gần nhất mỗi agent (lấy first-per-agent sau khi sort desc)
+        // Run lỗi gần nhất mỗi agent (lấy first-per-agent sau khi sort desc).
+        // F-1091-05: trần 25 cùng lớp eviction — nới 250.
         db.agentRun.findMany({
           where: { error: { not: null } },
           orderBy: { startedAt: "desc" },
-          take: 25,
+          take: 250,
           select: { agentId: true, error: true },
         }),
         // K3 (#94 — AUTONOMY_BLUEPRINT §6.4): nhiệm vụ định kỳ toàn đội cho

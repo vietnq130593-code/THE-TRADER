@@ -1,26 +1,17 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
+// F-1091-01 (fixbug api #109): validate ngày chia sẻ — regex-only cũ cho
+// "2026-13-01" vượt DATE_RE → Invalid Date → Prisma 500 (verify live).
+import { isValidIctDay, ictDayStart, ictDayEnd } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Ngày bắt đầu ICT (00:00 +07:00) của chuỗi "YYYY-MM-DD". */
-function ictDayStart(date: string): Date {
-  return new Date(`${date}T00:00:00+07:00`);
-}
-
-/** Ngày kết thúc ICT (cuối ngày +07:00) của chuỗi "YYYY-MM-DD". */
-function ictDayEnd(date: string): Date {
-  return new Date(`${date}T23:59:59.999+07:00`);
-}
 
 /**
  * GET /api/agents/messages — recent 30 agent messages (newest first)
  * with sender identity for the chat-like timeline.
  * #105 — ?from=YYYY-MM-DD&to=YYYY-MM-DD (ngày ICT): lọc createdAt trong khoảng,
- * take nới 30 → 120 cho khoảng dài. Không có → hành vi cũ.
+ * take nới 30 → 120 cho khoảng dài. Không có/không hợp lệ → hành vi cũ.
  */
 export async function GET(req: Request) {
   try {
@@ -30,8 +21,8 @@ export async function GET(req: Request) {
     const hasRange = Boolean(
       fromParam &&
         toRaw &&
-        DATE_RE.test(fromParam) &&
-        DATE_RE.test(toRaw) &&
+        isValidIctDay(fromParam) &&
+        isValidIctDay(toRaw) &&
         fromParam <= toRaw,
     );
 

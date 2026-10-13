@@ -12,7 +12,16 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  if (url.searchParams.get("key") !== "k3k4-reload") {
+  // F-1091-11 (fixbug api #109): route phá require-cache + thả singleton —
+  // tiệm ích DEV-ONLY. Giờ khoá kép: (1) chỉ chạy khi NODE_ENV=development
+  // (production build trả 404 — không ship công cụ phá client ra ngoài);
+  // (2) key bí mật từ env PRISMA_RELOAD_KEY (fallback giá trị dev cũ cho
+  // môi trường sandbox chưa set env). Bỏ process.pid khỏi response.
+  if (process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+  const expectedKey = process.env.PRISMA_RELOAD_KEY ?? "k3k4-reload";
+  if (url.searchParams.get("key") !== expectedKey) {
     return NextResponse.json({ error: "unauthorized" }, { status: 403 });
   }
   const nodeRequire = createRequire(`${process.cwd()}/package.json`);
@@ -30,7 +39,6 @@ export async function GET(req: Request) {
     ok: true,
     clearedModules: ids.length,
     hadInstance,
-    pid: process.pid,
     note: "require-cache prisma đã xoá + globalThis.prisma thả — lần nạp module db kế tiếp sẽ dùng client mới.",
   });
 }

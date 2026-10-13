@@ -51,10 +51,14 @@ export async function GET(
           take: 12,
           include: { agent: { select: { code: true, name: true } } },
         }),
-        // Thread chat 1-1 (broadcast=false) — oldest first cho UI chat
+        // Thread chat 1-1 (broadcast=false) — oldest first cho UI chat.
+        // F-1091-04 (fixbug api #109): trần 200 tin MỚI NHẤT rồi reverse —
+        // trước đây findMany KHÔNG take, payload phình vô hạn theo mỗi lần
+        // chat (mỗi POST thêm 2 dòng AGENT/USER).
         db.agentMessage.findMany({
           where: { fromAgentId: id, broadcast: false },
-          orderBy: { createdAt: "asc" },
+          orderBy: { createdAt: "desc" },
+          take: 200,
           select: { id: true, direction: true, content: true, createdAt: true },
         }),
         // 20 tin broadcast gần nhất của agent (desc)
@@ -191,12 +195,17 @@ export async function GET(
           createdByAgentId: t.createdByAgentId,
           completedAt: t.completedAt,
         })),
-        chat: chat.map((m) => ({
-          id: m.id,
-          direction: m.direction as "AGENT" | "USER",
-          content: m.content,
-          createdAt: m.createdAt,
-        })),
+        // F-1091-04: query desc+take 200 ở trên → reverse trả oldest-first
+        // (giữ nguyên contract "thread chat 1-1 (asc)" cho UI chat).
+        chat: chat
+          .slice()
+          .reverse()
+          .map((m) => ({
+            id: m.id,
+            direction: m.direction as "AGENT" | "USER",
+            content: m.content,
+            createdAt: m.createdAt,
+          })),
         broadcastFeed: broadcastFeed.map((m) => ({
           id: m.id,
           fromAgent: m.fromAgent

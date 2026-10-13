@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
+// F-1091-01 (fixbug api #109): validate ngày chia sẻ. Route này không dựng
+// Date từ param (so sánh chuỗi ISO) nên không 500 như 5 route kia — nhưng
+// "2026-13-01" vẫn lọt qua regex-only cũ → 200 với 0 nến im lặng (verify
+// live). isValidIctDay bắt cả roll-over "2026-02-30" → fallback days cũ.
+import { isValidIctDay } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * GET /api/instruments/bars?symbol=VCB&days=90
@@ -26,8 +29,8 @@ export async function GET(req: NextRequest) {
     const hasRange = Boolean(
       fromParam &&
         toParam &&
-        DATE_RE.test(fromParam) &&
-        DATE_RE.test(toParam) &&
+        isValidIctDay(fromParam) &&
+        isValidIctDay(toParam) &&
         fromParam <= toParam,
     );
     const daysRaw = Number(searchParams.get("days") ?? 90);

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import type { AgentStatus } from "@prisma/client";
 import { toPlain } from "@/lib/serialize";
 import { updateAgentHealth } from "@/lib/health";
 import { callLlmWithRetry, estimateTokens, llmCostUsd } from "@/lib/llm";
@@ -16,6 +17,8 @@ import {
   buildK4ChairmanPromptBlock,
   assignChairmanTasks,
   type AssignChairmanTasksResult,
+  type K4Stored,
+  defaultK4,
 } from "@/lib/k4";
 import {
   ROLE_PROMPTS,
@@ -378,72 +381,105 @@ export async function POST() {
     );
   }
 
-  const cycleStart = Date.now();
-
-  // AUD-CODE #5 + #3: watchdog dọn run/agent kẹt RUNNING (> 5 phút) TRƯỚC khi
-  // load — agent kẹt do crash cũ không được phép chặn chu kỳ vĩnh viễn
-  await reapStaleAgentRuns();
-
-  // ── Load toàn bộ 23 agents ───────────────────────────────────────
-  const agents = await db.agent.findMany({
-    where: { code: { in: ALL_CODES } },
-    select: { id: true, code: true, config: true, healthScore: true, status: true },
-  });
-  const byCode = new Map(agents.map((a) => [a.code, a]));
-  const missing = ALL_CODES.filter((c) => !byCode.get(c));
-  if (missing.length > 0) {
-    // AUD-CODE #10: KHÔNG set cooldown khi fail sớm ở bước validate —
-    // user không phải chờ 60s vô ích vì lỗi cấu hình (thiếu agent)
-    return NextResponse.json(
-      {
-        error: `Thiếu agent trong hệ thống: ${missing.join(", ")}. Chạy "bun prisma/expand-agents.ts" để đồng bộ roster 23 agents.`,
-      },
-      { status: 404 }
-    );
-  }
-
-  // AUD-CODE #3: guard chồng lấn — chu kỳ không đè lên single-run đang chạy
-  // (status đã load SAU khi watchdog dọn nên không có giả âm/ giả dương)
-  const runningAgents = agents.filter((a) => a.status === "RUNNING");
-  if (runningAgents.length > 0) {
-    return NextResponse.json(
-      {
-        error: `Có ${runningAgents.length} agent đang chạy lẻ (${runningAgents
-          .map((a) => a.code)
-          .slice(0, 3)
-          .join(", ")}…). Chờ hoàn tất hoặc thử lại sau — tránh chạy chồng lẫn tốn 2× chi phí LLM.`,
-        retryAfterSeconds: 60,
-      },
-      { status: 409, headers: { "Retry-After": "60" } }
-    );
-  }
-
-  // AUD-CODE #1 (P1): sweep tín hiệu hết hạn trước mỗi chu kỳ — prompt Chủ tịch
-  // và notification-officer chỉ thấy tín hiệu còn hạn
-  await expireDueSignals();
-
-  // AUD-CODE #10: cooldown chỉ tính từ lúc chu kỳ THẬT SỰ bắt đầu (qua validate)
+  // F-1091-02 (fixbug api #109 — P1): CLAIM cooldown ĐỒNG BỘ ngay sau check.
+  // Pattern cũ (check → 2+ await reap/findMany → set ở dưới) để cửa sổ
+  // TOCTOU: engine tick + click tay cùng lúc đều qua check rồi chạy chu kép
+  // (2× chi phí LLM + trùng Signal/AgentMessage/AgentRun). Không còn await
+  // nào giữa check và claim → yêu cầu concurrent thứ 2 dính 429 ngay.
+  // Thất bại validate sớm / lỗi DB TRƯỚC khi chu kỳ thật sự chạy → TRẢ LẠI mốc
+  // cũ (giữ nguyên nghĩa AUD-CODE #10: fail sớm không bắt user chờ 60s).
+  const prevCycleStartedAt = lastCycleStartedAt;
   lastCycleStartedAt = now;
 
-  // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.1): k-run tồn tại → ghi mốc chu kỳ MỖI
-  // lần chạy (kể cả tay) làm gốc nextCycleAt của engine. AWAIT (không void):
-  // đóng window ~100ms giữa lúc response về client và DB ghi xong — nếu engine
-  // tick 60s trúng window đó sẽ đọc lastCycleAt cũ → nextCycleAt quá khứ → bắn
-  // chu kỳ kép (chặn được bởi cooldown 60s nhưng vẫn 1 POST thừa). markKRunCycle
-  // fail-soft tuyệt đối bên trong (lỗi DB chỉ console.error); key chưa từng
-  // tạo → no-op — env AGENT_CYCLE_MINUTES fallback nguyên vẹn.
-  await markKRunCycle();
+  const cycleStart = Date.now();
 
-  // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): đọc cấu hình k4 MỘT LẦN đầu chu kỳ —
-  // enabled → tiêm khối GIAO VIỆC vào prompt Chủ tịch (sau RAG block) + parse
-  // assignTasks sau khi Chủ tịch chạy xong. getK4 fail-soft (mặc định tắt).
-  const k4 = await getK4();
+  // F-1091-03 (fixbug api #109): đoạn pre-cycle (reap/findMany/updateMany)
+  // trước đây nằm NGOÀI try/catch — lỗi DB lúc này cho 500 non-JSON mặc định
+  // của Next.js, lệch shape { error } JSON mọi route khác trả.
+  // (agents/byCode/k4 khai báo NGOÀI try vì thân chu kỳ bên dưới dùng tiếp.)
+  let agents: {
+    id: string;
+    code: string;
+    config: string;
+    healthScore: number;
+    status: AgentStatus;
+  }[] = [];
+  let byCode = new Map<string, (typeof agents)[number]>();
+  let k4: K4Stored = defaultK4();
+  try {
+    // AUD-CODE #5 + #3: watchdog dọn run/agent kẹt RUNNING (> 5 phút) TRƯỚC khi
+    // load — agent kẹt do crash cũ không được phép chặn chu kỳ vĩnh viễn
+    await reapStaleAgentRuns();
 
-  // Mark every agent RUNNING while the cycle executes
-  await db.agent.updateMany({
-    where: { id: { in: agents.map((a) => a.id) } },
-    data: { status: "RUNNING" },
-  });
+    // ── Load toàn bộ 23 agents ───────────────────────────────
+    agents = await db.agent.findMany({
+      where: { code: { in: ALL_CODES } },
+      select: { id: true, code: true, config: true, healthScore: true, status: true },
+    });
+    byCode = new Map(agents.map((a) => [a.code, a]));
+    const missing = ALL_CODES.filter((c) => !byCode.get(c));
+    if (missing.length > 0) {
+      // AUD-CODE #10: KHÔNG set cooldown khi fail sớm ở bước validate —
+      // user không phải chờ 60s vô ích vì lỗi cấu hình (thiếu agent)
+      lastCycleStartedAt = prevCycleStartedAt;
+      return NextResponse.json(
+        {
+          error: `Thiếu agent trong hệ thống: ${missing.join(", ")}. Chạy "bun prisma/expand-agents.ts" để đồng bộ roster 23 agents.`,
+        },
+        { status: 404 }
+      );
+    }
+
+    // AUD-CODE #3: guard chồng lấn — chu kỳ không đè lên single-run đang chạy
+    // (status đã load SAU khi watchdog dọn nên không có giả âm/ giả dương)
+    const runningAgents = agents.filter((a) => a.status === "RUNNING");
+    if (runningAgents.length > 0) {
+      lastCycleStartedAt = prevCycleStartedAt;
+      return NextResponse.json(
+        {
+          error: `Có ${runningAgents.length} agent đang chạy lẻ (${runningAgents
+            .map((a) => a.code)
+            .slice(0, 3)
+            .join(", ")}…). Chờ hoàn tất hoặc thử lại sau — tránh chạy chồng lẫn tốn 2× chi phí LLM.`,
+          retryAfterSeconds: 60,
+        },
+        { status: 409, headers: { "Retry-After": "60" } }
+      );
+    }
+
+    // AUD-CODE #1 (P1): sweep tín hiệu hết hạn trước mỗi chu kỳ — prompt Chủ tịch
+    // và notification-officer chỉ thấy tín hiệu còn hạn
+    await expireDueSignals();
+
+    // (cooldown đã claim đồng bộ ngay sau check — F-1091-02)
+
+    // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.1): k-run tồn tại → ghi mốc chu kỳ MỖI
+    // lần chạy (kể cả tay) làm gốc nextCycleAt của engine. AWAIT (không void):
+    // đóng window ~100ms giữa lúc response về client và DB ghi xong — nếu engine
+    // tick 60s trúng window đó sẽ đọc lastCycleAt cũ → nextCycleAt quá khứ → bắn
+    // chu kỳ kép (chặn được bởi cooldown 60s nhưng vẫn 1 POST thừa). markKRunCycle
+    // fail-soft tuyệt đối bên trong (lỗi DB chỉ console.error); key chưa từng
+    // tạo → no-op — env AGENT_CYCLE_MINUTES fallback nguyên vẹn.
+    await markKRunCycle();
+
+    // K4 (#94 — AUTONOMY_BLUEPRINT §7.1): đọc cấu hình k4 MỘT LẦN đầu chu kỳ —
+    // enabled → tiêm khối GIAO VIỆC vào prompt Chủ tịch (sau RAG block) + parse
+    // assignTasks sau khi Chủ tịch chạy xong. getK4 fail-soft (mặc định tắt).
+    k4 = await getK4();
+
+    // Mark every agent RUNNING while the cycle executes
+    await db.agent.updateMany({
+      where: { id: { in: agents.map((a) => a.id) } },
+      data: { status: "RUNNING" },
+    });
+  } catch (err) {
+    lastCycleStartedAt = prevCycleStartedAt;
+    console.error("[api/agents/run:pre-cycle]", err);
+    return NextResponse.json(
+      { error: "Không khởi động được chu kỳ agent — xem log server." },
+      { status: 500 }
+    );
+  }
 
   // Kết quả phân tích theo code (đưa vào digest cho Chủ tịch)
   const analyses = new Map<string, AgentAnalysis>();

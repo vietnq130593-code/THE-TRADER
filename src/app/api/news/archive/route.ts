@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { scoreNews } from "@/lib/quant/sentiment";
 import { CORPUS_NEWS } from "@/lib/ml/rag";
+// F-1091-01 (fixbug api #109): validate ngày chia sẻ — regex-only cũ cho
+// "2026-13-01" vượt DATE_RE → ictDayStart Invalid → Prisma 500 thay vì 422
+// hợp đồng documented ở header (verify live). isValidIctDay bắt cả
+// roll-over "2026-02-30" (F-63C-09) — vẫn 422 fields[] đúng hợp đồng.
+import { isValidIctDay, ictDayStart, ictDayEnd } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
 
@@ -23,18 +28,11 @@ export const dynamic = "force-dynamic";
  * counts thống kê khoảng (bySource/byCategory/inA4Window/inRagCorpus/lexicon).
  */
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Số tin A4 đọc mỗi chu kỳ — mirror latestNewsForContext(10) (agent-context.ts). */
 const A4_WINDOW = 10;
 /** Trần quét thống kê lexicon toàn khoảng — chống phình nếu kho lớn dần. */
 const LEXICON_SCAN_CAP = 5_000;
 
-function ictDayStart(date: string): Date {
-  return new Date(`${date}T00:00:00+07:00`);
-}
-function ictDayEnd(date: string): Date {
-  return new Date(`${date}T23:59:59.999+07:00`);
-}
 /** "YYYY-MM-DD" theo ICT (UTC+7) của thời điểm cho trước. */
 function ictDateIso(now: Date): string {
   return new Date(now.getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
@@ -47,11 +45,11 @@ export async function GET(req: NextRequest) {
     const toRaw = sp.get("to");
 
     const fields: { field: string; message: string }[] = [];
-    if (fromRaw != null && !DATE_RE.test(fromRaw)) {
-      fields.push({ field: "from", message: "Từ ngày phải có dạng YYYY-MM-DD." });
+    if (fromRaw != null && !isValidIctDay(fromRaw)) {
+      fields.push({ field: "from", message: "Từ ngày phải là ngày YYYY-MM-DD hợp lệ." });
     }
-    if (toRaw != null && !DATE_RE.test(toRaw)) {
-      fields.push({ field: "to", message: "Đến ngày phải có dạng YYYY-MM-DD." });
+    if (toRaw != null && !isValidIctDay(toRaw)) {
+      fields.push({ field: "to", message: "Đến ngày phải là ngày YYYY-MM-DD hợp lệ." });
     }
 
     // Mặc định 7 ngày gần nhất theo ICT khi client không gửi.

@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { toPlain } from "@/lib/serialize";
 import { mapSignalRow, expireDueSignals } from "@/lib/signal-execution";
+// F-1091-01 (fixbug api #109): validate ngày chia sẻ — regex-only cũ cho
+// "2026-13-01" vượt DATE_RE → Invalid Date → Prisma 500 (verify live).
+import { isValidIctDay, ictDayStart, ictDayEnd } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
 
@@ -9,17 +12,6 @@ export const dynamic = "force-dynamic";
  * GET /api/signals — recent trading signals with instrument + agent info.
  * PHASE3 B2 §4.1: map thêm status / rejectedAt / rejectNote.
  */
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Ngày bắt đầu ICT (00:00 +07:00) của chuỗi "YYYY-MM-DD". */
-function ictDayStart(date: string): Date {
-  return new Date(`${date}T00:00:00+07:00`);
-}
-
-/** Ngày kết thúc ICT (cuối ngày +07:00) của chuỗi "YYYY-MM-DD". */
-function ictDayEnd(date: string): Date {
-  return new Date(`${date}T23:59:59.999+07:00`);
-}
 
 export async function GET(req: Request) {
   try {
@@ -32,8 +24,8 @@ export async function GET(req: Request) {
     const hasRange = Boolean(
       fromParam &&
         toRaw &&
-        DATE_RE.test(fromParam) &&
-        DATE_RE.test(toRaw) &&
+        isValidIctDay(fromParam) &&
+        isValidIctDay(toRaw) &&
         fromParam <= toRaw,
     );
 

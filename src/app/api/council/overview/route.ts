@@ -5,6 +5,11 @@ import { getDecisionLedger } from "@/lib/council/decision-eval";
 // #107 E-EXEC: vị thế phi-VN đánh giá theo luật thị trường (quy VND / danh nghĩa idx).
 import { markPositionVND, execUnitLabel, isForeignMarket, usdVndRate } from "@/lib/exec/market-rules";
 import { unitKindOf } from "@/lib/format";
+// F-1091-01c (fixbug api #109): đưa isValidIctDay/ictDayStart/ictDayEnd về
+// nguồn chia sẻ src/lib/api-dates.ts. Nâng cấp so với fix F-1081-01: thêm
+// round-trip UTC — bắt thêm "2026-02-30" (JS roll-over sang 03-02, không
+// NaN → fix cũ cho qua → lọc sai khoảng im lặng — cùng lớp F-63C-09).
+import { isValidIctDay, ictDayStart, ictDayEnd } from "@/lib/api-dates";
 
 export const dynamic = "force-dynamic";
 
@@ -20,29 +25,6 @@ export const dynamic = "force-dynamic";
  * Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD — lọc sổ quyết định theo decidedAt
  * theo NGÀY ICT +07:00 (pattern #101/#105).
  */
-
-function ictDayStart(date: string): Date {
-  return new Date(`${date}T00:00:00+07:00`);
-}
-
-function ictDayEnd(date: string): Date {
-  return new Date(`${date}T23:59:59.999+07:00`);
-}
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/**
- * F-1081-01 (fixbug #108): regex chỉ bắt SAI ĐỊNH DẠNG — "2026-13-01" vượt
- * DATE_RE rồi new Date() cho Invalid Date → Prisma throw → 500. Bổ sung kiểm
- * NGỮ NGHĨA (pattern đã dùng ở data-quality route: isNaN getTime). Trả 422
- * đúng nghĩa validate thay vì 500.
- */
-function isValidIctDay(s: string): boolean {
-  if (!DATE_RE.test(s)) return false;
-  const [, m, d] = s.split("-").map(Number);
-  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
-  return !Number.isNaN(ictDayStart(s).getTime());
-}
 
 export async function GET(req: NextRequest) {
   try {
