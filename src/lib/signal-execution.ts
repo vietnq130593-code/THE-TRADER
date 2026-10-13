@@ -310,7 +310,14 @@ export async function createPaperOrderFromSignal(
     where:
       world === "sandbox"
         ? { signalId: signal.id, brokerAccountId: account.id }
-        : { signalId: signal.id },
+        : // Phiên #91 (tái triển khai trên #111) — F-207 vá đối xứng cho thế giới
+          // paper: lệnh SANDBOX (K1 auto-convert cuối chu kỳ) KHÔNG được cản
+          // đường duyệt paper — 2 thế giới độc lập §5.3. Trước đây where
+          // { signalId } ánh xa trúng cả lệnh sandbox → trader bấm Duyệt bị
+          // 409 "đã có lệnh liên quan" dù sổ paper trống, và auto-duyệt
+          // đồng thuận #91 không bao giờ chạy nổi khi K1 bật (sandbox convert
+          // chạy TRƯỚC trong cùng chu kỳ).
+          { signalId: signal.id, brokerAccount: { accountType: { not: "sandbox" } } },
     select: { id: true, status: true },
   });
   if (existingOrder) {
@@ -598,9 +605,15 @@ export async function createPaperOrderFromSignal(
         if (claimed.count === 0) {
           throw new Error("SIGNAL_CLAIM_LOST");
         }
-        // F-207: lệnh đã tồn tại trong sổ (kể cả khi actedAt bị thiếu) → chặn trùng
+        // F-207: lệnh đã tồn tại trong sổ (kể cả khi actedAt bị thiếu) → chặn trùng.
+        // Phiên #91 (tái triển khai trên #111) — scope CHỈ lệnh thế giới paper
+        // (loại tài khoản sandbox): lệnh K1 sandbox từ cùng tín hiệu không cản
+        // đường duyệt paper (§5.3 2 thế giới độc lập).
         const existing = await tx.order.findFirst({
-          where: { signalId: signal.id },
+          where: {
+            signalId: signal.id,
+            brokerAccount: { accountType: { not: "sandbox" } },
+          },
           select: { id: true },
         });
         if (existing) {
@@ -801,4 +814,252 @@ export async function createPaperOrderFromSignal(
           }
         : null,
   };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PHIÊN #91 (tái triển khai trên nền #111 sau sandbox reset) — QUYẾT ĐỊNH
+ * TÍN HIỆU TỨC THÌ THEO CỔNG ĐỒNG THUẬN (hiệu lệnh trader: "1 là duyệt,
+ * 2 là từ chối — đủ đồng thuận thì duyệt ngay, không đủ thì từ chối ngay").
+ *
+ * Trước #91: tín hiệu sinh ra ACTIVE rồi CHỜ trader duyệt tay (PHASE3
+ * §4.5) — tín hiệu 83,3% đồng thuận nằm im 2 ngày vì (a) không ai bấm
+ * Duyệt, (b) nút Phê duyệt chỉ gắn tin nhắn strategist trong 30 tin gần
+ * nhất của luồng thảo luận (chu kỳ sau đẩy ra khỏi feed), (c) tín hiệu
+ * HOLD không bao giờ có nút Chuyển lệnh. Chỉ thế giới sandbox K1 mới có
+ * auto-convert — thế giới paper không có gì tự quyết cả.
+ *
+ * Sau #91 — MỘT tín hiệu MỘT quyết định, chọn NGAY khi sinh (cuối chu kỳ):
+ *   - BUY/SELL + gate CONSENSUS (ratio ≥ 0,80 − ε)  → DUYỆT NGAY:
+ *     Signal → ACTED. Lệnh giấy LIMIT 5% NAV đặt được thì đặt (khi tài
+ *     khoản paper có tiền); không đặt được (paper 0 ₫ do trader chủ động
+ *     purge / hết vị thế BÁN) → quyết định DUYỆT vẫn giữ, lý do ghi audit —
+ *     quyết định thuộc về cổng đồng thuận, không phụ thuộc số dư.
+ *   - Còn lại (HOLD mọi mức · BUY/SELL < 80% · thiếu snapshot) → TỪ CHỐI
+ *     NGAY: Signal → REJECTED + rejectNote lý do, audit SIGNAL_AUTO_REJECTED.
+ *
+ * Thứ tự ghép trong chu kỳ (agents/run): K1 sandbox auto-convert chạy
+ * TRƯỚC (cần status ACTIVE — §5.3 2 thế giới), auto-decision paper chạy
+ * SAU. Fail-soft tuyệt đối: lỗi bất kỳ → trả {decision:"error"} chứ
+ * không làm hỏng chu kỳ 23 agents.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+export type AutoDecision =
+  | "approved" // đủ đồng thuận ≥80% → đã duyệt (lệnh đặt được hay không — audit ghi rõ)
+  | "rejected" // không đủ / GIỮ / thiếu snapshot → đã từ chối
+  | "skipped" // không quyết được (không ACTIVE / đua đồng thời nhường quyền)
+  | "error"; // lỗi nội bộ fail-soft
+
+export interface AutoDecisionResult {
+  decision: AutoDecision;
+  /** % đồng thuận snapshot lúc tín hiệu sinh (0..1) — null khi thiếu. */
+  ratio: number | null;
+  /** Lý do human-readable (rejectNote / thông tin duyệt) — dùng UI + audit. */
+  note: string;
+  /** Khi approved + lệnh đặt được: lệnh gốc (TWAP → orderIds đầy đủ). */
+  orderId?: string;
+  orderIds?: string[];
+  twapStyle?: "TWAP" | "SINGLE";
+}
+
+/** % hiển thị kiểu VN (83,3%) từ ratio 0..1 — dùng note + audit. */
+function pctVN(ratio: number | null): string {
+  return ratio != null ? `${(ratio * 100).toFixed(1).replace(".", ",")}%` : "?";
+}
+
+/**
+ * Quyết định tức thì MỘT tín hiệu theo snapshot cổng đồng thuận B9 ghi lúc
+ * sinh (consensusGate/consensusRatio — KHÔNG đánh giá lại bằng cổng mới hơn,
+ * đúng ngữ nghĩa bind của B9). Idempotent: chỉ tín hiệu ACTIVE mới được quyết.
+ */
+export async function autoDecideSignalByConsensus(signalId: string): Promise<AutoDecisionResult> {
+  try {
+    const signal = await db.signal.findUnique({
+      where: { id: signalId },
+      select: {
+        id: true,
+        direction: true,
+        status: true,
+        consensusGate: true,
+        consensusRatio: true,
+        instrument: { select: { symbol: true } },
+      },
+    });
+    if (!signal) {
+      return { decision: "skipped", ratio: null, note: "Tín hiệu không tồn tại." };
+    }
+    // Chỉ quyết tín hiệu còn ACTIVE — chạy lại trên tín hiệu đã quyết là no-op
+    // (đúng idempotent; cũng guard đua với trader bấm tay cùng lúc: claim
+    // atomic updateMany bên dưới bảo đảm đúng một bên thắng).
+    if (signal.status !== "ACTIVE") {
+      return {
+        decision: "skipped",
+        ratio: signal.consensusRatio,
+        note: `Tín hiệu đã ở trạng thái ${signal.status} — không quyết lại.`,
+      };
+    }
+
+    const ratio = signal.consensusRatio;
+    const gate = signal.consensusGate;
+    const symbol = signal.instrument.symbol;
+
+    // ── Nhánh 1: BUY/SELL đủ đồng thuận ≥80% → DUYỆT NGAY ──────────────
+    // QUYẾT ĐỊNH tách khỏi KHẢ NĂNG ĐẶT LỆNH: "duyệt" là phán quyết của cổng
+    // đồng thuận (hiệu lệnh #91) — lệnh giấy đặt được thì đặt (thế giới paper
+    // hiện 0 ₫ do trader chủ động purge #91-trước → guard equity sẽ từ chối;
+    // thế giới sandbox K1 tự thực thi theo đường chu kỳ riêng của nó). Tín
+    // hiệu vẫn ĐÓNG BẰNG DUYỆT (ACTED) — không treo ACTIVE chờ ai bấm nút.
+    if (
+      (signal.direction === "BUY" || signal.direction === "SELL") &&
+      gate === "CONSENSUS"
+    ) {
+      const res = await createPaperOrderFromSignal(signalId, { sizing: "nav5pct" });
+      if (res.ok) {
+        const note = `Tự động DUYỆT theo cổng đồng thuận: ${pctVN(ratio)} ≥ 80% — lệnh ${res.order.side} ${res.order.quantity} cp ${res.order.symbol} đã đặt (${res.twap ? "TWAP" : "SINGLE"}).`;
+        await db.auditLog.create({
+          data: {
+            action: "SIGNAL_AUTO_APPROVED",
+            entity: "Signal",
+            entityId: signalId,
+            after: JSON.stringify({
+              via: "consensus-gate",
+              symbol,
+              direction: signal.direction,
+              consensusRatio: ratio,
+              consensusGate: gate,
+              orderCreated: true,
+              orderId: res.order.id,
+              orderIds: res.orders.map((o) => o.id),
+              style: res.twap ? "TWAP" : "SINGLE",
+              note,
+            }),
+          },
+        });
+        return {
+          decision: "approved",
+          ratio,
+          note,
+          orderId: res.order.id,
+          orderIds: res.orders.map((o) => o.id),
+          twapStyle: res.twap ? "TWAP" : "SINGLE",
+        };
+      }
+      // Đủ đồng thuận nhưng lệnh giấy KHÔNG đặt được (tài khoản paper 0 ₫/
+      // hết vị thế BÁN/…) → tín hiệu VẪN ĐƯỢC DUYỆT (ACTED) — quyết định
+      // thuộc về cổng đồng thuận, không phụ thuộc số dư; lý do lệnh chưa
+      // đặt ghi audit + rejectNote của TRƯỚC ĐÓ không đụng (đây là duyệt).
+      // Chỉ ngoài lệ: guard 409 nghĩa là người/khác vừa claim đồng thời →
+      // nhường quyền, không ghi đè.
+      const concurrent =
+        res.status === 409 &&
+        /đã được chuyển thành lệnh|đã có lệnh liên quan|xử lý đồng thời/.test(res.error);
+      if (concurrent) {
+        return {
+          decision: "skipped",
+          ratio,
+          note: `Tín hiệu vừa được quyết định đồng thời ở nơi khác — auto-decision nhường quyền (${res.error}).`,
+        };
+      }
+      const claimed = await db.signal.updateMany({
+        where: { id: signalId, status: "ACTIVE", actedAt: null },
+        data: { status: "ACTED", actedAt: new Date() },
+      });
+      if (claimed.count === 0) {
+        return {
+          decision: "skipped",
+          ratio,
+          note: "Tín hiệu vừa chuyển trạng thái ở nơi khác — auto-decision nhường quyền.",
+        };
+      }
+      const note = `Tự động DUYỆT theo cổng đồng thuận: ${pctVN(ratio)} ≥ 80%. Lệnh giấy chưa đặt được — ${res.error} (tài khoản giấy hiện 0 ₫ theo lệnh dọn dữ liệu của trader; ghi audit).`;
+      await db.auditLog.create({
+        data: {
+          action: "SIGNAL_AUTO_APPROVED",
+          entity: "Signal",
+          entityId: signalId,
+          after: JSON.stringify({
+            via: "consensus-gate",
+            symbol,
+            direction: signal.direction,
+            consensusRatio: ratio,
+            consensusGate: gate,
+            orderCreated: false,
+            orderError: res.error,
+            note,
+          }),
+        },
+      });
+      return {
+        decision: "approved",
+        ratio,
+        note,
+        orderIds: [],
+      };
+    }
+
+    // ── Nhánh 2: còn lại → TỪ CHỐI NGAY với lý do tương ứng ────────────
+    let reason: string;
+    if (signal.direction === "HOLD") {
+      reason =
+        gate === "CONSENSUS"
+          ? `Tự động TỪ CHỐI: tín hiệu GIỮ — hội đồng đồng thuận ${pctVN(ratio)} nhưng chiến lược giữ nguyên vị thế, không có lệnh để duyệt (quy tắc 1 duyệt · 2 từ chối).`
+          : `Tự động TỪ CHỐI: tín hiệu GIỮ (không tạo lệnh) — cổng đồng thuận ${gate === "WEAK_MAJORITY" ? `đa số yếu ${pctVN(ratio)} < 80%` : gate === "NO_CONSENSUS" ? "không đồng thuận" : "chưa có snapshot"} ép giữ.`;
+    } else if (gate === "WEAK_MAJORITY") {
+      reason = `Tự động TỪ CHỐI theo cổng đồng thuận: ${pctVN(ratio)} < 80% (đa số yếu) — không đủ đồng thuận để duyệt lệnh.`;
+    } else if (gate === "NO_CONSENSUS") {
+      reason = "Tự động TỪ CHỐI theo cổng đồng thuận: dưới 50% — hội đồng không có đa số.";
+    } else if (gate == null) {
+      reason =
+        "Tự động TỪ CHỐI (fail-safe): tín hiệu không có snapshot cổng đồng thuận — không chứng minh được mức ≥80%.";
+    } else {
+      reason = `Tự động TỪ CHỐI: điều kiện duyệt chưa đạt (gate ${gate}, tỉ lệ ${pctVN(ratio)}).`;
+    }
+
+    // Claim atomic: chỉ thắng khi vẫn ACTIVE (chống đua trader bấm tay).
+    const claimed = await db.signal.updateMany({
+      where: { id: signalId, status: "ACTIVE" },
+      data: { status: "REJECTED", rejectedAt: new Date(), rejectNote: reason },
+    });
+    if (claimed.count === 0) {
+      const cur = await db.signal.findUnique({
+        where: { id: signalId },
+        select: { status: true },
+      });
+      return {
+        decision: "skipped",
+        ratio,
+        note: `Tín hiệu vừa chuyển trạng thái ${cur?.status ?? "?"} — auto-decision nhường quyền.`,
+      };
+    }
+    await db.auditLog.create({
+      data: {
+        action: "SIGNAL_AUTO_REJECTED",
+        entity: "Signal",
+        entityId: signalId,
+        after: JSON.stringify({
+          via: "consensus-gate",
+          symbol,
+          direction: signal.direction,
+          consensusRatio: ratio,
+          consensusGate: gate,
+          reason:
+            signal.direction === "HOLD"
+              ? "hold-no-order"
+              : gate === "WEAK_MAJORITY"
+                ? "weak-majority"
+                : gate === "NO_CONSENSUS"
+                  ? "no-consensus"
+                  : "missing-snapshot",
+          note: reason,
+        }),
+      },
+    });
+    return { decision: "rejected", ratio, note: reason };
+  } catch (err) {
+    console.error("[signal-execution:autoDecideSignalByConsensus] fail-soft:", err);
+    return {
+      decision: "error",
+      ratio: null,
+      note: "Lỗi nội bộ khi tự quyết tín hiệu (fail-soft) — tín hiệu giữ nguyên trạng thái.",
+    };
+  }
 }

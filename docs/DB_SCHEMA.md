@@ -1,7 +1,7 @@
 # The Trader — Data Dictionary & Database Schema
 
 > **Project:** The Trader — Hệ thống giao dịch đa agent (Multi-Agent Trading System) cho VNDIRECT
-> **Document:** `docs/DB_SCHEMA.md` · **Version:** 0.9.5 · **Updated:** 2026-10-12 (#107 COUNCIL_STEWARDSHIP_BLUEPRINT v2.0)
+> **Document:** `docs/DB_SCHEMA.md` · **Version:** 0.9.6 · **Updated:** 2026-10-13 (#112 — tái triển khai phiên #91: auto-decision tín hiệu theo cổng đồng thuận + F-207 scope paper loại sandbox)
 > **Source of truth:** [`prisma/schema.prisma`](../prisma/schema.prisma) — tài liệu này mô tả đúng schema đã implement. Mọi thay đổi schema phải được phản ánh lại đây.
 > **Cross-refs:** [TECHNICAL_BLUEPRINT.md](./TECHNICAL_BLUEPRINT.md) (API surface) · [DATA_SOURCES.md](./DATA_SOURCES.md) (field mapping theo nguồn dữ liệu) · [COUNCIL_STEWARDSHIP_BLUEPRINT.md](./COUNCIL_STEWARDSHIP_BLUEPRINT.md) (thiết kế 3 model mới)
 
@@ -557,7 +557,7 @@ Bản snapshot giá tại một thời điểm — thiết kế cho feed tick/sn
 | `agentId` | String | nullable, FK → `Agent.id`, **SetNull** | Agent gốc — null nếu tổng hợp/hệ thống |
 | `consensusGate` | String | nullable | **Phiên #38 (B9)** — snapshot cổng đồng thuận **lúc Chủ tịch sinh tín hiệu** (gate bind theo assessment tạo ra tín hiệu — convert chu kỳ sau KHÔNG bị đánh giá lại): `CONSENSUS` \| `WEAK_MAJORITY` \| `NO_CONSENSUS`; null = chưa có cổng |
 | `consensusRatio` | Float | nullable | **Phiên #38 (B9)** — tỉ lệ trọng số của phe số đông tại snapshot (0..1, để audit + hiển thị; `signal-execution.ts` chặn convert khi `consensus.enforce=true` mà gate ≠ CONSENSUS) |
-| `status` | String | default `"ACTIVE"` | `ACTIVE` \| `ACTED` \| `REJECTED` \| `EXPIRED` — vòng đời phê duyệt của trader (Giai đoạn 3 §4.1); chu kỳ agent sinh signal → `ACTIVE` chờ duyệt |
+| `status` | String | default `"ACTIVE"` | `ACTIVE` \| `ACTED` \| `REJECTED` \| `EXPIRED` — vòng đời quyết định của tín hiệu (Giai đoạn 3 §4.1 + phiên #91: auto-decision cuối chu kỳ — ACTIVE chỉ còn khi auto-decision lỗi fail-soft) |
 | `expiresAt` | DateTime | nullable | Hạn hiệu lực tín hiệu (mặc định +3 ngày) |
 | `actedAt` | DateTime | nullable | **Thời điểm được chuyển thành lệnh** — đánh dấu signal đã consumed (`status=ACTED`) |
 | `rejectedAt` | DateTime | nullable | Thời điểm trader **từ chối** (`status=REJECTED`) |
@@ -571,7 +571,7 @@ Bản snapshot giá tại một thời điểm — thiết kế cho feed tick/sn
 - `@@index([direction, createdAt(sort: Desc)])` — lọc BUY/SELL cho bảng signals;
 - `@@index([status, createdAt(sort: Desc)])` — hàng đợi tín hiệu **ACTIVE chờ phê duyệt** (Giai đoạn 3 §4.1).
 
-**Vòng đời (Giai đoạn 3):** chu kỳ đầy đủ sinh Signal `ACTIVE` (không tự tạo lệnh — quyết định thuộc trader) → `POST /api/signals/[id]/decision` **APPROVE** → lệnh paper (sizing 5% NAV) + `ACTED` + audit `SIGNAL_APPROVED`/`ORDER_CREATED` · **REJECT** → `REJECTED` + `rejectedAt` + audit `SIGNAL_REJECTED`. Migration 2026-10-06: backfill actedAt≠null → `ACTED`, hết hạn → `EXPIRED`.
+**Vòng đời (Giai đoạn 3 + phiên #91 tái triển khai trên #111):** chu kỳ đầy đủ sinh Signal `ACTIVE` → **QUYẾT ĐỊNH TỨC THÌ cuối chu kỳ theo cổng đồng thuận** (hiệu lệnh trader "1 là duyệt, 2 là từ chối"): `agents/run` gọi `autoDecideSignalByConsensus` **SAU** K1 sandbox auto-convert — BUY/SELL + gate `CONSENSUS` (ratio ≥ 80%) → **DUYỆT NGAY**: `ACTED` + lệnh paper 5% NAV khi đặt được (paper 0 ₫ → vẫn `ACTED`, lý do ghi audit `SIGNAL_AUTO_APPROVED` `orderCreated:false` — quyết định tách khỏi số dư); HOLD · < 80% · thiếu snapshot → **TỪ CHỐI NGAY**: `REJECTED` + `rejectNote` lý do + audit `SIGNAL_AUTO_REJECTED`. Đường tay `POST /api/signals/[id]/decision` **APPROVE/REJECT** vẫn giữ (dự phòng fail-soft). F-207 (phiên #91): guard "đã có lệnh trong sổ" của paper scope **loại trừ tài khoản sandbox** (2 chỗ pre-check + in-tx — 2 thế giới độc lập §5.3). Migration 2026-10-06: backfill actedAt≠null → `ACTED`, hết hạn → `EXPIRED`.
 
 **Retention:** hết hạn theo `expiresAt`; giữ để đánh giá chất lượng tín hiệu (hit-rate của agent).
 

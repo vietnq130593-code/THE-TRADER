@@ -134,6 +134,17 @@ export function consensusMeta(
 
 /* ─────────────────── Chip trạng thái vòng đời ─────────────────── */
 
+/**
+ * PHIÊN #91 (tái triển khai trên #111) — quy tắc 1 duyệt · 2 từ chối:
+ *   ACTED    → "Đã duyệt" (xanh up) — kèm "· đã chuyển lệnh" khi có lệnh
+ *              paper THẬT (paperOrdered); auto-duyệt đủ đồng thuận nhưng
+ *              paper 0 ₫ → chỉ "Đã duyệt" (quyết định tách khỏi số dư).
+ *   REJECTED → "Đã từ chối" (đỏ down) + rejectNote làm title/tooltip.
+ *   EXPIRED  → "Đã hết hạn" (xám neutral).
+ *   ACTIVE   → "Chờ quyết định" (vàng flat) — chỉ còn khi auto-decision
+ *              cuối chu kỳ lỗi fail-soft (hiếm), hoặc tín hiệu sinh ngoài
+ *              chu kỳ agents/run.
+ */
 export function statusMeta(s: SignalRow): {
   label: string;
   tone: StatTileTone;
@@ -142,30 +153,38 @@ export function statusMeta(s: SignalRow): {
   if (s.rejectedAt != null || s.status === "REJECTED") {
     return {
       label: "Đã từ chối",
-      tone: "neutral",
+      tone: "down",
       title: s.rejectNote
-        ? `Tín hiệu đã bị từ chối — ghi chú: ${s.rejectNote}`
+        ? `Tín hiệu đã bị từ chối — lý do: ${s.rejectNote}`
         : "Tín hiệu đã bị từ chối.",
     };
   }
   if (s.actedAt != null || s.status === "ACTED") {
-    return {
-      label: "Đã chuyển lệnh",
-      tone: "neutral",
-      title: "Tín hiệu đã được duyệt và chuyển thành lệnh chờ khớp.",
-    };
+    return s.paperOrdered
+      ? {
+          label: "Đã duyệt · đã chuyển lệnh",
+          tone: "up",
+          title: "Tín hiệu đã được duyệt (đủ đồng thuận ≥80% hoặc trader duyệt tay) và lệnh giấy đã đặt — chờ khớp.",
+        }
+      : {
+          label: "Đã duyệt",
+          tone: "up",
+          title:
+            "Tín hiệu đã được DUYỆT theo cổng đồng thuận ≥80% (quy tắc 1 duyệt · 2 từ chối). Lệnh giấy chưa đặt được (tài khoản giấy 0 ₫ / không đủ vị thế BÁN) — quyết định tách khỏi số dư, chi tiết trong audit.",
+        };
   }
   if (s.status === "EXPIRED") {
     return {
-      label: "Hết hạn",
+      label: "Đã hết hạn",
       tone: "neutral",
       title: "Tín hiệu đã quá thời hạn hiệu lực — không thể duyệt/từ chối nữa.",
     };
   }
   return {
-    label: "Còn hiệu lực",
-    tone: "primary",
-    title: "Tín hiệu đang ACTIVE — chưa duyệt/từ chối và chưa hết hạn.",
+    label: "Chờ quyết định",
+    tone: "flat",
+    title:
+      "Tín hiệu đang ACTIVE — auto-decision cuối chu kỳ sẽ duyệt (≥80% đồng thuận) hoặc từ chối ngay; nhóm này chỉ còn khi auto-decision lỗi fail-soft.",
   };
 }
 
@@ -281,6 +300,7 @@ export function SignalDetailDialog({ signal, onOpenChange }: SignalDetailDialogP
         consensusRatio: s.consensusRatio ?? null,
         status: s.status,
         sandboxExecuted: s.sandboxExecuted ?? false,
+        paperOrdered: s.paperOrdered ?? false,
         evaluation: s.evaluation ?? null,
         agent: s.agentCode ?? null,
         createdAt: s.createdAt,
@@ -340,6 +360,18 @@ export function SignalDetailDialog({ signal, onOpenChange }: SignalDetailDialogP
             </ChipMeta>
           )}
         </div>
+
+        {/* PHIÊN #91 — khung lý do TỪ CHỐI (auto-decision ghi rejectNote) */}
+        {s.rejectNote != null && (
+          <div className="rounded-lg border border-down/30 bg-down/5 px-4 py-3">
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-down">
+              Lý do từ chối
+            </h3>
+            <p className="break-words text-sm leading-relaxed text-foreground">
+              {s.rejectNote}
+            </p>
+          </div>
+        )}
 
         {/* Số liệu chính: score bar + mục tiêu/cắt lỗ/chốt lời + agent + tuổi */}
         <div className="overflow-hidden rounded-lg border border-border/60">

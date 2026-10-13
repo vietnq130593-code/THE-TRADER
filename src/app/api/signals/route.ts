@@ -54,14 +54,26 @@ export async function GET(req: Request) {
     // của thế giới sandbox (accountType "sandbox") neo signalId. Truy vết
     // NGUỒN SỰ THẬT là Order sống (reset xoá sạch → badge biến theo) chứ
     // không phải audit marker một-đời (marker cũ vòng trước reset không lọt).
+    // PHIÊN #91 (tái triển khai): thêm paperOrdered — lệnh trên tài khoản
+    // KHÔNG sandbox (thế giới giấy): "Đã chuyển lệnh" chỉ hiện khi thật sự
+    // có lệnh paper (auto-duyệt đủ đồng thuận nhưng paper 0 ₫ → ACTED
+    // không lệnh → badge "Đã duyệt" không lệnh).
     const ids = signals.map((s) => s.id);
     const executedRows = ids.length
       ? await db.order.findMany({
-          where: { signalId: { in: ids }, brokerAccount: { accountType: "sandbox" } },
-          select: { signalId: true },
+          where: { signalId: { in: ids } },
+          select: {
+            signalId: true,
+            brokerAccount: { select: { accountType: true } },
+          },
         })
       : [];
-    const executedSet = new Set(executedRows.map((o) => o.signalId));
+    const executedSet = new Set(
+      executedRows.filter((o) => o.brokerAccount?.accountType === "sandbox").map((o) => o.signalId)
+    );
+    const paperOrderedSet = new Set(
+      executedRows.filter((o) => o.brokerAccount?.accountType !== "sandbox").map((o) => o.signalId)
+    );
 
     // #110 M4.2.3 — gắn phán quyết sổ đánh giá D-LEDGER (#106) lên tín hiệu
     // đã được đánh giá: chip "LỢI +2,3%" / "TỔN THẤT −1,1%" ở feed — vòng
@@ -86,6 +98,7 @@ export async function GET(req: Request) {
         signals: signals.map((s) => ({
           ...mapSignalRow(s),
           sandboxExecuted: executedSet.has(s.id),
+          paperOrdered: paperOrderedSet.has(s.id),
           evaluation: (() => {
             const e = evaluationBySignal.get(s.id);
             return e

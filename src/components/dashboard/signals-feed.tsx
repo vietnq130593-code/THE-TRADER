@@ -255,7 +255,9 @@ function CompactSignalRow({ s }: { s: SignalRow }) {
   const dir = SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD;
   const DirIcon = dir.icon;
   const cons = consensusMeta(s.consensusGate, s.consensusRatio);
-  const acted = s.actedAt != null || s.status === "ACTED";
+  // PHIÊN #91 (tái triển khai): "Đã chuyển lệnh" chỉ khi CÓ lệnh paper THẬT
+  // (paperOrdered) — auto-duyệt đủ đồng thuận nhưng paper 0 ₫ → chỉ "Đã duyệt".
+  const acted = s.status === "ACTED" || s.actedAt != null;
   return (
     <li className="flex flex-col gap-1 py-2.5 pr-1">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -281,9 +283,25 @@ function CompactSignalRow({ s }: { s: SignalRow }) {
           </ChipMeta>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {acted && (
-            <ChipMeta tone="neutral" title="Tín hiệu đã được duyệt và chuyển thành lệnh chờ khớp">
-              Đã chuyển lệnh
+          {acted &&
+            (s.paperOrdered ? (
+              <ChipMeta tone="up" title="Tín hiệu đã được duyệt (≥80% đồng thuận) và lệnh giấy đã đặt — chờ khớp">
+                Đã chuyển lệnh
+              </ChipMeta>
+            ) : (
+              <ChipMeta
+                tone="up"
+                title="Tín hiệu đã được DUYỆT theo cổng đồng thuận ≥80% — lệnh giấy chưa đặt được (tài khoản giấy 0 ₫), quyết định tách khỏi số dư"
+              >
+                Đã duyệt
+              </ChipMeta>
+            ))}
+          {s.status === "REJECTED" && (
+            <ChipMeta
+              tone="down"
+              title={s.rejectNote ?? "Tín hiệu đã bị từ chối theo cổng đồng thuận"}
+            >
+              Đã từ chối
             </ChipMeta>
           )}
           <span className="whitespace-nowrap text-[11px] text-muted-foreground">
@@ -371,11 +389,22 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
           )}
         </CardTitle>
         <CardDescription>
-          {compact
-            ? `Khuyến nghị mới nhất từ các agent · ${signals.length} tín hiệu`
-            : pending.length > 0
-              ? `Khuyến nghị mới nhất từ các agent · ${pending.length.toLocaleString("vi-VN")} chờ quyết trong ${signals.length.toLocaleString("vi-VN")} tín hiệu`
-              : "Khuyến nghị mới nhất từ các agent"}
+          {compact ? (
+            `Khuyến nghị mới nhất từ các agent · ${signals.length} tín hiệu`
+          ) : (
+            <>
+              <span>
+                {pending.length > 0
+                  ? `Khuyến nghị mới nhất từ các agent · ${pending.length.toLocaleString("vi-VN")} chờ quyết trong ${signals.length.toLocaleString("vi-VN")} tín hiệu`
+                  : "Khuyến nghị mới nhất từ các agent"}
+              </span>
+              <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground/80">
+                Quy tắc phiên #91 — 1 là duyệt, 2 là từ chối: đủ đồng thuận ≥80% →
+                duyệt NGAY cuối chu kỳ (kèm lệnh giấy khi có tiền); không đủ / GIỮ →
+                từ chối NGAY có lý do. Không tín hiệu nào treo chờ vô hạn.
+              </span>
+            </>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="pb-0">
@@ -434,12 +463,16 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
                 <div
                   id="signals-pending-h"
                   className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-primary/25 bg-primary/[0.06] px-4 py-2"
+                  title="Hiếm khi có tín hiệu ở đây — auto-decision cuối chu kỳ tự duyệt/từ chối toàn bộ tín hiệu theo cổng đồng thuận (phiên #91). Nhóm này chỉ còn khi auto-decision lỗi fail-soft."
                 >
                   <span className="text-xs font-semibold uppercase tracking-wider text-primary">
                     Cần quyết
                   </span>
                   <span className="text-[11px] tabular-nums text-muted-foreground">
                     {pending.length.toLocaleString("vi-VN")} tín hiệu chờ quyết
+                  </span>
+                  <span className="ml-auto text-[10px] text-muted-foreground/70">
+                    auto-decision lỗi fail-soft — quyết tay dự phòng
                   </span>
                 </div>
                 <ul className="divide-y divide-border/60">

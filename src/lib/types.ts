@@ -683,6 +683,11 @@ export interface SignalRow {
    *  khoản thử nghiệm (Order sandbox neo signalId) — badge "Đã thực thi" ở
    *  feed. Optional: các nguồn mapSignalRow cũ không trả field này. */
   sandboxExecuted?: boolean;
+  /** PHIÊN #91 (tái triển khai trên #111): true khi có lệnh trên tài khoản
+   *  KHÔNG sandbox (thế giới giấy) neo signalId — badge "Đã chuyển lệnh"
+   *  chỉ hiện khi THẬT SỰ có lệnh paper (auto-duyệt đủ đồng thuận nhưng
+   *  paper 0 ₫ → ACTED không lệnh → chỉ badge "Đã duyệt"). */
+  paperOrdered?: boolean;
   /** #110 M4.2.1 — cổng đồng thuận hội đồng (CONSENSUS · WEAK_MAJORITY ·
    *  NO_CONSENSUS · null khi tín hiệu không qua hội đồng). */
   consensusGate?: string | null;

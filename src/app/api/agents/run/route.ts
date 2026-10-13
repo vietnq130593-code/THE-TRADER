@@ -5,7 +5,7 @@ import { toPlain } from "@/lib/serialize";
 import { updateAgentHealth } from "@/lib/health";
 import { callLlmWithRetry, estimateTokens, llmCostUsd } from "@/lib/llm";
 import { reapStaleAgentRuns } from "@/lib/agent-ratelimit";
-import { expireDueSignals } from "@/lib/signal-execution";
+import { expireDueSignals, autoDecideSignalByConsensus } from "@/lib/signal-execution";
 // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.1): ghi mốc chu kỳ cho due-check engine.
 import { markKRunCycle } from "@/lib/k-run";
 // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.3): auto-convert tín hiệu chu kỳ sang sandbox.
@@ -1289,18 +1289,18 @@ export async function POST() {
       let executionReasoning: string;
       let execOutput: Record<string, unknown>;
       if (sig.direction !== "HOLD") {
-        executionContent = `Nhận tín hiệu ${sig.direction === "BUY" ? "MUA" : "BÁN"} ${sig.symbol} (điểm ${sig.score}/100, tin cậy ${sig.confidence}) từ Chủ tịch Hội đồng sau khi hội đủ báo cáo của ${digestLines.length} agents. Đã ghi nhận tín hiệu — chờ phê duyệt của trader (nút Phê duyệt/từ chối ở luồng tin nhắn hoặc tab Tín hiệu).`;
+        executionContent = `Nhận tín hiệu ${sig.direction === "BUY" ? "MUA" : "BÁN"} ${sig.symbol} (điểm ${sig.score}/100, tin cậy ${sig.confidence}) từ Chủ tịch Hội đồng sau khi hội đủ báo cáo của ${digestLines.length} agents. Tín hiệu sẽ được QUYẾT ĐỊNH TỨC THÌ theo cổng đồng thuận ở cuối chu kỳ (phiên #91 — quy tắc 1 duyệt · 2 từ chối): đủ đồng thuận ≥80% → duyệt ngay thành lệnh giấy 5% NAV; không đủ → từ chối ngay. Kết quả hiện ở tab Tín hiệu.`;
         executionReasoning =
-          "Tín hiệu ghi nhận ở trạng thái ACTIVE — chờ trader phê duyệt trước khi tạo lệnh.";
-        execOutput = { signalId: signalRow.id, awaitingApproval: true };
+          "Tín hiệu quyết định tức thì theo cổng đồng thuận B9 (≥80% duyệt ngay, <80% từ chối ngay) — không còn trạng thái chờ tay (phiên #91).";
+        execOutput = { signalId: signalRow.id, autoDecisionPending: true };
       } else {
         executionContent = vetoedBy
-          ? `Tín hiệu ${sig.symbol} bị Ủy ban Kiểm soát PHỦ QUYẾT (${vetoedBy}) — hạ về GIỮ, không trình lệnh mới. Điểm ${sig.score}/100.`
-          : `Nhận tín hiệu GIỮ ${sig.symbol} (điểm ${sig.score}/100). Không tạo lệnh mới (tín hiệu GIỮ).`;
+          ? `Tín hiệu ${sig.symbol} bị Ủy ban Kiểm soát PHỦ QUYẾT (${vetoedBy}) — hạ về GIỮ, không trình lệnh mới. Điểm ${sig.score}/100. Tự đóng bằng từ chối có lý do ở cuối chu kỳ.`
+          : `Nhận tín hiệu GIỮ ${sig.symbol} (điểm ${sig.score}/100). Không tạo lệnh — sẽ tự đóng bằng từ chối có lý do ở cuối chu kỳ (phiên #91: 1 duyệt · 2 từ chối, không treo chờ).`;
         executionReasoning = vetoedBy
           ? "VETO hard-enforce (AUD-CODE #6): tín hiệu vi phạm bị hạ về HOLD."
-          : "Tín hiệu GIỮ — không tạo lệnh.";
-        execOutput = { signalId: signalRow.id, direction: "HOLD", vetoed: Boolean(vetoedBy) };
+          : "Tín hiệu GIỮ — không tạo lệnh, tự đóng có lý do cuối chu kỳ (#91).";
+        execOutput = { signalId: signalRow.id, direction: "HOLD", vetoed: Boolean(vetoedBy), autoDecisionPending: true };
       }
 
       const execStart = Date.now();
@@ -1378,6 +1378,25 @@ export async function POST() {
         })
       : null;
 
+    // ── PHIÊN #91 (tái triển khai trên #111) — QUYẾT ĐỊNH TỨC THÌ THEO ──────
+    // CỔNG ĐỒNG THUẬN (thế giới paper). Hiệu lệnh trader: "1 là duyệt, 2 là
+    // từ chối — đủ đồng thuận thì duyệt ngay, không đủ thì từ chối ngay".
+    // Chạy SAU K1 sandbox auto-convert (sandbox cần status ACTIVE — §5.3 2
+    // thế giới độc lập; lệnh sandbox không cản đường duyệt paper nhờ F-207
+    // vá #91). Fail-soft: lỗi auto-decision KHÔNG làm hỏng chu kỳ — tín
+    // hiệu giữ ACTIVE cho expiry sweep dọn.
+    const autoDecision = createdSignal
+      ? await autoDecideSignalByConsensus(createdSignal.id).catch((adErr) => {
+          console.error("[api/agents/run:#91] auto-decision fail-soft:", adErr);
+          return {
+            decision: "error" as const,
+            ratio: null,
+            note: "Lỗi nội bộ auto-decision (fail-soft) — tín hiệu giữ ACTIVE.",
+            orderId: undefined,
+          };
+        })
+      : null;
+
     // ── Cycle-level audit log ──────────────────────────────────────
     const cycleDurationMs = Date.now() - cycleStart;
     const ranCount = analyses.size + (strategist ? 1 : 0) + (executionRunId ? 1 : 0);
@@ -1406,6 +1425,19 @@ export async function POST() {
                   quantity: o.quantity,
                 })),
                 skipped: k1Sandbox.skipped.map((s) => s.reason),
+              }
+            : null,
+          // PHIÊN #91 (tái triển khai trên #111) — kết quả quyết định tức thì
+          // theo cổng đồng thuận của tín hiệu chu kỳ (null khi strategist
+          // không ra tín hiệu): approved (đủ ≥80% — lệnh đặt được hay không
+          // ghi rõ orderCreated) | rejected (HOLD · <80% · guard) |
+          // skipped/error (fail-soft hiếm).
+          autoDecision: autoDecision
+            ? {
+                decision: autoDecision.decision,
+                ratio: autoDecision.ratio,
+                note: autoDecision.note,
+                orderId: autoDecision.orderId ?? null,
               }
             : null,
           // K4 (#94 §7.1): kết quả giao việc của Chủ tịch trong chu kỳ (null khi
@@ -1460,6 +1492,9 @@ export async function POST() {
         // K1 (#87): lệnh sandbox tự sinh từ tín hiệu chu kỳ này (world riêng —
         // không phải "order" paper; client hiển thị qua khối K1/Thử nghiệm)
         k1Sandbox,
+        // PHIÊN #91 (tái triển khai): quyết định tức thì của tín hiệu chu kỳ
+        // theo cổng đồng thuận (approved/rejected/skipped/error + note).
+        autoDecision,
         // K4 (#94 §7.1): nhiệm vụ Chủ tịch giao trong chu kỳ này (null khi k4
         // tắt — UI khối Ban Điều hành đọc chi tiết từ GET /api/k4).
         k4: k4Result,
