@@ -466,9 +466,13 @@ export function SandboxCard() {
               />
             </div>
 
-            {/* Đường cong equity — CashSnapshot k1-daily (§5.6 mini chart) */}
-            {(data?.snapshots.length ?? 0) > 1 ? (
-              <EquitySparkline points={data!.snapshots} />
+            {/* Đường cong equity — CashSnapshot k1-daily (§5.6 mini chart).
+                F-1112-09 (fixbug #111): bỏ assertion `data!.snapshots` — nếu
+                contract response thiếu trường snapshots, `?.` phía trên cho qua
+                nhưng `!` phía dưới TypeError; guard hai tầng an toàn như nhau
+                khi dữ liệu đúng (type + API luôn trả trường này). */}
+            {data && data.snapshots.length > 1 ? (
+              <EquitySparkline points={data.snapshots} />
             ) : (
               <p className="rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
                 Đường cong equity sẽ hiện sau kết toán 16:30 ICT đầu tiên (1 điểm/ngày).

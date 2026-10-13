@@ -41,6 +41,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCouncilOverview, useRunDecisionEval } from "@/hooks/use-council";
 import { useDateRange } from "@/hooks/use-date-range";
+// F-1111-01 (fixbug #111): import verdict helpers từ kit (một nguồn §2.4).
+import { verdictClass, verdictLabel } from "@/components/dashboard/kit";
 import {
   changeColor,
   formatDateTime,
@@ -75,17 +77,8 @@ const MARKET_GROUP_ORDER = [
   "Hàng hoá",
 ];
 
-function verdictClass(verdict: string): string {
-  if (verdict === "WIN") return "border-up/40 text-up";
-  if (verdict === "LOSS") return "border-down/40 text-down";
-  return "border-amber-500/40 text-amber-600 dark:text-amber-400";
-}
-
-function verdictLabel(verdict: string): string {
-  if (verdict === "WIN") return "LỢI";
-  if (verdict === "LOSS") return "TỔN THẤT";
-  return "ĐI NGANG";
-}
+// F-1111-01 (fixbug #111): verdictClass/verdictLabel chuyển về KIT dùng chung
+// (§2.4 một nguồn) — xoá 2 bản sao local byte-identical với kit.tsx.
 
 function directionClass(direction: string): string {
   if (direction === "BUY") return "text-up";

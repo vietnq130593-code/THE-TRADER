@@ -38,8 +38,10 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 // Key đổi khi cấu hình datasource thực sự đổi (env hợp lệ ↔ shim .env) → hot-reload
-// file này sẽ disconnect client cũ và sinh client mới theo cấu hình hiện tại,
-// thay cho endpoint prisma-reload đã xoá (không cần restart dev server).
+// file này sẽ disconnect client cũ và sinh client mới theo cấu hình hiện tại
+// (bổ sung cho endpoint /api/dev/prisma-reload — F-1111-0A fixbug #111: comment
+// cũ nói "đã xoá" là SAI, endpoint vẫn còn và vẫn cần cho `prisma generate`
+// thêm trường — xoá require-cache là việc shim này không làm).
 const datasourceOverride = resolveDatasourceOverride()
 const prismaUrlKey = JSON.stringify(datasourceOverride)
 

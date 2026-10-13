@@ -142,6 +142,32 @@ export interface TradeRow {
   executedAt: string;
 }
 
+/** F-1112-06 (fixbug #111): contract /api/orders chuyển về MỘT nguồn types.ts —
+ *  trước fix portfolio-section + todo-panel mỗi bên giữ 1 bản copy interface
+ *  (rủi ro drift khi route đổi shape). */
+export interface OrdersSessionContext {
+  /** MARKET_STRICT_SESSION=true → matching nghỉ ngoài phiên. */
+  strictSession: boolean;
+  /** Đang trong phiên liên tục HOSE? */
+  inSession: boolean;
+  /** Phase hiện tại (pre-open/morning/lunch/afternoon/atc/closed). */
+  phase?: string;
+  /** Nhãn tiếng Việt của phase — vd "Ngoài phiên". */
+  phaseLabel?: string;
+  /** ISO của thời điểm mở phiên kế. */
+  nextOpenAt?: string;
+  /** Nhãn hiển thị — vd "Thứ Hai 12/10 · 09:15 ICT". */
+  nextOpenLabel?: string;
+}
+
+/** Response GET /api/orders — lệnh + giao dịch + bối cảnh phiên (#96). */
+export interface OrdersResponse {
+  orders: OrderRow[];
+  trades: TradeRow[];
+  /** #96 — bối cảnh phiên (server tính): hint "lệnh đang chờ gì". */
+  session?: OrdersSessionContext;
+}
+
 export interface AgentTaskRow {
   id: string;
   agentCode: string;

@@ -41,10 +41,11 @@ import {
 import { apiGet, apiPost } from "@/lib/api";
 import { useDateRange } from "@/hooks/use-date-range";
 import { useUiStore } from "@/lib/store";
-import { usePortfolioWorld, useResetPaperWorld } from "@/hooks/use-portfolio-world";
+import { usePortfolioWorld, useResetPaperWorld, buildOrdersUrl } from "@/hooks/use-portfolio-world";
 import { AllocationDonut } from "@/components/dashboard/allocation-donut";
 import { EquityCurveCard } from "@/components/dashboard/portfolio/equity-curve-card";
-import { ChipMeta, EmptyState, ListRow, StatTile } from "@/components/dashboard/kit";
+// F-1112-08: pnlToneOf — quyết định tone P&L một nguồn (kit) thay pnlTone local.
+import { ChipMeta, EmptyState, ListRow, StatTile, pnlToneOf } from "@/components/dashboard/kit";
 import {
   changeColor,
   formatDateTime,
@@ -55,31 +56,19 @@ import {
   formatVndCompact,
   formatVolume,
 } from "@/lib/format";
-import type { OrderRow, PortfolioPosition, PortfolioResponse, TradeRow } from "@/lib/types";
+import type {
+  OrderRow,
+  OrdersResponse,
+  OrdersSessionContext,
+  PortfolioPosition,
+  PortfolioResponse,
+  TradeRow,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-interface OrdersResponse {
-  orders: OrderRow[];
-  trades: TradeRow[];
-  /** #96 — bối cảnh phiên (server tính): hint "lệnh đang chờ gì". */
-  session?: OrdersSessionContext;
-}
-
-/** #96 — /api/orders kèm bối cảnh phiên giao dịch để giải thích lệnh chờ. */
-interface OrdersSessionContext {
-  /** MARKET_STRICT_SESSION=true → matching nghỉ ngoài phiên. */
-  strictSession: boolean;
-  /** Đang trong phiên liên tục HOSE? */
-  inSession: boolean;
-  /** Phase hiện tại (pre-open/morning/lunch/afternoon/atc/closed). */
-  phase?: string;
-  /** Nhãn tiếng Việt của phase — vd "Ngoài phiên". */
-  phaseLabel?: string;
-  /** ISO của thời điểm mở phiên kế. */
-  nextOpenAt?: string;
-  /** Nhãn hiển thị — vd "Thứ Hai 12/10 · 09:15 ICT". */
-  nextOpenLabel?: string;
-}
+// F-1112-06 (fixbug #111): OrdersResponse + OrdersSessionContext chuyển về
+// MỘT nguồn src/lib/types.ts — xoá 2 bản copy interface local ở đây và ở
+// overview/todo-panel.tsx (rủi ro drift khi /api/orders đổi shape).
 
 const ORDER_STATUS: Record<string, { label: string; className: string }> = {
   PENDING: { label: "Chờ khớp", className: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400" },
@@ -90,12 +79,6 @@ const ORDER_STATUS: Record<string, { label: string; className: string }> = {
   REJECTED: { label: "Bị từ chối", className: "border-down/40 bg-down/10 text-down" },
   EXPIRED: { label: "Hết hiệu lực", className: "border-border bg-muted text-muted-foreground" },
 };
-
-/** M4.1 (#110) — ngữ nghĩa màu tier-1/kit: dương → up · âm → down · 0/null → flat. */
-function pnlTone(n: number | null | undefined): "up" | "down" | "flat" {
-  if (n == null || Number.isNaN(n) || n === 0) return "flat";
-  return n > 0 ? "up" : "down";
-}
 
 /** "% TH" kiểu vi-VN (dấu phẩy thập phân) — dùng cả cột bảng lẫn thẻ mobile. */
 const wf1 = new Intl.NumberFormat("vi-VN", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -138,6 +121,7 @@ export function PortfolioSection() {
     sandboxState: kSandbox,
     setWorld: setAccountType,
     paperLabel,
+    portfolioUrl,
     vndirectConfigured,
   } = usePortfolioWorld();
   const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
@@ -151,10 +135,8 @@ export function PortfolioSection() {
 
   const portfolioQuery = useQuery({
     queryKey: ["portfolio", viewAccountType],
-    queryFn: () =>
-      apiGet<PortfolioResponse>(
-        viewAccountType === "sandbox" ? "/api/portfolio?accountType=sandbox" : "/api/portfolio"
-      ),
+    // F-1112-07: dùng portfolioUrl từ hook (một nguồn) thay chuỗi tự build.
+    queryFn: () => apiGet<PortfolioResponse>(portfolioUrl),
     staleTime: 60_000,
   });
   // #105 — khoảng thời gian toàn cục: lọc lệnh + giao dịch theo khoảng
@@ -162,10 +144,8 @@ export function PortfolioSection() {
   const { rangeQuery, rangeKey } = useDateRange();
   const ordersQuery = useQuery({
     queryKey: ["orders", viewAccountType, rangeKey],
-    queryFn: () =>
-      apiGet<OrdersResponse>(
-        `${viewAccountType === "sandbox" ? "/api/orders?accountType=sandbox" : "/api/orders"}${rangeQuery ? (viewAccountType === "sandbox" ? "&" : "?") : ""}${rangeQuery}`
-      ),
+    // F-1112-07: buildOrdersUrl từ hook — cùng builder với todo-panel.
+    queryFn: () => apiGet<OrdersResponse>(buildOrdersUrl(viewAccountType, rangeQuery)),
     staleTime: 60_000,
   });
 
@@ -333,14 +313,14 @@ export function PortfolioSection() {
                   label="Lãi/lỗ chưa thực hiện"
                   value={`${formatSigned(p.totals.totalUnrealizedPnl)} ₫`}
                   sub={formatPct(p.totals.totalUnrealizedPnlPct)}
-                  tone={pnlTone(p.totals.totalUnrealizedPnl)}
+                  tone={pnlToneOf(p.totals.totalUnrealizedPnl)}
                   icon={TrendingUp}
                 />
                 <StatTile
                   label="Biến động ngày"
                   value={formatPct(p.totals.dayChangePct)}
                   sub="so tham chiếu phiên trước"
-                  tone={pnlTone(p.totals.dayChangePct)}
+                  tone={pnlToneOf(p.totals.dayChangePct)}
                   icon={Activity}
                 />
                 <StatTile
@@ -359,7 +339,7 @@ export function PortfolioSection() {
                 <ListRow
                   label="Lãi/lỗ đã thực hiện"
                   value={`${formatSigned(p.totals.totalRealizedPnl)} ₫`}
-                  tone={pnlTone(p.totals.totalRealizedPnl)}
+                  tone={pnlToneOf(p.totals.totalRealizedPnl)}
                   className="py-2"
                 />
               </div>
@@ -370,25 +350,30 @@ export function PortfolioSection() {
 
       {/* ══════ Tầng 2 (M4.1.1): đường cong equity + phân bổ ngành ══════
           xl 7fr/5fr cạnh nhau · mobile xếp dọc. Curve rỗng/flat-zero →
-          EmptyState trung thực (kit). Donut giữ nguyên component #34 — chỉ đổi vị trí. */}
-      <div className="grid gap-4 xl:grid-cols-[7fr_5fr]">
-        <EquityCurveCard curve={p?.equityCurve} loading={portfolioQuery.isLoading} />
-        <Card className="gap-4">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <PieChart className="size-4 text-muted-foreground" aria-hidden="true" />
-              Phân bổ ngành
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pb-6">
-            <AllocationDonut
-              positions={p?.positions ?? []}
-              totalMarketValue={p?.totals.totalMarketValue ?? 0}
-              loading={portfolioQuery.isLoading}
-            />
-          </CardContent>
-        </Card>
-      </div>
+          EmptyState trung thực (kit). Donut giữ nguyên component #34 — chỉ đổi vị trí.
+          F-1112-03 (fixbug #111): khi /api/portfolio LỖI → KHÔNG render tầng 2 —
+          nếu vẫn render, curve/donut rơi vào nhánh "chưa có dữ liệu" (§2.5 trung
+          thực trạng thái: lỗi ≠ trống) trong khi tier-1 đã hiện câu lỗi đúng. */}
+      {!portfolioQuery.isError && (
+        <div className="grid gap-4 xl:grid-cols-[7fr_5fr]">
+          <EquityCurveCard curve={p?.equityCurve} loading={portfolioQuery.isLoading} />
+          <Card className="gap-4">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <PieChart className="size-4 text-muted-foreground" aria-hidden="true" />
+                Phân bổ ngành
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pb-6">
+              <AllocationDonut
+                positions={p?.positions ?? []}
+                totalMarketValue={p?.totals.totalMarketValue ?? 0}
+                loading={portfolioQuery.isLoading}
+              />
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* ══════ Tầng 3 (M4.1.2–M4.1.4): tabs theo vòng đời + bảng/thẻ ══════ */}
       <Card className="gap-4">
@@ -399,8 +384,11 @@ export function PortfolioSection() {
                 Vị thế
                 <TabCount value={positionsCount} />
               </TabsTrigger>
-              <TabsTrigger value="orders" className="text-xs sm:text-sm">
-                Lệnh chờ
+              <TabsTrigger value="orders" className="text-xs sm:text-sm" title="Số lệnh đang chờ khớp">
+                {/* F-1112-05 (fixbug #111): nội dung tab hiển thị MỌI lệnh trong
+                khoảng (by design #110) → nhãn "Lệnh chờ" nói sai phạm vi; đổi
+                thành "Lệnh", badge giữ nguyên đếm số chờ khớp + tooltip giải nghĩa. */}
+                Lệnh
                 <TabCount value={pendingOrdersCount} warn={pendingOrdersCount > 0} />
               </TabsTrigger>
               <TabsTrigger value="trades" className="text-xs sm:text-sm">
@@ -639,6 +627,13 @@ export function PortfolioSection() {
             <TabsContent value="trades" className="mt-3">
               {ordersQuery.isLoading ? (
                 <Skeleton className="h-56 w-full" />
+              ) : ordersQuery.isError ? (
+                /* F-1112-02 (fixbug #111): tab Giao dịch thiếu nhánh lỗi như tab
+                Lệnh — trước fix API lỗi lại hiện EmptyState "Chưa có giao dịch
+                khớp nào" (§2.5: trống ≠ lỗi). */
+                <p className="text-sm text-down">
+                  {ordersQuery.error?.message ?? "Không tải được giao dịch."}
+                </p>
               ) : ordersQuery.data && ordersQuery.data.trades.length > 0 ? (
                 <>
                   {/* M4.10 — mobile <md: thẻ dọc thay bảng min-w-720 */}
@@ -745,9 +740,13 @@ export function PortfolioSection() {
                   <span className="font-medium text-foreground">Không đụng tới:</span> tài khoản
                   Thử nghiệm (một đồng không đổi) · tín hiệu đề xuất · bài học &amp; bộ nhớ học
                   tập của agents — {" "}
+                  {/* F-1112-04 (fixbug #111): N đếm từ ordersQuery đang lọc theo
+                  khoảng thời gian toàn cục, còn reset xoá TOÀN BỘ lệnh mọi thời
+                  điểm — câu cũ "hiện có N lệnh sẽ bị xoá"/"đã sạch" sai khi chọn
+                  khoảng hẹp. Đổi văn bản trung thực phạm vi hai số. */}
                   {(ordersQuery.data?.orders.length ?? 0) > 0
-                    ? `hiện có ${ordersQuery.data?.orders.length} lệnh sẽ bị xoá.`
-                    : "thế giới này hiện không còn lệnh nào (đã sạch)."}
+                    ? `khoảng đang xem có ${ordersQuery.data?.orders.length} lệnh — reset xoá MỌI lệnh mọi thời điểm.`
+                    : "khoảng đang xem không còn lệnh nào — reset vẫn xoá mọi lệnh mọi thời điểm."}
                 </p>
                 <p>
                   Tổng kết lãi/lỗ vòng cũ được lưu vào audit trước khi xoá (minh bạch — không
@@ -844,7 +843,7 @@ function PositionCardView({
             {pos.sector || pos.name}
           </span>
         </span>
-        <ChipMeta tone={pnlTone(pos.changePct)} title="Biến động ngày của mã">
+        <ChipMeta tone={pnlToneOf(pos.changePct)} title="Biến động ngày của mã">
           {formatPct(pos.changePct)}
         </ChipMeta>
       </div>

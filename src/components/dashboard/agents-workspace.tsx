@@ -83,9 +83,9 @@ import type {
   CalibrationBucket,
   RegimeTable,
 } from "@/lib/ml/analytics";
-
-/** Mở rộng 23 agents — thứ tự 5 nhóm hiển thị trong roster (agent-roster.ts backend). */
-const GROUP_ORDER = ["research", "control", "executive", "platform", "ml"] as const;
+// F-1113-05 (fixbug #111): thứ tự nhóm hiển thị MỘT nguồn AGENT_GROUP_ORDER từ
+// src/lib/agent-roster.ts (derive từ AGENT_GROUPS — không thể lệch giữa các module).
+import { AGENT_GROUP_ORDER as GROUP_ORDER } from "@/lib/agent-roster";
 
 /** Mô tả ngắn mỗi nhóm (tooltip chip lọc M4.3.3 — giữ mô tả nhóm cũ #47). */
 const GROUP_DESCRIPTIONS: Record<string, string> = {

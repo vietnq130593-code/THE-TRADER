@@ -216,7 +216,7 @@ export function QuotesTable({
     if (indexes.length > 0) {
       sections.push({
         key: "INDEX",
-        label: "Chỉ số (VN-Index · HNX · UPCOM · S&P 500 · HSI)",
+        label: "Chỉ số (S&P 500 · Nasdaq · HSI)",
         rows: indexes,
       });
     }
@@ -343,7 +343,11 @@ export function QuotesTable({
 
             {/* #110 M4.5.2 — rổ chưa có bảng giá trực tiếp (BOND/FOREX/
              * COMMODITY chưa đồng bộ): EmptyState hướng dẫn sang Hội đồng.
-             * Hiệu chỉnh v1.2 (#108): rổ phi-VN là THAM CHIẾU nghiên cứu. */}
+             * Hiệu chỉnh v1.2 (#108): rổ phi-VN là THAM CHIẾU nghiên cứu.
+             * F-1113-02 (fixbug #111): chế độ watchlistOnly tính basketEmpty
+             * trên `source` ĐÃ lọc theo danh mục theo dõi — bảng đa sàn có thể
+             * CÓ hàng của lớp này; phải nói đúng phạm vi thiếu (danh mục theo
+             * dõi) thay vì khẳng định "bảng giá đa sàn không có". */}
             {basketEmpty ? (
               <div className="px-4 pb-4 md:px-6">
                 <EmptyState
@@ -351,10 +355,20 @@ export function QuotesTable({
                   title="Rổ này hiện chỉ theo dõi trong nghiên cứu Hội đồng — chưa có bảng giá trực tiếp"
                   description={
                     <>
-                      Chưa có hàng giá nào cho lớp tài sản này trong bảng giá đa
-                      sàn. Thống kê rổ (lợi suất · biến động 30 phiên) nằm trong
-                      module Hội đồng — theo dõi tham chiếu nghiên cứu, không
-                      phải đối tượng đầu tư theo chính sách VN-only.
+                      {watchlistOnly ? (
+                        <p>
+                          Danh mục theo dõi của bạn chưa có mã thuộc lớp tài sản
+                          này — tắt chế độ “chỉ danh mục theo dõi” phía trên để
+                          xem bảng giá đa sàn đầy đủ.
+                        </p>
+                      ) : (
+                        <p>
+                          Chưa có hàng giá nào cho lớp tài sản này trong bảng giá
+                          đa sàn. Thống kê rổ (lợi suất · biến động 30 phiên) nằm
+                          trong module Hội đồng — theo dõi tham chiếu nghiên cứu,
+                          không phải đối tượng đầu tư theo chính sách VN-only.
+                        </p>
+                      )}
                     </>
                   }
                   action={

@@ -18,6 +18,8 @@ import { apiGet } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { AgentsResponse } from "@/lib/types";
+// F-1113-05 (fixbug #111): thứ tự nhóm MỘT nguồn từ agent-roster (như agents-workspace).
+import { AGENT_GROUP_ORDER as GROUP_ORDER } from "@/lib/agent-roster";
 
 /**
  * Phiên #34 — card tóm tắt hệ thống 23 agents (5 nhóm) trên Tổng quan.
@@ -26,9 +28,6 @@ import type { AgentsResponse } from "@/lib/types";
  * workspace Đội Agent + model LLM đang chạy (phiên #47 — nút chạy chu kỳ
  * dời hết về nút "Chạy agent" duy nhất trên thanh bar trên cùng).
  */
-
-/** Thứ tự 5 nhóm — đồng bộ GROUP_ORDER agents-workspace (agent-roster.ts backend). */
-const GROUP_ORDER = ["research", "control", "executive", "platform", "ml"] as const;
 
 const GROUP_LABELS: Record<string, string> = {
   research: "Hội đồng nghiên cứu",

@@ -19,6 +19,8 @@ import { cn } from "@/lib/utils";
 
 export type StatTileTone = "up" | "down" | "flat" | "primary" | "neutral";
 
+// F-1111-03 (fixbug #111): toneTextClass chỉ dùng nội bộ kit — bỏ export
+// (bề mặt API của kit = 6 thành phần + StatTileTone, không kèm helper rác).
 function toneTextClass(tone: StatTileTone): string {
   switch (tone) {
     case "up":
@@ -34,7 +36,16 @@ function toneTextClass(tone: StatTileTone): string {
   }
 }
 
-export interface StatTileProps {
+/** F-1112-08 (fixbug #111): quyết định tone P&L/lãi-lỗ MỘT nguồn cho mọi
+ * module (quy tắc #45: null/NaN/0 → flat · >0 → up · <0 → down) — thay 3 bản
+ * copy pnlTone (portfolio-section) · signTone (overview-workspace) · quyết định
+ * trong pnlColor (todo-panel). */
+export function pnlToneOf(n: number | null | undefined): StatTileTone {
+  if (n == null || Number.isNaN(n) || n === 0) return "flat";
+  return n > 0 ? "up" : "down";
+}
+
+interface StatTileProps {
   /** Nhãn T3 (14px/500) — vd "Tổng tài sản". */
   label: string;
   /** Giá trị tier-1 (T1 · 700 · tabular) — số hoặc ReactNode có sẵn màu. */
@@ -84,7 +95,7 @@ export function StatTile({
 
 /* ─────────────────── ListRow — nhãn trái · số phải ─────────────────── */
 
-export interface ListRowProps {
+interface ListRowProps {
   /** Nhãn bên trái (T3, muted). */
   label: React.ReactNode;
   /** Giá trị bên phải (tabular-nums · font-medium). */
@@ -115,7 +126,7 @@ export function ListRow({ label, value, tone = "neutral", children, className }:
 
 /* ─────────────────── ChipMeta — chip dữ liệu phụ ─────────────────── */
 
-export interface ChipMetaProps {
+interface ChipMetaProps {
   children: React.ReactNode;
   /** Ngữ nghĩa màu viền/chữ. */
   tone?: StatTileTone;
@@ -146,8 +157,6 @@ export function ChipMeta({ children, tone = "neutral", title, className }: ChipM
 /* ─────────────────── VerdictBadge — phán quyết D-LEDGER ─────────────────── */
 
 /** Phán quyết sổ đánh giá quyết định (D-LEDGER #106) — WIN/LOSS/NEUTRAL. */
-export type Verdict = "WIN" | "LOSS" | "NEUTRAL";
-
 export function verdictClass(verdict: string): string {
   if (verdict === "WIN") return "border-up/40 text-up";
   if (verdict === "LOSS") return "border-down/40 text-down";
@@ -176,7 +185,7 @@ export function VerdictBadge({ verdict, className }: { verdict: string; classNam
 
 /* ─────────────────── Sparkline — SVG polyline dùng chung ─────────────────── */
 
-export interface SparklineProps {
+interface SparklineProps {
   /** Dãy số theo thời gian (cũ → mới). */
   values: number[];
   /** Chiều cao khung SVG (px) — mặc định 56. */
@@ -221,19 +230,18 @@ export function Sparkline({
   const areaPoints = area
     ? `${pad},${height - pad} ${line} ${(width - pad).toFixed(1)},${height - pad}`
     : null;
+  // F-1111-06 (fixbug #111): vùng fill PHẢI theo cùng quyết định với nét stroke
+  // (trước fix fill suy riêng từ `rising` → tone cưỡng bức "up" trên chuỗi giảm
+  // cho stroke xanh nhưng fill ĐỎ — mâu thuẫn ngữ nghĩa trong cùng SVG).
   const rising = values[n - 1] >= values[0];
-  const stroke =
+  const strokeTone: "primary" | "up" | "down" =
     tone === "primary"
-      ? "var(--color-primary)"
+      ? "primary"
       : tone === "up" || (tone === "auto" && rising)
-        ? "var(--color-up)"
-        : "var(--color-down)";
-  const fill =
-    tone === "primary"
-      ? "color-mix(in oklab, var(--color-primary) 12%, transparent)"
-      : rising && tone !== "down"
-        ? "color-mix(in oklab, var(--color-up) 12%, transparent)"
-        : "color-mix(in oklab, var(--color-down) 12%, transparent)";
+        ? "up"
+        : "down";
+  const stroke = `var(--color-${strokeTone})`;
+  const fill = `color-mix(in oklab, var(--color-${strokeTone}) 12%, transparent)`;
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
@@ -271,7 +279,7 @@ export function Sparkline({
 
 /* ─────────────────── EmptyState — trống kèm việc cần làm ─────────────────── */
 
-export interface EmptyStateProps {
+interface EmptyStateProps {
   icon?: LucideIcon;
   /** Câu chính (T2 16px/600). */
   title: string;

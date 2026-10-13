@@ -348,11 +348,13 @@ export function SynthesisWorkspace() {
 
         {/* ── Tab 2 · Bằng chứng — bậc 3 cổ phiếu + drivers + lịch sử ── */}
         <TabsContent value="evidence" className="mt-4 flex flex-col gap-6">
-          {/* M4.7 (#110) — 1 dòng đọc nhanh: kết luận + 3 số thật từ assessment */}
+          {/* M4.7 (#110) — 1 dòng đọc nhanh: kết luận + 3 số thật từ assessment.
+              F-1115-03: truyền cờ error để phân biệt lỗi API với chưa có dữ liệu. */}
           <EvidenceQuickRead
             assessment={readyAssessment}
             historyCount={historyAsc.length}
             loading={isLoading}
+            error={isError}
           />
           {readyAssessment ? (
             <>

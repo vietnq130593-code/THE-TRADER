@@ -71,11 +71,9 @@ export const BASKET_DEFS: readonly BasketDef[] = [
   },
 ];
 
-export const BASKET_KEYS: readonly BasketKey[] = BASKET_DEFS.map((b) => b.key);
-
-export function basketLabel(key: string): string {
-  return BASKET_DEFS.find((b) => b.key === key)?.label ?? key;
-}
+// F-1113-04 (fixbug #111 — dọn code rác): xoá 2 export chết BASKET_KEYS +
+// basketLabel (0 consumer toàn repo — UI dùng nhãn riêng basket-filter.ts;
+// nhãn dài có sẵn trong BasketStats.label trả về mỗi route).
 
 // ─────────────────────────────────────────────────────────────────
 // Truy vấn thành viên + chuỗi giá
@@ -336,13 +334,20 @@ export async function basketStats(window = 30): Promise<BasketStats[]> {
     const def = BASKET_DEFS.find((b) => b.key === s.key)!;
     const last30 = s.series.slice(-window);
     const rets = last30.map((p) => p.ret);
-    // #110 M4.5.1 — NAV lũy kế base 100 từ lợi suất ngày (compound — khớp số
-    // ret30d trên cùng chuỗi, sparkline không thể "trông khác số").
+    // F-1113-01 (fixbug #111 — P1): NAV lũy kế phải dùng CÙNG cửa sổ nguồn với
+    // windowRet (slice(-window-1), compound từ take[1] — bỏ r0, return của điểm
+    // đầu thuộc biến động từ NGOÀI cửa sổ vào). Trước fix nav30d compound cả r0
+    // → nav[0] ≠ 100 (VD VN_EQUITY 101,55) và nav[cuối] ≠ 100+ret30d → aria
+    // "…% so nền 100" đọc sai số + 5 sparkline không đồng footing so chéo.
+    // Neo 100 prepended literal ≡ mức đóng cửa ngày TRƯỚC cửa sổ: nav[cuối] ≡
+    // 100×(1+ret30d/100) với MỌI coverage; độ dốc first→last không đổi.
     const nav30d: number[] = [];
     {
+      const take = s.series.slice(-window - 1);
       let acc = 100;
-      for (const p of last30) {
-        acc *= 1 + p.ret / 100;
+      nav30d.push(acc);
+      for (let i = 1; i < take.length; i++) {
+        acc *= 1 + take[i].ret / 100;
         nav30d.push(acc);
       }
     }
@@ -357,7 +362,10 @@ export async function basketStats(window = 30): Promise<BasketStats[]> {
       lastDate: s.series[s.series.length - 1]?.date ?? null,
       ret1d: s.series[s.series.length - 1]?.ret ?? null,
       ret5d: windowRet(s.series, 5),
-      ret30d: windowRet(s.series, 30),
+      // F-1114-03 (fixbug #111): ret30d theo tham số `window` (đồng bộ cửa sổ
+      // với nav30d) — hiện caller duy nhất basketStatsCached() luôn window=30
+      // nên giá trị không đổi; chống lệch cửa sổ nếu sau này gọi window≠30.
+      ret30d: windowRet(s.series, window),
       vol30d: stdev(rets),
       bestDay: rets.length ? Math.max(...rets) : null,
       worstDay: rets.length ? Math.min(...rets) : null,
@@ -373,7 +381,6 @@ export async function basketStats(window = 30): Promise<BasketStats[]> {
 const CACHE_TTL_MS = 60_000;
 let cacheAt = 0;
 let cachedStats: BasketStats[] | null = null;
-let cachedSeries: BasketSeries[] | null = null;
 
 export async function basketStatsCached(): Promise<BasketStats[]> {
   if (cachedStats && Date.now() - cacheAt < CACHE_TTL_MS) return cachedStats;
@@ -382,9 +389,7 @@ export async function basketStatsCached(): Promise<BasketStats[]> {
   return cachedStats;
 }
 
-export async function basketDailySeriesCached(days = 30): Promise<BasketSeries[]> {
-  if (cachedSeries && Date.now() - cacheAt < CACHE_TTL_MS) return cachedSeries;
-  cachedSeries = await basketDailySeries(days);
-  cacheAt = Date.now();
-  return cachedSeries;
-}
+// F-1113-04 (fixbug #111 — dọn code rác): xoá basketDailySeriesCached —
+// 0 consumer toàn repo; kèm 2 lỗi latent nếu được hồi sinh: (a) chia sẻ
+// biến cacheAt với basketStatsCached (stats refresh liên tục → series stale
+// vô hạn), (b) tham số `days` bị bỏ qua khi cache-hit. cachedSeries xoá theo.

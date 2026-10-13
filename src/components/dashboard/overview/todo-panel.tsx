@@ -13,20 +13,19 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChipMeta, EmptyState } from "@/components/dashboard/kit";
+import { ChipMeta, EmptyState, pnlToneOf } from "@/components/dashboard/kit";
 import { SIGNAL_DIRECTION } from "@/components/dashboard/signals/signal-detail-dialog";
 import { useCouncilOverview } from "@/hooks/use-council";
 import { useDateRange } from "@/hooks/use-date-range";
-import { usePortfolioWorld } from "@/hooks/use-portfolio-world";
+import { buildOrdersUrl, usePortfolioWorld } from "@/hooks/use-portfolio-world";
 import { apiGet } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
 import { formatDateTime, formatPrice, formatVndCompact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
   AgentsResponse,
-  OrderRow,
+  OrdersResponse,
   SignalRow,
-  TradeRow,
 } from "@/lib/types";
 
 /**
@@ -45,24 +44,6 @@ import type {
  * viewAccountType, rangeKey] · ["agents"] · ["council-overview", rangeKey]) —
  * panel không thêm request nào.
  */
-
-/* ─────────────────── Types (bản sao contract #96 — không export ở portfolio-section) ─────────────────── */
-
-interface OrdersSessionContext {
-  /** MARKET_STRICT_SESSION=true → matching nghỉ ngoài phiên. */
-  strictSession: boolean;
-  inSession: boolean;
-  phase?: string;
-  phaseLabel?: string;
-  nextOpenAt?: string;
-  nextOpenLabel?: string;
-}
-
-interface OrdersResponse {
-  orders: OrderRow[];
-  trades: TradeRow[];
-  session?: OrdersSessionContext;
-}
 
 /* ─────────────────── Thành phần dùng trong panel ─────────────────── */
 
@@ -108,10 +89,18 @@ function GroupHeader({ id, label, count }: { id: string; label: string; count: n
   );
 }
 
-/** Màu lãi/lỗ ngữ nghĩa #45 — dùng cho giá trị phải của hàng vị thế. */
+/** Màu lãi/lỗ ngữ nghĩa #45 — F-1112-08 (fixbug #111): quyết định tone tập
+ * trung ở kit.pnlToneOf; bản map class giữ nguyên "text-flat" (amber nhạt hơn
+ * amber-600 của kit.toneTextClass — KHÔNG đổi giao diện hiện tại). */
 function pnlColor(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n) || n === 0) return "text-flat";
-  return n > 0 ? "text-up" : "text-down";
+  switch (pnlToneOf(n)) {
+    case "up":
+      return "text-up";
+    case "down":
+      return "text-down";
+    default:
+      return "text-flat";
+  }
 }
 
 /* ─────────────────── TodoPanel ─────────────────── */
@@ -129,14 +118,12 @@ export function TodoPanel() {
       apiGet<{ signals: SignalRow[] }>(`/api/signals${rangeQuery ? `?${rangeQuery}` : ""}`),
     staleTime: 60_000,
   });
-  // Cùng URL-builder với portfolio-section (đọc cách dùng, không sửa) →
-  // ["orders", viewAccountType, rangeKey] chia sẻ cache với Danh mục.
+  // Cùng URL-builder với portfolio-section (F-1112-07 — buildOrdersUrl một
+  // nguồn ở use-portfolio-world) → ["orders", viewAccountType, rangeKey]
+  // chia sẻ cache với Danh mục.
   const ordersQuery = useQuery({
     queryKey: ["orders", viewAccountType, rangeKey],
-    queryFn: () =>
-      apiGet<OrdersResponse>(
-        `${viewAccountType === "sandbox" ? "/api/orders?accountType=sandbox" : "/api/orders"}${rangeQuery ? (viewAccountType === "sandbox" ? "&" : "?") : ""}${rangeQuery}`
-      ),
+    queryFn: () => apiGet<OrdersResponse>(buildOrdersUrl(viewAccountType, rangeQuery)),
     staleTime: 60_000,
   });
   // ["agents"] trùng AgentSystemBrief → scheduledTasks lấy từ cache sẵn có.

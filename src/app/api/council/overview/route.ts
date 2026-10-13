@@ -5,6 +5,8 @@ import { getDecisionLedger } from "@/lib/council/decision-eval";
 // #107 E-EXEC: vị thế phi-VN đánh giá theo luật thị trường (quy VND / danh nghĩa idx).
 import { markPositionVND, execUnitLabel, isForeignMarket, usdVndRate } from "@/lib/exec/market-rules";
 import { unitKindOf } from "@/lib/format";
+// F-1112-01 (fixbug #111 — P1): equity live-mark cùng nguồn với /api/k/sandbox.
+import { computeSandboxEquity } from "@/lib/k-sandbox";
 // F-1091-01c (fixbug api #109): đưa isValidIctDay/ictDayStart/ictDayEnd về
 // nguồn chia sẻ src/lib/api-dates.ts. Nâng cấp so với fix F-1081-01: thêm
 // round-trip UTC — bắt thêm "2026-02-30" (JS roll-over sang 03-02, không
@@ -111,9 +113,41 @@ export async function GET(req: NextRequest) {
           fxRate: isForeign ? mark?.fxRate ?? fx : null,
         });
       }
-      const equity = Number(account.equity);
-      const cash = Number(account.cashBalance);
-      const pnl = initial != null ? equity - initial : null;
+      // F-1112-01 (fixbug #111 — P1): P&L "từ lúc kích hoạt" phải CÙNG công thức
+      // với /api/k/sandbox (K1 sở hữu tài khoản sandbox): equity live-mark qua
+      // computeSandboxEquity (cash + vị thế đánh giá giá mới nhất) và trừ
+      // topupTotal (#88 — nạp thêm là tiền VÀO, không phải lãi). Trước fix dùng
+      // cột DB account.equity (chỉ cập nhật lúc khớp lệnh) + không trừ topup →
+      // 2 màn hình trả 2 số mâu thuẫn cùng lúc cho cùng tài khoản (council
+      // −4.905₫ vs sandbox +25.095₫).
+      // F-1114-02 (fixbug #111): fallback khi engine equity lỗi — khớp k/sandbox
+      // (cashBalance) thay vì cột DB equity, 2 route fail-soft cùng giá trị.
+      const eqLive = await computeSandboxEquity(account.id).catch(() => null);
+      const equity = eqLive?.equity ?? Number(account.cashBalance);
+      const cash = eqLive?.cash ?? Number(account.cashBalance);
+      // #88 — tổng nạp thêm từ lúc kích hoạt (pattern k/sandbox route).
+      const since = setting?.activatedAt ? new Date(setting.activatedAt) : null;
+      const topupAudits = await db.auditLog
+        .findMany({
+          where: {
+            action: "K1_SANDBOX_TOPUP",
+            entity: "BrokerAccount",
+            entityId: account.id,
+            ...(since ? { createdAt: { gte: since } } : {}),
+          },
+          select: { after: true },
+        })
+        .catch(() => [] as { after: string | null }[]);
+      let topupTotal = 0;
+      for (const a of topupAudits) {
+        try {
+          topupTotal += Number((JSON.parse(a.after ?? "{}") as { amount?: unknown }).amount) || 0;
+        } catch {
+          // malformed audit — bỏ qua (fail-soft)
+        }
+      }
+      const netInvested = initial != null ? initial + topupTotal : null;
+      const pnl = netInvested != null && netInvested > 0 ? equity - netInvested : null;
       // biến động ngày: snapshot k1-daily cuối vs kế cuối
       const eq = snaps.map((s) => Number(s.equity)).reverse();
       const dayChange =
@@ -126,7 +160,7 @@ export async function GET(req: NextRequest) {
         activatedAt: setting?.activatedAt ?? null,
         pnlSinceActivation: pnl,
         pnlPctSinceActivation:
-          pnl != null && initial ? (pnl / initial) * 100 : null,
+          pnl != null && netInvested ? (pnl / netInvested) * 100 : null,
         dayChange,
         equityCurve: snaps
           .map((s) => ({ createdAt: s.createdAt.toISOString(), equity: Number(s.equity) }))

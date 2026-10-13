@@ -150,6 +150,9 @@ export async function GET(req: Request) {
     // #110 M4.1.1 — Sức mua ước tính (minh bạch công thức — cùng một nguồn logic
     // chip tooltip Header §5.4: buyingPower = cash + positionsMv×RATIO − marginUsed;
     // RATIO 0.5 giả lập ký quỹ 50%, KHÔNG phải hạn mức thật VNDIRECT).
+    // F-1115-06 (fixbug #111): chú thích đủ — marginRoom bị kẹp Math.max(0,·):
+    // khi marginUsed > mv×RATIO (vượt ký quỹ) phần âm KHÔNG trừ thẳng vào cash
+    // (sức mua không đi dưới tiền mặt).
     const MARGIN_ROOM_RATIO = 0.5;
     const cashBalance = Number(account.cashBalance);
     const marginRoom = Math.round(

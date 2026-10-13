@@ -45,9 +45,11 @@ import type { SignalRow } from "@/lib/types";
  * Nút chính theo pattern #102 "DISABLED-CÓ-LÝ-DO": tooltip nêu rõ vì sao
  * chưa bấm được (GIỮ / đã ACTED / đã REJECT / EXPIRED).
  *
- * Meta dùng chung (SIGNAL_DIRECTION · SIGNAL_CONFIDENCE · consensusMeta ·
- * statusMeta) khai báo Ở ĐÂY để signals-feed.tsx nhập về — một nguồn, không
+ * Meta dùng chung (SIGNAL_DIRECTION · consensusMeta · statusMeta) khai báo
+ * Ở ĐÂY để signals-feed/overview/todo-panel nhập về — một nguồn, không
  * chế bản sao (nguyên tắc kit §2.4); dialog KHÔNG import ngược về feed.
+ * (F-1114-01 fixbug #111: bỏ SIGNAL_CONFIDENCE khỏi danh sách — đã un-export
+ * theo F-1111-05, chỉ còn dùng nội bộ dialog.)
  */
 
 /* ─────────────────── Meta hướng / độ tin cậy (dùng chung) ─────────────────── */
@@ -81,7 +83,9 @@ export const SIGNAL_DIRECTION: Record<string, DirectionMeta> = {
   },
 };
 
-export const SIGNAL_CONFIDENCE: Record<string, { label: string; className: string }> = {
+// F-1111-05 (fixbug #111 — dọn code rác): SIGNAL_CONFIDENCE chỉ dùng nội bộ
+// dialog (feed dùng 3 meta đã import: SIGNAL_DIRECTION/consensusMeta/statusMeta) — bỏ export.
+const SIGNAL_CONFIDENCE: Record<string, { label: string; className: string }> = {
   HIGH: { label: "Tin cậy cao", className: "border-up/40 text-up" },
   MEDIUM: { label: "Tin cậy vừa", className: "border-amber-500/40 text-amber-600 dark:text-amber-400" },
   LOW: { label: "Tin cậy thấp", className: "text-muted-foreground" },
@@ -166,7 +170,7 @@ export function statusMeta(s: SignalRow): {
 }
 
 /** Nhãn Việt cho executionKind của sổ phán quyết D-LEDGER (#106). */
-export function executionKindLabel(kind: string | null): string | null {
+function executionKindLabel(kind: string | null): string | null {
   switch (kind) {
     case "EXECUTED_CLOSED":
       return "Đã thực thi · vị thế đã đóng";
@@ -181,7 +185,7 @@ export function executionKindLabel(kind: string | null): string | null {
 
 /* ─────────────────── Lý do nút chính bị khoá (pattern #102) ─────────────────── */
 
-export function approveDisabledReason(s: SignalRow): string | null {
+function approveDisabledReason(s: SignalRow): string | null {
   if (s.direction === "HOLD") {
     return "Khuyến nghị GIỮ không chuyển được thành lệnh — chỉ MUA/BÁN mới được duyệt & chuyển lệnh.";
   }
@@ -235,10 +239,19 @@ export function SignalDetailDialog({ signal, onOpenChange }: SignalDetailDialogP
     onSuccess: (res, vars) => {
       void queryClient.invalidateQueries({ queryKey: ["signals"] });
       void queryClient.invalidateQueries({ queryKey: ["orders"] });
-      if (vars.action === "APPROVE" && res.order) {
-        toast.success("Đã duyệt và tạo lệnh chờ khớp", {
-          description: `${res.order.side === "BUY" ? "MUA" : "BÁN"} ${res.order.quantity} cp ${res.order.symbol} @ ${formatPrice(res.order.price)} ₫`,
-        });
+      if (vars.action === "APPROVE") {
+        // F-1111-09 (fixbug #111): tách nhánh theo action thay vì else mặc định
+        // giả định REJECT — nếu sau này route trả APPROVE mà order null thì thông
+        // báo đúng trạng thái, không báo nhầm "đã từ chối".
+        if (res.order) {
+          toast.success("Đã duyệt và tạo lệnh chờ khớp", {
+            description: `${res.order.side === "BUY" ? "MUA" : "BÁN"} ${res.order.quantity} cp ${res.order.symbol} @ ${formatPrice(res.order.price)} ₫`,
+          });
+        } else {
+          toast.success("Đã duyệt tín hiệu", {
+            description: "Không sinh lệnh (tín hiệu không đủ điều kiện chuyển lệnh).",
+          });
+        }
       } else {
         toast.success("Đã từ chối tín hiệu", {
           description: vars.note || "Tín hiệu chuyển sang trạng thái đã từ chối.",

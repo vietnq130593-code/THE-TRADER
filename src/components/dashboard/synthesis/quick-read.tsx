@@ -104,15 +104,20 @@ function WaitingText({ children }: { children: React.ReactNode }) {
 /**
  * Tab Bằng chứng — nhận định + bằng chứng + lịch sử pUp dùng chung nguồn
  * /api/assessment với tab Nhận định (props từ workspace, không query riêng).
+ * F-1115-03 (fixbug #111): thêm prop error — trước fix khi API lỗi cũng hiển
+ * thị câu "Chưa có nhận định — bấm Tổng hợp lại ngay" (sai ngữ cảnh, §2.5
+ * lỗi ≠ trống).
  */
 export function EvidenceQuickRead({
   assessment,
   historyCount,
   loading,
+  error,
 }: {
   assessment: MarketAssessmentView | null;
   historyCount: number;
   loading: boolean;
+  error?: boolean;
 }) {
   const ready = assessment != null;
   return (
@@ -135,9 +140,11 @@ export function EvidenceQuickRead({
         </>
       ) : (
         <WaitingText>
-          {loading
-            ? "Đang tải nhận định Bayes…"
-            : "Chưa có nhận định — bấm “Tổng hợp lại ngay” phía trên để thu bằng chứng."}
+          {error
+            ? "Không tải được nhận định Bayes — thử tải lại tab."
+            : loading
+              ? "Đang tải nhận định Bayes…"
+              : "Chưa có nhận định — bấm “Tổng hợp lại ngay” phía trên để thu bằng chứng."}
         </WaitingText>
       )}
     </QuickReadRow>

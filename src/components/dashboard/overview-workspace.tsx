@@ -17,7 +17,7 @@ import { AgentSystemBrief } from "@/components/dashboard/agent-system-brief";
 import { NewsCard } from "@/components/dashboard/news-card";
 import { SignalsFeed } from "@/components/dashboard/signals-feed";
 import { TodoPanel } from "@/components/dashboard/overview/todo-panel";
-import { StatTile, type StatTileTone } from "@/components/dashboard/kit";
+import { StatTile, pnlToneOf, type StatTileTone } from "@/components/dashboard/kit";
 import {
   SIGNAL_DIRECTION,
   consensusMeta,
@@ -51,11 +51,8 @@ import type {
 
 /* ─────────────────── M4.4.1 — Tier-1 "Bảng chốt phiên" ─────────────────── */
 
-/** Màu ngữ nghĩa #45: dương → up · âm → down · 0/null → flat (amber). */
-function signTone(n: number | null | undefined): StatTileTone {
-  if (n == null || Number.isNaN(n) || n === 0) return "flat";
-  return n > 0 ? "up" : "down";
-}
+/** Màu ngữ nghĩa #45 — F-1112-08 (fixbug #111): quyết định tone chuyển về
+ * kit.pnlToneOf (một nguồn), xoá bản copy signTone local. */
 
 /**
  * Sub "từ lúc kích hoạt" — % khi có nghĩa (|pct| ≥ 0,005), còn lại về số
@@ -107,7 +104,7 @@ function SessionClosePanel() {
   // VN30 — cùng nguồn suy luận với MarketSummary ("VN30 chỉ số proxy" từ
   // summary.avgChangePct trung bình 30 mã HOSE; quotes không có quote INDEX VN).
   const s = quotesQuery.data?.summary;
-  const vn30Tone: StatTileTone = quotesQuery.isError ? "neutral" : signTone(s?.avgChangePct);
+  const vn30Tone: StatTileTone = quotesQuery.isError ? "neutral" : pnlToneOf(s?.avgChangePct);
   const vn30Sub = quotesQuery.isError
     ? "không tải được dữ liệu thị trường"
     : s == null
@@ -136,7 +133,7 @@ function SessionClosePanel() {
   const dayChange = account?.dayChange;
   const pnlTone: StatTileTone = councilQuery.isError || !councilReady
     ? "neutral"
-    : signTone(dayChange);
+    : pnlToneOf(dayChange);
 
   return (
     <section aria-label="Bảng chốt phiên">

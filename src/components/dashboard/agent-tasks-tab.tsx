@@ -341,7 +341,10 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
               }
               runPending={runTask.isPending && runTask.variables === t.id}
               deletePending={
-                deleteTask.isPending && deleteTask.variables === confirmDeleteId
+                // F-1113-03 (fixbug #111): so với t.id (hàng đang xoá) như
+                // runPending/updatePending — trước fix so với confirmDeleteId
+                // (không phụ thuộc hàng) → MỌI hàng cùng spinner khi xoá.
+                deleteTask.isPending && deleteTask.variables === t.id
               }
               onTogglePause={(paused) => updateTask.mutate({ taskId: t.id, paused })}
               onRun={() => runTask.mutate(t.id)}

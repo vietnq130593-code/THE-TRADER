@@ -10,8 +10,9 @@
  * là tra cứu tham chiếu, không phải kênh đầu tư.
  */
 
-/** Rổ → nhóm market trong bảng giá (nhóm "Chỉ số" luôn giữ nguyên). */
-export const BASKET_MARKETS: Record<string, readonly string[]> = {
+/** Rổ → nhóm market trong bảng giá (nhóm "Chỉ số" luôn giữ nguyên).
+ * F-1113-04 (fixbug #111): bỏ export — chỉ marketsOfBasket dùng nội bộ. */
+const BASKET_MARKETS: Record<string, readonly string[]> = {
   VN_EQUITY: ["HOSE", "HNX", "UPCOM"],
   INTL_EQUITY: ["US", "HK"],
   BOND: ["BOND"],
@@ -27,14 +28,6 @@ export const BASKET_LABELS: Record<string, string> = {
   FOREX: "Forex USD/VND",
   COMMODITY: "Hàng hoá",
 };
-
-/** Các rổ chỉ mang tính tham chiếu nghiên cứu (không phải đối tượng đầu tư). */
-export const REFERENCE_ONLY_BASKETS: readonly string[] = [
-  "INTL_EQUITY",
-  "BOND",
-  "FOREX",
-  "COMMODITY",
-];
 
 /** Danh sách market tương ứng rổ — trả [] nếu key lạ (bảng về "không khớp"). */
 export function marketsOfBasket(basket: string | null | undefined): readonly string[] {

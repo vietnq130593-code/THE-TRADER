@@ -33,9 +33,9 @@ export function CouncilLinkCard() {
           Khối Hội đồng
         </CardTitle>
         <CardDescription>
-          Hội đồng đánh giá mọi quyết định giao dịch — job tự động 16:45 ICT hằng
-          ngày (sổ phán quyết WIN/LOSS ±0,5%) · dữ liệu thị trường nạp 06:15 &amp;
-          15:45 (VN đầu tư · quốc tế tham chiếu)
+          Hội đồng đánh giá mọi quyết định giao dịch — job tự động 16:45 ICT các
+          ngày giao dịch T2–T6 (sổ phán quyết WIN/LOSS ±0,5%) · dữ liệu thị
+          trường nạp 06:15 &amp; 15:45 (VN đầu tư · quốc tế tham chiếu)
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

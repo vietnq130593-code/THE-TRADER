@@ -55,9 +55,12 @@ const nfLex = new Intl.NumberFormat("vi-VN", {
   maximumFractionDigits: 2,
 });
 
+/** "±0,00" kiểu vi-VN 2 chữ số — nhãn chip điểm lexicon.
+ * F-1115-07 (fixbug #111): dấu trừ U+2212 "−" đồng bộ quy ước signed2/formatPct
+ * dùng toàn app (trước fix là ASCII "-"). */
 function lexLabel(score: number): string {
   const s = nfLex.format(Math.abs(score));
-  return score > 0 ? `+${s}` : score < 0 ? `-${s}` : s;
+  return score > 0 ? `+${s}` : score < 0 ? `−${s}` : s;
 }
 
 function lexTone(score: number): StatTileTone {

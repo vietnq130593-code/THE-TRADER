@@ -422,3 +422,8 @@ export const GROUP_LABELS: Record<AgentGroup, string> = {
   platform: "Nền tảng Dữ liệu",
   ml: "Phòng Học máy",
 };
+
+/** F-1113-05 (fixbug #111 — dọn trùng lặp): thứ tự nhóm hiển thị MỘT nguồn,
+ *  derive trực tiếp từ AGENT_GROUPS (không thể lệch) — thay 2 bản copy
+ *  GROUP_ORDER rải ở agents-workspace.tsx + agent-system-brief.tsx. */
+export const AGENT_GROUP_ORDER: readonly AgentGroup[] = AGENT_GROUPS.map((g) => g.id);

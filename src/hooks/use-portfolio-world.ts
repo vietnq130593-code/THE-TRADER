@@ -107,6 +107,18 @@ export function usePortfolioWorld(): PortfolioWorld {
 }
 
 /**
+ * F-1112-07 (fixbug #111): URL-builder /api/orders MỘT nguồn — thay 2 bản copy
+ * nguyên vẹn ở portfolio-section + todo-panel (giữ nguyên chính xác từng ký tự
+ * của chuỗi cũ: accountType=sandbox + nối rangeQuery bằng '&'/'?' đúng chỗ).
+ */
+export function buildOrdersUrl(
+  viewAccountType: "paper" | "sandbox",
+  rangeQuery: string,
+): string {
+  return `${viewAccountType === "sandbox" ? "/api/orders?accountType=sandbox" : "/api/orders"}${rangeQuery ? (viewAccountType === "sandbox" ? "&" : "?") : ""}${rangeQuery}`;
+}
+
+/**
  * #91 việc 1 — "Đặt lại thế giới Giấy về 0": xoá toàn bộ dữ liệu demo cũ
  * (Order/Trade/Position/CashSnapshot mọi tài khoản giấy, cash/equity về 0).
  * Invalidate ["portfolio"] + ["orders"] (prefix — mọi world) để tiles/tables
