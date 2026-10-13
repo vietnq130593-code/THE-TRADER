@@ -41,8 +41,9 @@ logs/
 # dependencies (cả mini-services)
 node_modules/
 
-# env files (giữ .env.example làm mẫu)
-.env*
+# env files — #113: TRACK .env theo yêu cầu chủ repo (khôi phục cấu hình Supabase tức thì sau sandbox reset);
+# vẫn ignore các biến thể khác (.env.local, .env.production, ...)
+.env.*
 !.env.example
 
 # debug

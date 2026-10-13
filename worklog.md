@@ -3965,3 +3965,19 @@ Stage Summary:
 - PM2 bền qua tool call (the-trader :3000 + market-engine :3003, pm2 save dump) — thay cho double-fork đã bại; mọi lệnh prisma CLI phải prefix DATABASE_URL Supabase (shell inject sqlite che .env).
 - Supabase xác nhận LÀ nguồn chính (schema trader đồng bộ #111, dữ liệu nguyên vẹn); dữ liệu thử nghiệm #92-#111 mất vì lineage đó chạy trên PGlite cục bộ (db/pglite) theo sandbox cũ — đã chết theo reset; paper world 0₫ là purge chủ động #91-remote. Hiện .env → Supabase pooler + pg-service KHÔNG cần chạy.
 - 2 branch backup local: backup/phi91-local-auto-decision (e667356) + backup/phi91-junk (8a09ae6) — tham chiếu an toàn, không push.
+
+---
+Task ID: 113
+Agent: orchestrator (main session)
+Task: Push code kèm file .env lên GitHub theo yêu cầu chủ repo (khôi phục cấu hình Supabase tức thì sau mỗi sandbox reset)
+
+Work Log:
+- Kiểm tra trạng thái git: HEAD = origin/main = 6cf1cdf (#112) — toàn bộ code phiên #112 đã được push từ trước, working tree sạch; PM2 the-trader :3000 + market-engine :3003 online (uptime 4h).
+- Rà soát .env trước khi track: chứa cấu hình Supabase production (DATABASE_URL pooler ap-northeast-2 · SUPABASE_URL/ANON/SERVICE_ROLE/ACCESS token · DB password) + APP MODE (LIVE_TRADING=false…) — KHÔNG chứa GitHub PAT (PAT chỉ nằm trong .git/config remote URL, không bao giờ được commit).
+- Sửa .gitignore dòng 44-47: rule `.env*` + `!.env.example` → `.env.*` + `!.env.example` — file `.env` không còn bị ignore; các biến thể `.env.local`/`.env.production`… vẫn bị ignore như cũ.
+- git add .gitignore .env worklog.md → commit "113: PUSH .env…" → push origin main (remote đã nhúng PAT của chủ repo).
+- Verify sau push: git ls-remote origin main khớp hash commit mới · git show --stat xác nhận .env nằm trong tree.
+
+Stage Summary:
+- .env (cấu hình Supabase — nguồn dữ liệu chính của app) giờ nằm TRONG repo GitHub: sau mỗi sandbox reset chỉ cần `git pull` + `pm2 start` là toàn bộ cấu hình dữ liệu tự khôi phục, không phải dò worklog dựng lại như #91.
+- Đánh đổi được chủ repo chấp nhận rõ ràng: repo chứa credentials Supabase (DB password + service role key); GitHub PAT không bị lộ trong bất kỳ file nào được push.
