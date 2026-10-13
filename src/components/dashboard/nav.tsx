@@ -167,7 +167,7 @@ export function AppSidebar() {
             size="icon"
             aria-label="Đóng thanh điều hướng"
             onClick={() => setOpen(false)}
-            className="size-8 shrink-0"
+            className="min-h-9 min-w-9 shrink-0"
           >
             <X className="size-4" />
           </Button>

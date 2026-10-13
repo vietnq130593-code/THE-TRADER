@@ -1,13 +1,18 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { formatDistanceToNow } from "date-fns";
+import { vi } from "date-fns/locale";
 import {
+  Activity,
   AlertTriangle,
   Award,
   Bot,
   Gauge,
-  ListFilter,
+  HeartPulse,
+  History,
+  Play,
   RefreshCw,
 } from "lucide-react";
 import {
@@ -22,15 +27,6 @@ import {
 } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Card,
   CardAction,
@@ -55,20 +51,26 @@ import { formatVolume } from "@/lib/format";
 import { useSingleAgentRun, RateLimitError } from "@/hooks/use-agent-actions";
 // #93 — nút "Model AI": chọn model cho toàn đội agent + kiểm tra sức khoẻ.
 import { LlmModelPicker } from "@/components/dashboard/llm-model-picker";
-import { AgentRosterCard } from "@/components/dashboard/agent-roster-card";
+import { AgentRosterCard, agentHealthColor } from "@/components/dashboard/agent-roster-card";
 import { AgentDetailPanel } from "@/components/dashboard/agent-detail-panel";
 // K3 (#94 — AUTONOMY_BLUEPRINT §6.4): khối “Lịch tuần” gom nhiệm vụ định kỳ
 // cả nhóm theo thứ giờ (đặt đầu roster).
 import { WeeklyScheduleCard } from "@/components/dashboard/weekly-schedule-card";
 // K4 (#94 — AUTONOMY_BLUEPRINT §7.3): khối “Giao việc” Ban Điều hành — đặt
-// dưới ChairmanScorecard cùng pattern E-P1-4.
+// đáy roster (M4.3 #110 — sau ChairmanScorecard cùng pattern E-P1-4).
 import { K4AssignedCard } from "@/components/dashboard/k4-assigned-card";
 import { CoverageMatrix } from "@/components/dashboard/coverage-matrix";
 // E-P0-5 (EXECUTION_OPS_BLUEPRINT v1.1): khối KPI vận hành nhóm executive.
 import { ExecutiveKpi } from "@/components/dashboard/executive-kpi";
-// E-P1-4 (v1.2): bảng điểm chất lượng tín hiệu Chủ tịch — đặt dưới section
-// nhóm executive (cùng pattern B8 dưới section research).
+// E-P1-4 (v1.2): bảng điểm chất lượng tín hiệu Chủ tịch.
 import { ChairmanScorecardCard } from "@/components/dashboard/chairman-scorecard";
+// M4.3 (#110 UIUX_UPGRADE_BLUEPRINT §2.4): kit thành phần chung + dải chấm squad.
+import { ChipMeta, EmptyState, StatTile } from "@/components/dashboard/kit";
+import {
+  SquadHealthStrip,
+  squadDotClass,
+  squadStatusLabel,
+} from "@/components/dashboard/agents/squad-health-strip";
 import { cn } from "@/lib/utils";
 import type { AgentCard, AgentsResponse } from "@/lib/types";
 import type { ScorecardRow } from "@/lib/research/scorecard";
@@ -85,7 +87,7 @@ import type {
 /** Mở rộng 23 agents — thứ tự 5 nhóm hiển thị trong roster (agent-roster.ts backend). */
 const GROUP_ORDER = ["research", "control", "executive", "platform", "ml"] as const;
 
-/** Mô tả ngắn mỗi nhóm dưới header section. */
+/** Mô tả ngắn mỗi nhóm (tooltip chip lọc M4.3.3 — giữ mô tả nhóm cũ #47). */
 const GROUP_DESCRIPTIONS: Record<string, string> = {
   research: "Phân tích chuyên sâu cấp tín hiệu đầu vào",
   control: "Quyền VETO — rủi ro, phơi nhiễm, tuân thủ",
@@ -94,11 +96,21 @@ const GROUP_DESCRIPTIONS: Record<string, string> = {
   ml: "Backtest, dự báo, giả lập RL",
 };
 
-interface AgentGroupSection {
+/** Nhãn ngắn chip lọc nhóm M4.3.3 (label đầy đủ groupLabel vẫn ở hàng/chấm). */
+const GROUP_CHIP_LABELS: Record<string, string> = {
+  research: "Nghiên cứu",
+  control: "Kiểm soát",
+  executive: "Điều hành",
+  platform: "Nền tảng",
+  ml: "ML",
+};
+
+/** Chip nhóm cho SquadHealthCard — key + nhãn + mô tả + đếm. */
+interface SquadGroupChip {
   key: string;
   label: string;
   description: string;
-  agents: AgentCard[];
+  count: number;
 }
 
 /** GET /api/research/scorecard — shape hợp đồng với route B8. */
@@ -107,45 +119,34 @@ interface ScorecardResponse {
   generatedAt: string;
 }
 
-/** Chia agents theo nhóm theo GROUP_ORDER — nhóm lạ gom vào section "Khác" cuối danh sách. */
-function groupAgentsBySection(agents: AgentCard[]): AgentGroupSection[] {
-  const sections: AgentGroupSection[] = GROUP_ORDER.map((key) => ({
-    key,
-    label: "",
-    description: GROUP_DESCRIPTIONS[key] ?? "",
-    agents: [],
-  }));
-  const fallback: AgentGroupSection = {
-    key: "other",
-    label: "Nhóm khác",
-    description: "Agent chưa phân nhóm",
-    agents: [],
-  };
-  for (const a of agents) {
-    const section = sections.find((s) => s.key === a.group);
-    if (section) {
-      // groupLabel do API trả về (đồng nhất trong nhóm) — lấy của agent đầu tiên.
-      if (!section.label) section.label = a.groupLabel;
-      section.agents.push(a);
-    } else {
-      if (fallback.agents.length === 0) fallback.label = a.groupLabel || "Nhóm khác";
-      fallback.agents.push(a);
-    }
-  }
-  return [...sections, fallback].filter((s) => s.agents.length > 0);
+/** "45 phút" · "3 giờ" · "2 ngày" — tuổi ngắn gọn cho ô KPI chu kỳ (M4.3.1). */
+function shortAge(d: Date): string {
+  const min = Math.floor((Date.now() - d.getTime()) / 60_000);
+  if (min < 1) return "vừa xong";
+  if (min < 60) return `${min} phút`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} giờ`;
+  return `${Math.floor(h / 24)} ngày`;
 }
 
 /**
- * PHASE3_BLUEPRINT §4.7 — workspace "Đội Agent" (B2 thay placeholder B1):
- * roster 23 card chia 5 nhóm + panel chi tiết/chat. Mobile stack dọc, desktop 2 cột xl:.
- * Mutation "chạy riêng" sống ở đây để nút roster + panel đồng bộ trạng thái.
+ * PHASE3_BLUEPRINT §4.7 — workspace "Đội Agent" (B2 thay placeholder B1).
  *
- * PHIÊN #47 (yêu cầu user):
- * - Nút "Chạy chu kỳ đầy đủ" bị XOÁ — nút "Chạy agent" trên thanh bar trên
- *   cùng (Header) là nút chạy chu kỳ DUY NHẤT của cả app (trước đó xuất hiện
- *   6 nơi: overview ×2 · signals · synthesis ×2 · đây).
- * - Bộ lọc nhóm chuyển từ hàng pill bày sẵn (#45) sang MỘT nút "Nhóm hiển thị"
- *   trong ô header workspace: mở DropdownMenu tick ĐA CHỌN nhóm nào được render.
+ * M4.3 (#110 UIUX_UPGRADE_BLUEPRINT §4 — 5.5 → 7.5, hết "wall of gray"):
+ * - M4.3.1: Card "Sức khoẻ đội agent" mở đầu workspace — 4 ô KPI squad
+ *   (đang chạy · lỗi · sức khoẻ TB · chu kỳ gần nhất) + dải 23 chấm trạng
+ *   thái (squad-health-strip) → map sức khoẻ đội đọc trong 1 giây.
+ * - M4.3.2: danh sách mặc định GỌN — mỗi agent 1 HÀNG (chấm + tên/nhóm +
+ *   mini-bar sức khoẻ + chip model + tuổi chu kỳ); thẻ đầy AgentRosterCard
+ *   chỉ render tại chỗ khi agent đang được chọn; panel chi tiết/chat giữ
+ *   nguyên luồng cũ (chọn 1 hàng → panel chi tiết).
+ * - M4.3.3: bộ lọc nhóm nhanh chip-toggle đơn chọn (thay dropdown đa chọn
+ *   #47) — lọc CẢ dải chấm squad lẫn danh sách hàng.
+ *
+ * PHIÊN #47 (yêu cầu user — giữ): nút "Chạy chu kỳ đầy đủ" XOÁ — nút
+ * "Chạy agent" trên thanh bar trên cùng (Header) là nút chạy chu kỳ DUY
+ * NHẤT của cả app. Mutation "chạy riêng" sống ở đây để nút roster + panel
+ * đồng bộ trạng thái.
  */
 export function AgentsWorkspace() {
   const singleRun = useSingleAgentRun();
@@ -158,19 +159,10 @@ export function AgentsWorkspace() {
 
   // Agent đang mở panel chi tiết (local state — không cần Zustand).
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Phiên #47 — bộ lọc nhóm agent ĐA CHỌN (tick trong dropdown): mặc định tick
-  // đủ mọi nhóm (= hiển thị toàn bộ 23 như trước); bỏ tick nhóm nào để ẨN nhóm
-  // đó khỏi roster — thay hàng pill đơn chọn 1 nhóm của phiên #45.
-  const [selectedGroups, setSelectedGroups] = useState<ReadonlySet<string>>(
-    () => new Set([...GROUP_ORDER, "other"])
-  );
-  const toggleGroup = (key: string) =>
-    setSelectedGroups((cur) => {
-      const next = new Set(cur);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  // M4.3.3 — bộ lọc nhóm nhanh: chip-toggle ĐƠN CHỌN (state cục bộ) thay
+  // dropdown đa chọn #47 — "Tất cả" mặc định; lọc CẢ dải 23 chấm squad lẫn
+  // danh sách hàng agent bên dưới.
+  const [groupFilter, setGroupFilter] = useState<string>("all");
   // retryAfterSeconds theo agent id — set khi chạy riêng dính 429;
   // workspace là chủ duy nhất của đồng hồ đếm ngược (tick giảm mỗi giây).
   const [retryAfter, setRetryAfter] = useState<Record<string, number>>({});
@@ -207,20 +199,62 @@ export function AgentsWorkspace() {
     return () => clearInterval(timer);
   }, [hasRetry]);
 
-  const agents = agentsQuery.data?.agents ?? [];
-  const sections = groupAgentsBySection(agents);
-  // Phiên #47 — roster chỉ render các nhóm đang được tick trong dropdown.
-  const visibleSections = sections.filter((s) => selectedGroups.has(s.key));
-  // Scorecard + ma trận độ phủ gắn bối cảnh nhóm research — chỉ hiện khi nhóm
-  // research đang được chọn (phiên #45: khi "all" hoặc "research").
-  const showResearchExtras = selectedGroups.has("research");
-  const selectedGroupCount = sections.filter((s) => selectedGroups.has(s.key)).length;
-  const allGroupsSelected =
-    sections.length > 0 && selectedGroupCount === sections.length;
-  const visibleAgentCount = visibleSections.reduce(
-    (n, s) => n + s.agents.length,
-    0
+  // Bọc useMemo để identity ổn định — dependencies của các useMemo squad
+  // (chips/danh sách) không đổi mỗi render khi query chưa có data.
+  const agents = useMemo(
+    () => agentsQuery.data?.agents ?? [],
+    [agentsQuery.data],
   );
+
+  // M4.3.3 — chips nhóm: nhãn ngắn + đếm từ dữ liệu thật; nhóm lạ (ngoài
+  // GROUP_ORDER) gom chip riêng theo groupLabel — đối xứng fallback cũ.
+  const groupChips = useMemo<SquadGroupChip[]>(() => {
+    const chips: SquadGroupChip[] = [];
+    const known = new Set<string>();
+    for (const key of GROUP_ORDER) {
+      const count = agents.filter((a) => a.group === key).length;
+      if (count === 0) continue;
+      const first = agents.find((a) => a.group === key);
+      chips.push({
+        key,
+        label: GROUP_CHIP_LABELS[key] ?? first?.groupLabel ?? key,
+        description: GROUP_DESCRIPTIONS[key] ?? "",
+        count,
+      });
+      known.add(key);
+    }
+    const others = agents.filter((a) => !known.has(a.group));
+    if (others.length > 0) {
+      chips.push({
+        key: others[0].group,
+        label: others[0].groupLabel || "Nhóm khác",
+        description: "",
+        count: others.length,
+      });
+    }
+    return chips;
+  }, [agents]);
+
+  // M4.3.2 — danh sách hàng gọn: lọc theo chip + sắp theo GROUP_ORDER
+  // (sort ổn định — giữ thứ tự backend trong từng nhóm).
+  const visibleAgents = useMemo(() => {
+    const filtered =
+      groupFilter === "all" ? agents : agents.filter((a) => a.group === groupFilter);
+    const rank = (group: string) => {
+      const i = (GROUP_ORDER as readonly string[]).indexOf(group);
+      return i === -1 ? GROUP_ORDER.length : i;
+    };
+    return [...filtered].sort((a, b) => rank(a.group) - rank(b.group));
+  }, [agents, groupFilter]);
+
+  // Khối gắn bối cảnh nhóm — hiện khi nhóm đó đang xem (đúng nghĩa cũ:
+  // nhóm ẩn → khối ẩn; scorecard B8/B14 "dưới cùng" danh sách M4.3.2).
+  const showResearchExtras = groupFilter === "all" || groupFilter === "research";
+  const showExecutiveExtras = groupFilter === "all" || groupFilter === "executive";
+
+  const activeChip = groupChips.find((c) => c.key === groupFilter);
+  const listHeading = groupFilter === "all" ? "Toàn đội" : (activeChip?.label ?? "Agent");
+
   const totals = agentsQuery.data?.totals;
   const totalTokens =
     totals ? totals.totalTokensIn + totals.totalTokensOut : null;
@@ -234,9 +268,10 @@ export function AgentsWorkspace() {
       aria-labelledby="workspace-tab-agents"
       className="flex flex-col gap-6"
     >
-      {/* Header workspace: mô tả đội + tổng chi phí AI + nút chọn nhóm
-          hiển thị (phiên #47 — thay nút "Chạy chu kỳ đầy đủ" đã dời về
-          nút "Chạy agent" duy nhất trên thanh bar trên cùng) */}
+      {/* Header workspace: mô tả đội + tổng chi phí AI + nút chọn model
+          (phiên #47 — nút "Chạy chu kỳ đầy đủ" đã dời về nút "Chạy agent"
+          duy nhất trên thanh bar trên cùng; bộ lọc nhóm #47 đã chuyển thành
+          chip-toggle M4.3.3 trong card "Sức khoẻ đội agent" bên dưới) */}
       <Card>
         <CardContent className="flex flex-col gap-4 py-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
@@ -264,7 +299,7 @@ export function AgentsWorkspace() {
             <p className="tabular-nums text-xs text-muted-foreground">
               {agentsQuery.isLoading
                 ? "…"
-                : `${visibleAgentCount}/${agents.length} đang xem`}
+                : `${visibleAgents.length}/${agents.length} đang xem`}
               {totals
                 ? ` · $${totals.totalCostUsd.toFixed(2)} chi phí AI lũy kế · ${formatVolume(totalTokens ?? 0)} tokens`
                 : ""}
@@ -274,73 +309,26 @@ export function AgentsWorkspace() {
                 model nào thì TOÀN ĐỘI agent dùng model đó từ lượt gọi tiếp
                 theo; kèm kiểm tra sức khoẻ model (đo thật). */}
             <LlmModelPicker />
-
-            {/* Phiên #47 — MỘT nút mở dropdown tick đa chọn nhóm hiển thị,
-                thay hàng pill 6 nút bày sẵn của phiên #45 (user: kém thẩm mỹ). */}
-            {!agentsQuery.isLoading && !agentsQuery.isError && sections.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="min-h-11 gap-2"
-                    aria-label="Chọn nhóm agent hiển thị"
-                  >
-                    <ListFilter className="size-4" aria-hidden="true" />
-                    Nhóm hiển thị
-                    <Badge
-                      variant="secondary"
-                      className="px-1.5 tabular-nums"
-                      aria-hidden="true"
-                    >
-                      {selectedGroupCount}/{sections.length}
-                    </Badge>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-80">
-                  <DropdownMenuLabel>Nhóm agents hiển thị</DropdownMenuLabel>
-                  {sections.map((s) => (
-                    <DropdownMenuCheckboxItem
-                      key={s.key}
-                      checked={selectedGroups.has(s.key)}
-                      onCheckedChange={() => toggleGroup(s.key)}
-                      // Giữ menu mở sau mỗi tick — người dùng tick/detick
-                      // nhiều nhóm liên tiếp (mặc định Radix đóng menu).
-                      onSelect={(e) => e.preventDefault()}
-                      className="min-h-11 gap-2 sm:min-h-9"
-                      aria-label={`${s.label} — ${s.agents.length} agent`}
-                    >
-                      <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                        <span className="truncate text-sm">{s.label}</span>
-                        <span className="truncate text-[11px] text-muted-foreground">
-                          {s.description}
-                        </span>
-                      </span>
-                      <Badge
-                        variant="secondary"
-                        className="ml-auto shrink-0 px-1.5 text-[10px] tabular-nums"
-                      >
-                        {s.agents.length}
-                      </Badge>
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      setSelectedGroups(
-                        allGroupsSelected ? new Set() : new Set(sections.map((s) => s.key))
-                      )
-                    }
-                    className="min-h-11 gap-2 sm:min-h-9"
-                  >
-                    <ListFilter className="size-4" aria-hidden="true" />
-                    {allGroupsSelected ? "Bỏ chọn tất cả" : "Chọn tất cả"}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
           </div>
         </CardContent>
       </Card>
+
+      {/* M4.3.1 — "Sức khoẻ đội agent": tier-1 của module, đặt đầu workspace
+          trước mọi nhóm — 4 ô KPI squad + chip lọc nhóm + dải 23 chấm trạng
+          thái → ai đang chạy/ai lỗi đọc trong 1 giây (hết "wall of gray"). */}
+      {agentsQuery.isLoading ? (
+        <SquadHealthSkeleton />
+      ) : !agentsQuery.isError && agents.length > 0 ? (
+        <SquadHealthCard
+          agents={agents}
+          stripAgents={visibleAgents}
+          groupChips={groupChips}
+          groupFilter={groupFilter}
+          onGroupFilter={setGroupFilter}
+          selectedId={selectedId}
+          onSelectAgent={(a) => setSelectedId((cur) => (cur === a.id ? cur : a.id))}
+        />
+      ) : null}
 
       {/* E-P0-5 — KPI vận hành nhóm Điều hành & Thực thi (funnel + churn + AOV +
           slippage) — đặt trên roster để trader nhìn hiệu suất nhóm trước chi tiết */}
@@ -363,84 +351,89 @@ export function AgentsWorkspace() {
           )}
 
           {agentsQuery.isLoading ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <div
+              className="flex flex-col gap-1.5"
+              aria-busy="true"
+              aria-label="Đang tải danh sách agent"
+            >
               {Array.from({ length: 8 }).map((_, i) => (
-                <Skeleton key={i} className="h-48 w-full rounded-xl" />
+                <Skeleton key={i} className="h-12 w-full rounded-lg" />
               ))}
             </div>
           ) : agentsQuery.isError ? (
             <p className="text-sm text-down">
               {agentsQuery.error?.message ?? "Không tải được danh sách agent."}
             </p>
-          ) : visibleSections.length === 0 ? (
-            /* Phiên #47 — người dùng bỏ tick hết mọi nhóm */
-            <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-8 text-center">
-              <ListFilter className="size-8 text-muted-foreground" aria-hidden="true" />
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Chưa chọn nhóm nào — mở “Nhóm hiển thị” ở trên để tick chọn
-                nhóm agent cần xem.
-              </p>
-            </div>
           ) : (
-            visibleSections.map((section, i) => (
-              <Fragment key={section.key}>
-                <section
-                  aria-label={section.label}
-                  className={cn("flex flex-col gap-3", i > 0 && "border-t border-border pt-4")}
+            /* M4.3.2 — danh sách agent GỌN: 1 hàng/agent; thẻ đầy
+               AgentRosterCard chỉ render tại chỗ khi agent đang được chọn. */
+            <section aria-label="Danh sách agent" className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  {listHeading}
+                </h3>
+                <Badge
+                  variant="secondary"
+                  className="px-1.5 py-0 text-[10px] tabular-nums"
                 >
-                  {/* Header nhóm — dính lên khi cuộn vùng roster ở desktop */}
-                  <div className="flex flex-col gap-0.5 xl:sticky xl:top-0 xl:z-10 xl:bg-background/95 xl:py-1 xl:backdrop-blur">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        {section.label}
-                      </h3>
-                      <Badge
-                        variant="secondary"
-                        className="px-1.5 py-0 text-[10px] tabular-nums"
-                      >
-                        {section.agents.length} agent
-                      </Badge>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground/80">
-                      {section.description}
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                    {section.agents.map((a) => (
-                      <AgentRosterCard
-                        key={a.id}
-                        agent={a}
-                        selected={selectedId === a.id}
-                        onSelect={() =>
-                          setSelectedId((cur) => (cur === a.id ? cur : a.id))
-                        }
-                        onRun={() => handleRun(a.id)}
-                        runPending={
-                          singleRun.isPending && singleRun.variables === a.id
-                        }
-                        retryAfterSeconds={retryAfter[a.id] ?? null}
-                      />
-                    ))}
-                  </div>
-                </section>
-                {/* B8 — Bảng điểm Hội đồng Nghiên cứu: NGAY DƯỚI section nhóm
-                    research (chốt user §0.3 — blueprint §3.6/Bước 8) */}
-                {/* B14 — Ma trận độ phủ thị trường: ĐẶT SAU scorecard
-                    (§3.7/Bước 14 — cùng tab Đội Agent theo chốt user §0.3) */}
-                {section.key === "research" && showResearchExtras && (
-                  <>
-                    <ResearchScorecard />
-                    <CoverageMatrix />
-                  </>
-                )}
-                {/* E-P1-4 — Bảng điểm Chủ tịch (A1): NGAY DƯỚI section nhóm
-                    executive — cùng pattern B8 (mô tả, không phán xét §6.5) */}
-                {section.key === "executive" && <ChairmanScorecardCard />}
-                {/* K4 (#94 — AUTONOMY_BLUEPRINT §7.3): khối GIAO VIỆC của Ban
-                    Điều hành — nhiệm vụ đã giao + cấu hình k4 (dưới ChairmanScorecard) */}
-                {section.key === "executive" && <K4AssignedCard />}
-              </Fragment>
-            ))
+                  {visibleAgents.length} agent
+                </Badge>
+              </div>
+              {visibleAgents.length === 0 ? (
+                <EmptyState
+                  icon={Bot}
+                  title={agents.length === 0 ? "Chưa có agent nào" : "Nhóm này chưa có agent"}
+                  description="Đổi bộ lọc nhóm ở thẻ “Sức khoẻ đội agent” phía trên để xem lại toàn đội."
+                />
+              ) : (
+                <ul className="flex flex-col gap-1.5">
+                  {visibleAgents.map((a) =>
+                    a.id === selectedId ? (
+                      <li key={a.id}>
+                        <AgentRosterCard
+                          agent={a}
+                          selected
+                          onSelect={() =>
+                            setSelectedId((cur) => (cur === a.id ? cur : a.id))
+                          }
+                          onRun={() => handleRun(a.id)}
+                          runPending={
+                            singleRun.isPending && singleRun.variables === a.id
+                          }
+                          retryAfterSeconds={retryAfter[a.id] ?? null}
+                        />
+                      </li>
+                    ) : (
+                      <li key={a.id}>
+                        <AgentCompactRow
+                          agent={a}
+                          onSelect={() =>
+                            setSelectedId((cur) => (cur === a.id ? cur : a.id))
+                          }
+                        />
+                      </li>
+                    ),
+                  )}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {/* B8/B14/E-P1-4/K4 — component GIỮ NGUYÊN; M4.3.2 gọn hoá roster
+              chuyển các khối này về đáy danh sách (ResearchScorecard giữ
+              "dưới cùng" theo spec; ChairmanScorecard + K4 theo sau đúng
+              thứ tự tương đối cũ research-extras → executive-extras). */}
+          {!agentsQuery.isLoading && !agentsQuery.isError && showResearchExtras && (
+            <>
+              <ResearchScorecard />
+              <CoverageMatrix />
+            </>
+          )}
+          {!agentsQuery.isLoading && !agentsQuery.isError && showExecutiveExtras && (
+            <>
+              <ChairmanScorecardCard />
+              <K4AssignedCard />
+            </>
           )}
         </div>
 
@@ -463,12 +456,324 @@ export function AgentsWorkspace() {
                 aria-hidden="true"
               />
               <p className="max-w-sm text-sm text-muted-foreground">
-                Chọn một agent để xem hồ sơ, chạy riêng và chat trực tiếp
+                Chọn một agent (bấm chấm squad hoặc hàng trong danh sách) để xem
+                hồ sơ, chạy riêng và chat trực tiếp
               </p>
             </div>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════ M4.3.1 — Card "Sức khoẻ đội agent" (tier-1 module) ═══════════════ */
+
+/** Ô KPI "Chu kỳ gần nhất": "HH:mm · cách N giờ" (giờ Việt Nam ICT). */
+function cycleValue(d: Date): ReactNode {
+  const hhmm = d.toLocaleTimeString("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const age = shortAge(d);
+  return (
+    <>
+      {hhmm}
+      {/* <sm gọn "11:35 · 3 giờ"; sm+ đủ chỗ "11:35 · cách 3 giờ" (spec) */}
+      <span className="hidden sm:inline"> · cách {age}</span>
+      <span className="sm:hidden"> · {age}</span>
+    </>
+  );
+}
+
+/** Chip-toggle lọc nhóm (M4.3.3) — pattern segmented control portfolio
+ *  (#110 M4.1): active = bg-primary/15 text-primary, kèm đếm tabular-nums. */
+function SquadChip({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={cn(
+        "flex min-h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40",
+        active
+          ? "border-primary/40 bg-primary/15 text-primary"
+          : "border-border/60 text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SquadHealthCard({
+  agents,
+  stripAgents,
+  groupChips,
+  groupFilter,
+  onGroupFilter,
+  selectedId,
+  onSelectAgent,
+}: {
+  /** Toàn đội (23) — ô KPI luôn tính trên cả đội, không theo filter. */
+  agents: AgentCard[];
+  /** Agents đã lọc — dải chấm + legend đếm theo tập này. */
+  stripAgents: AgentCard[];
+  groupChips: SquadGroupChip[];
+  groupFilter: string;
+  onGroupFilter: (key: string) => void;
+  selectedId: string | null;
+  onSelectAgent: (agent: AgentCard) => void;
+}) {
+  const runningCount = agents.filter((a) => a.status === "RUNNING").length;
+  const errorCount = agents.filter((a) => a.status === "ERROR").length;
+  const avgHealth =
+    agents.length > 0
+      ? agents.reduce((s, a) => s + (a.healthScore ?? 0), 0) / agents.length
+      : null;
+  const ranAgents = agents.filter((a) => a.lastRunAt);
+  const lastCycleAt =
+    ranAgents.length > 0
+      ? new Date(Math.max(...ranAgents.map((a) => Date.parse(a.lastRunAt as string))))
+      : null;
+
+  return (
+    <Card className="gap-4" aria-labelledby="squad-health-heading">
+      <CardHeader>
+        <CardTitle
+          id="squad-health-heading"
+          className="flex items-center gap-2 text-base"
+        >
+          <Activity className="size-4 text-primary" aria-hidden="true" />
+          Sức khoẻ đội agent
+        </CardTitle>
+        <CardDescription>
+          Đọc cả đội trong 1 giây — bấm chấm để mở hồ sơ agent đó.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {/* 4 ô KPI squad (tier-1) — tính trên TOÀN ĐỘI bất kể filter */}
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <StatTile
+            label="Đang chạy"
+            value={runningCount}
+            tone="primary"
+            icon={Play}
+            sub={`trên ${agents.length} agent`}
+          />
+          <StatTile
+            label="Lỗi"
+            value={errorCount}
+            tone={errorCount > 0 ? "down" : "neutral"}
+            icon={AlertTriangle}
+            sub={errorCount > 0 ? "cần xem ngay" : "không có lỗi"}
+          />
+          <StatTile
+            label="Sức khoẻ TB"
+            value={avgHealth == null ? "—" : Math.round(avgHealth).toLocaleString("vi-VN")}
+            tone={
+              avgHealth == null
+                ? "neutral"
+                : avgHealth >= 70
+                  ? "up"
+                  : avgHealth >= 50
+                    ? "flat"
+                    : "down"
+            }
+            icon={HeartPulse}
+            sub="đội khỏe ≥70"
+          />
+          <StatTile
+            label="Chu kỳ gần nhất"
+            value={lastCycleAt ? cycleValue(lastCycleAt) : "—"}
+            icon={History}
+            sub={
+              lastCycleAt
+                ? `${ranAgents.length}/${agents.length} agent đã chạy`
+                : "chưa có chu kỳ nào"
+            }
+          />
+        </div>
+
+        {/* M4.3.3 — chip lọc nhóm nhanh: lọc CẢ dải chấm squad lẫn danh sách
+            hàng bên dưới; mobile cuộn ngang không tràn (custom-scrollbar). */}
+        <div
+          className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5"
+          role="group"
+          aria-label="Lọc nhóm agent nhanh"
+        >
+          <SquadChip
+            active={groupFilter === "all"}
+            onClick={() => onGroupFilter("all")}
+            title="Mọi nhóm agent"
+          >
+            Tất cả
+            <span className="tabular-nums text-[10px] opacity-70">{agents.length}</span>
+          </SquadChip>
+          {groupChips.map((c) => (
+            <SquadChip
+              key={c.key}
+              active={groupFilter === c.key}
+              onClick={() => onGroupFilter(c.key)}
+              title={c.description || c.label}
+            >
+              {c.label}
+              <span className="tabular-nums text-[10px] opacity-70">{c.count}</span>
+            </SquadChip>
+          ))}
+        </div>
+
+        {/* Dải 23 chấm trạng thái + legend 4 mục (squad-health-strip) */}
+        <SquadHealthStrip
+          agents={stripAgents}
+          selectedId={selectedId}
+          onSelect={onSelectAgent}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Skeleton đúng kích thước card squad (4 ô KPI + chip + dải chấm + legend). */
+function SquadHealthSkeleton() {
+  return (
+    <Card aria-busy="true" aria-label="Đang tải thống kê squad">
+      <CardHeader className="pb-3">
+        <Skeleton className="h-6 w-56" />
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[78px] rounded-lg" />
+          ))}
+        </div>
+        <Skeleton className="h-8 w-full max-w-xl" />
+        <Skeleton className="h-5 w-80" />
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ═══════════════ M4.3.2 — Hàng agent GỌN (thay 23 thẻ đầy) ═══════════════ */
+
+/**
+ * Một hàng agent: [chấm trạng thái] [tên + nhóm nhỏ dưới] [mini-bar sức
+ * khoẻ w-16] [chip model hoặc "chưa chạy"] [tuổi chu kỳ] — bấm mở thẻ đầy
+ * (AgentRosterCard render tại chỗ) + panel chi tiết bên phải. Mobile <sm:
+ * xếp 2 dòng tự nhiên, touch target min-h-11 (44px).
+ */
+function AgentCompactRow({
+  agent,
+  onSelect,
+}: {
+  agent: AgentCard;
+  onSelect: () => void;
+}) {
+  const statusLabel = squadStatusLabel(agent.status);
+  const health = Math.max(0, Math.min(100, agent.healthScore));
+  const ageText = agent.lastRunAt
+    ? formatDistanceToNow(new Date(agent.lastRunAt), { locale: vi, addSuffix: true })
+    : null;
+  const ageTitle = agent.lastRunAt
+    ? `Chạy cuối ${new Date(agent.lastRunAt).toLocaleString("vi-VN", {
+        timeZone: "Asia/Ho_Chi_Minh",
+      })}`
+    : "Agent này chưa từng chạy chu kỳ nào";
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Xem hồ sơ agent ${agent.name} — ${agent.groupLabel}`}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        "flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-lg border bg-card px-3 py-2 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        health < 60 ? "border-amber-500/50 ring-1 ring-amber-500/30" : "border-border",
+      )}
+    >
+      <span
+        className={cn("size-2 shrink-0 rounded-full", squadDotClass(agent.status))}
+        title={statusLabel}
+        aria-hidden="true"
+      />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5 leading-tight">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-sm font-medium">{agent.name}</span>
+          {/* Mobile — tuổi chu kỳ rút lên dòng 1 (chip model ẩn <md) */}
+          <span
+            className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground sm:hidden"
+            title={ageTitle}
+          >
+            {ageText ?? "chưa chạy"}
+          </span>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="truncate text-[11px] text-muted-foreground">
+            {agent.groupLabel}
+          </span>
+          {/* Mobile — mini-bar sức khoẻ thu nhỏ xuống dòng 2 */}
+          <span
+            className="flex shrink-0 items-center sm:hidden"
+            title={`Sức khoẻ ${health}%`}
+          >
+            <Progress
+              value={health}
+              className={cn("h-1.5 w-10", agentHealthColor(health))}
+              aria-label={`Sức khoẻ ${health}%`}
+            />
+          </span>
+        </span>
+      </span>
+      {/* Desktop — mini-bar w-16 + chip model + tuổi chu kỳ */}
+      <span
+        className="hidden w-16 shrink-0 items-center sm:flex"
+        title={`Sức khoẻ ${health}%`}
+      >
+        <Progress
+          value={health}
+          className={cn("h-1.5 w-16", agentHealthColor(health))}
+          aria-label={`Sức khoẻ ${health}%`}
+        />
+      </span>
+      {agent.lastRunAt ? (
+        <ChipMeta
+          className="hidden max-w-36 overflow-hidden md:inline-flex"
+          title={`Model AI · ${agent.model}`}
+        >
+          <span className="truncate font-mono">{agent.model}</span>
+        </ChipMeta>
+      ) : (
+        <ChipMeta
+          className="hidden md:inline-flex"
+          title="Agent này chưa từng chạy chu kỳ nào"
+        >
+          chưa chạy
+        </ChipMeta>
+      )}
+      <span
+        className="hidden shrink-0 whitespace-nowrap text-[11px] text-muted-foreground sm:inline"
+        title={ageTitle}
+      >
+        {ageText ?? "—"}
+      </span>
     </div>
   );
 }

@@ -204,7 +204,7 @@ export function RelationsCard() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 gap-1.5 px-2.5"
+              className="h-9 gap-1.5 px-2.5"
               onClick={() => insight.mutate()}
               disabled={busy}
               aria-label="Tổng hợp nhận định quan hệ thị trường bằng LLM"
@@ -220,7 +220,7 @@ export function RelationsCard() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 gap-1.5 px-2.5"
+              className="h-9 gap-1.5 px-2.5"
               onClick={() => refresh.mutate()}
               disabled={busy}
               aria-label="Chạy lại engine học quan hệ thị trường"

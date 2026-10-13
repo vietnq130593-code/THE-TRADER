@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ChipMeta } from "@/components/dashboard/kit";
 import { useUiStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { formatDateTime } from "@/lib/format";
@@ -68,7 +69,7 @@ export function AssessmentBrief() {
               <Button
                 variant="ghost"
                 size="sm"
-                className="gap-1 text-xs text-muted-foreground"
+                className="min-h-9 gap-1 text-xs text-muted-foreground"
                 onClick={() => setActiveWorkspace("synthesis")}
                 aria-label="Mở workspace Tổng hợp"
               >
@@ -133,27 +134,31 @@ function AssessmentBriefBody({ assessment }: { assessment: MarketAssessmentView 
           <ProbSegment value={pFlat} className="bg-muted-foreground/25" tone="text-foreground" label="Đi ngang" />
           <ProbSegment value={pDown} className="bg-down" tone="text-down" label="Giảm" />
         </div>
+        {/* M4.4.2 (#110-d) — "đọc số" không phải đo thanh: 2 chip pUp/pDown cạnh bar */}
+        <ChipMeta
+          tone="up"
+          title={`Xác suất hậu nghiệm thị trường TĂNG — ${pct1(pUp)}`}
+        >
+          Tăng {pct1(pUp)}
+        </ChipMeta>
+        <ChipMeta
+          tone="down"
+          title={`Xác suất hậu nghiệm thị trường GIẢM — ${pct1(pDown)}`}
+        >
+          Giảm {pct1(pDown)}
+        </ChipMeta>
       </div>
 
-      <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
-        <span>
-          Độ tin cậy{" "}
-          <span className="tabular-nums font-semibold text-foreground">
-            {pct1(assessment.confidence)}
-          </span>
-        </span>
-        <span>
-          Bất đồng{" "}
-          <span className="tabular-nums font-semibold text-foreground">
-            {pct1(assessment.disagreement)}
-          </span>
-        </span>
-        <span>
-          Số bằng chứng{" "}
-          <span className="tabular-nums font-semibold text-foreground">
-            {assessment.evidenceCount.toLocaleString("vi-VN")}
-          </span>
-        </span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <ChipMeta title="Độ tin cậy posterior do Bộ tổng hợp Bayes tự báo cáo">
+          Độ tin cậy {pct1(assessment.confidence)}
+        </ChipMeta>
+        <ChipMeta title="Mức bất đồng giữa các agent trước khi tổng hợp">
+          Bất đồng {pct1(assessment.disagreement)}
+        </ChipMeta>
+        <ChipMeta title="Số bằng chứng (chỉ số + tin tức) đưa vào suy luận">
+          {assessment.evidenceCount.toLocaleString("vi-VN")} bằng chứng
+        </ChipMeta>
         {assessment.veto.blocked && (
           <Badge variant="outline" className="border-down/40 text-down">
             Ủy ban Kiểm soát phủ quyết

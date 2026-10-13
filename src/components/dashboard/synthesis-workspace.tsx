@@ -53,6 +53,17 @@ import { AlgorithmsTab } from "@/components/dashboard/ml/algorithms-tab";
 import { DataTab } from "@/components/dashboard/ml/data-tab";
 import { TuningTab } from "@/components/dashboard/ml/tuning-tab";
 import { SweepTab } from "@/components/dashboard/ml/sweep-tab";
+// M4.7 (#110 — UIUX_UPGRADE_BLUEPRINT §4): hàng "1 dòng đọc nhanh" (kết luận
+// + 3 số thật) mở đầu mỗi tab — trừ tab Nhận định đã có AssessmentHeaderCard.
+import {
+  AlgorithmsQuickRead,
+  AutomlQuickRead,
+  DataQuickRead,
+  EvidenceQuickRead,
+  MlQuickRead,
+  NetworkQuickRead,
+  TuningQuickRead,
+} from "@/components/dashboard/synthesis/quick-read";
 import { useUiStore } from "@/lib/store";
 import { changeColor, formatDateTime, formatVnd } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -337,6 +348,12 @@ export function SynthesisWorkspace() {
 
         {/* ── Tab 2 · Bằng chứng — bậc 3 cổ phiếu + drivers + lịch sử ── */}
         <TabsContent value="evidence" className="mt-4 flex flex-col gap-6">
+          {/* M4.7 (#110) — 1 dòng đọc nhanh: kết luận + 3 số thật từ assessment */}
+          <EvidenceQuickRead
+            assessment={readyAssessment}
+            historyCount={historyAsc.length}
+            loading={isLoading}
+          />
           {readyAssessment ? (
             <>
               {/* 4. Bậc 3 — bảng cổ phiếu */}
@@ -356,32 +373,38 @@ export function SynthesisWorkspace() {
         </TabsContent>
 
         {/* ── Tab 3 · Học máy — 3 mô hình học thật + hành động ── */}
-        <TabsContent value="ml" className="mt-4">
+        <TabsContent value="ml" className="mt-4 flex flex-col gap-4">
+          <MlQuickRead />
           <MlOverviewTab />
         </TabsContent>
 
         {/* ── Tab 4 · Mạng thần kinh — MLP trọng số thật + GRU + ensemble ── */}
-        <TabsContent value="network" className="mt-4">
+        <TabsContent value="network" className="mt-4 flex flex-col gap-4">
+          <NetworkQuickRead />
           <NnTab />
         </TabsContent>
 
         {/* ── Tab 5 · Thuật toán — 10 thuật toán đang chạy ── */}
-        <TabsContent value="algorithms" className="mt-4">
+        <TabsContent value="algorithms" className="mt-4 flex flex-col gap-4">
+          <AlgorithmsQuickRead />
           <AlgorithmsTab />
         </TabsContent>
 
         {/* ── Tab 6 · Dữ liệu & kiến trúc — pipeline + trình duyệt DB ── */}
-        <TabsContent value="data" className="mt-4">
+        <TabsContent value="data" className="mt-4 flex flex-col gap-4">
+          <DataQuickRead />
           <DataTab />
         </TabsContent>
 
         {/* ── Tab 7 · Tinh chỉnh — ô nhập vận hành thật ── */}
-        <TabsContent value="tuning" className="mt-4">
+        <TabsContent value="tuning" className="mt-4 flex flex-col gap-4">
+          <TuningQuickRead />
           <TuningTab />
         </TabsContent>
 
         {/* ── Tab 8 · Tự động tìm kiếm — sweep AutoML L1 champion board (C1 #99) ── */}
-        <TabsContent value="automl" className="mt-4">
+        <TabsContent value="automl" className="mt-4 flex flex-col gap-4">
+          <AutomlQuickRead />
           <SweepTab />
         </TabsContent>
       </Tabs>

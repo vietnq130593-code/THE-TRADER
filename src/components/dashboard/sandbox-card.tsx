@@ -36,6 +36,9 @@ import { useUiStore } from "@/lib/store";
 import { useSettings } from "@/hooks/use-settings";
 import { changeColor, formatDateTime, formatPct, formatSigned, formatVnd } from "@/lib/format";
 import type { KSandboxState } from "@/lib/types";
+// M4.8 (#110 — UIUX_UPGRADE_BLUEPRINT §4): chip số bước 3 cạnh CardTitle
+// (1 Kết nối → 2 Chạy agent → 3 Thử nghiệm).
+import { StepBadge } from "@/components/dashboard/settings/step-badge";
 
 /**
  * K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6): khối "Cơ chế thử nghiệm (tiền ảo)"
@@ -188,7 +191,7 @@ function MoneyControl({
             aria-label={`${label} (VND)`}
             value={raw}
             onChange={(e) => onChange(groupDigits(e.target.value))}
-            className="pr-8 tabular-nums"
+            className="min-h-11 pr-8 tabular-nums focus-visible:ring-2 focus-visible:ring-ring/40"
           />
           <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
             ₫
@@ -196,7 +199,7 @@ function MoneyControl({
         </div>
         <Button
           variant="outline"
-          className="min-h-10 gap-2 sm:w-auto"
+          className="min-h-11 gap-2 sm:w-auto"
           disabled={!valid || pending || disabled}
           onClick={onConfirm}
         >
@@ -307,6 +310,7 @@ export function SandboxCard() {
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+          <StepBadge n={3} label="Thử nghiệm" />
           <FlaskConical className="size-4 text-muted-foreground" aria-hidden="true" />
           Cơ chế thử nghiệm (tiền ảo)
           {data?.enabled && (
@@ -369,14 +373,14 @@ export function SandboxCard() {
                   aria-label="Số tiền ảo kích hoạt (VND)"
                   value={activateRaw}
                   onChange={(e) => setActivateRaw(groupDigits(e.target.value))}
-                  className="pr-8 tabular-nums"
+                  className="min-h-11 pr-8 tabular-nums focus-visible:ring-2 focus-visible:ring-ring/40"
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
                   ₫
                 </span>
               </div>
               <Button
-                className="min-h-10 gap-2 sm:w-auto"
+                className="min-h-11 gap-2 sm:w-auto"
                 disabled={!activateValid || mutation.isPending}
                 onClick={() => mutation.mutate({ action: "activate", amount: activateAmount })}
               >
@@ -516,7 +520,7 @@ export function SandboxCard() {
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
-                className="min-h-10 gap-2"
+                className="min-h-11 gap-2"
                 disabled={mutation.isPending}
                 onClick={() =>
                   mutation.mutate({ action: data?.paused ? "resume" : "pause" })
@@ -535,7 +539,7 @@ export function SandboxCard() {
               </Button>
               <Button
                 variant="outline"
-                className="min-h-10 gap-2 text-down"
+                className="min-h-11 gap-2 text-down"
                 disabled={mutation.isPending}
                 onClick={() => setResetDialogOpen(true)}
                 aria-label="Đặt lại tài khoản thử nghiệm về 0"
@@ -656,13 +660,18 @@ export function SandboxCard() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setResetDialogOpen(false)}>
+            <Button variant="outline" className="min-h-11" onClick={() => setResetDialogOpen(false)}>
               Huỷ
             </Button>
             <Button
               variant="destructive"
-              className="gap-2"
+              className="min-h-11 gap-2"
               disabled={mutation.isPending}
+              title={
+                mutation.isPending
+                  ? "Đang xoá vòng thử nghiệm — chờ hoàn tất"
+                  : "Xoá toàn bộ lệnh · vị thế · giao dịch · đường cong của tài khoản thử nghiệm (giữ audit tổng kết)"
+              }
               onClick={() => mutation.mutate({ action: "reset" })}
             >
               {mutation.isPending && mutation.variables?.action === "reset" ? (

@@ -306,6 +306,10 @@ export interface BasketStats {
   vol30d: number | null; // độ lệch chuẩn lợi suất ngày (%)
   bestDay: number | null;
   worstDay: number | null;
+  /** #110 M4.5.1 — chuỗi NAV lũy kế 30 phiên (base 100) để vẽ sparkline mỗi rổ
+   *  trên card Đa rổ (UIUX_UPGRADE_BLUEPRINT §4 M4.5) — cùng dữ liệu đã tính
+   *  cho ret30d, không query thêm. */
+  nav30d: number[];
 }
 
 function windowRet(series: BasketDailyPoint[], n: number): number | null {
@@ -332,6 +336,16 @@ export async function basketStats(window = 30): Promise<BasketStats[]> {
     const def = BASKET_DEFS.find((b) => b.key === s.key)!;
     const last30 = s.series.slice(-window);
     const rets = last30.map((p) => p.ret);
+    // #110 M4.5.1 — NAV lũy kế base 100 từ lợi suất ngày (compound — khớp số
+    // ret30d trên cùng chuỗi, sparkline không thể "trông khác số").
+    const nav30d: number[] = [];
+    {
+      let acc = 100;
+      for (const p of last30) {
+        acc *= 1 + p.ret / 100;
+        nav30d.push(acc);
+      }
+    }
     return {
       key: s.key,
       label: def.label,
@@ -347,6 +361,7 @@ export async function basketStats(window = 30): Promise<BasketStats[]> {
       vol30d: stdev(rets),
       bestDay: rets.length ? Math.max(...rets) : null,
       worstDay: rets.length ? Math.min(...rets) : null,
+      nav30d,
     };
   });
 }

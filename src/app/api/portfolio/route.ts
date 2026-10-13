@@ -131,6 +131,32 @@ export async function GET(req: Request) {
           100
         : 0;
 
+    // #110 M4.1.1 — đường cong equity thế giới đang xem: CashSnapshot của ĐÚNG
+    // brokerAccount này (90 điểm gần nhất, cũ → mới). Paper sau reset thường
+    // 0 điểm → UI tự ẩn curve (trung thực trạng thái §2.5, không vẽ đường rỗng).
+    const snapshots = await db.cashSnapshot.findMany({
+      where: { brokerAccountId: account.id },
+      orderBy: { createdAt: "desc" },
+      take: 90,
+      select: { createdAt: true, equity: true },
+    });
+    const equityCurve = snapshots
+      .map((s) => ({
+        createdAt: s.createdAt.toISOString(),
+        equity: Number(s.equity),
+      }))
+      .reverse();
+
+    // #110 M4.1.1 — Sức mua ước tính (minh bạch công thức — cùng một nguồn logic
+    // chip tooltip Header §5.4: buyingPower = cash + positionsMv×RATIO − marginUsed;
+    // RATIO 0.5 giả lập ký quỹ 50%, KHÔNG phải hạn mức thật VNDIRECT).
+    const MARGIN_ROOM_RATIO = 0.5;
+    const cashBalance = Number(account.cashBalance);
+    const marginRoom = Math.round(
+      totalMarketValue * MARGIN_ROOM_RATIO - Number(account.marginUsed),
+    );
+    const buyingPower = cashBalance + Math.max(0, marginRoom);
+
     return NextResponse.json(
       toPlain({
         account: {
@@ -154,6 +180,9 @@ export async function GET(req: Request) {
           totalEquity: Number(account.cashBalance) + totalMarketValue,
           dayChangePct,
         },
+        /** #110 M4.1 — UIUX_UPGRADE_BLUEPRINT: curve + sức mua cho tier-1. */
+        equityCurve,
+        buyingPower,
       })
     );
   } catch (err) {

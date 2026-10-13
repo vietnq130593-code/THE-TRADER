@@ -104,7 +104,7 @@ export function AgentSystemBrief() {
             <Button
               variant="ghost"
               size="sm"
-              className="gap-1 text-xs text-muted-foreground"
+              className="min-h-9 gap-1 text-xs text-muted-foreground"
               onClick={() => setActiveWorkspace("agents")}
               aria-label="Mở workspace Đội Agent"
             >

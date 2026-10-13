@@ -3,11 +3,11 @@
 import * as React from "react";
 import {
   CalendarClock,
+  CircleHelp,
   ClipboardList,
   Loader2,
   Pause,
   RefreshCw,
-  Sparkles,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,8 +21,19 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -153,6 +164,24 @@ export function K4AssignedCard() {
               <Label htmlFor="k4-enabled" className="text-xs font-medium">
                 Cho phép Chủ tịch giao việc
               </Label>
+              {/* M4.9 — legend dài (quy tắc giao việc) chuyển sang popover “?” */}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                    aria-label="Quy tắc giao việc của Chủ tịch"
+                  >
+                    <CircleHelp className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-80 text-xs leading-relaxed text-muted-foreground">
+                  <p className="mb-1.5 text-xs font-semibold text-foreground">Quy tắc giao việc</p>
+                  Chỉ <strong>Chủ tịch</strong> giao · chỉ nhóm ngoài Ban Điều hành
+                  (Nghiên cứu/Kiểm soát/Nền tảng/Học máy) · nhiệm vụ đang treo
+                  <strong> không tự huỷ</strong> khi tắt — vẫn chạy đúng lịch.
+                </PopoverContent>
+              </Popover>
             </div>
             <Button
               variant="ghost"
@@ -199,55 +228,90 @@ export function K4AssignedCard() {
               />
             </div>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              Quy tắc: chỉ <strong>Chủ tịch</strong> giao · chỉ nhóm ngoài Ban
-              Điều hành (Nghiên cứu/Kiểm soát/Nền tảng/Học máy) · nhiệm vụ đang
-              treo <strong>không tự huỷ</strong> khi tắt — vẫn chạy đúng lịch.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-11 gap-1.5 sm:h-9"
-              disabled={!limitsDirty || !limitsValid || updateK4.isPending}
-              title={
-                limitsValid
-                  ? "Lưu giới hạn giao việc"
-                  : "Giới hạn phải là số nguyên 1..10"
-              }
-              onClick={() =>
-                updateK4.mutate(
-                  {
-                    maxOpenTasksPerAgent: Number(maxOpen),
-                    maxTasksPerCycle: Number(maxCycle),
-                  },
-                  {
-                    onSuccess: () => {
-                      setMaxOpenInput(null);
-                      setMaxCycleInput(null);
+          {/* M4.9 — nút chính disabled-có-lý-do (tooltip #102 — thay title tĩnh) */}
+          <div className="flex justify-end">
+            {limitsDirty && limitsValid && !updateK4.isPending ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-11 gap-1.5 sm:h-9"
+                onClick={() =>
+                  updateK4.mutate(
+                    {
+                      maxOpenTasksPerAgent: Number(maxOpen),
+                      maxTasksPerCycle: Number(maxCycle),
                     },
-                  }
-                )
-              }
-            >
-              {updateK4.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              ) : null}
-              Lưu giới hạn
-            </Button>
+                    {
+                      onSuccess: () => {
+                        setMaxOpenInput(null);
+                        setMaxCycleInput(null);
+                      },
+                    }
+                  )
+                }
+              >
+                Lưu giới hạn
+              </Button>
+            ) : (
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* span bọc để tooltip vẫn hiện trên nút disabled (pattern #102) */}
+                    <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-11 gap-1.5 sm:h-9"
+                        disabled
+                        aria-disabled="true"
+                      >
+                        {updateK4.isPending ? (
+                          <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                        ) : null}
+                        Lưu giới hạn
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-64 text-left">
+                    {!limitsValid
+                      ? "Giới hạn phải là số nguyên 1..10"
+                      : !limitsDirty
+                        ? "Chưa thay đổi giới hạn nào — chỉnh một giá trị để lưu"
+                        : "Đang lưu giới hạn…"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
           </div>
         </div>
 
         {/* ── Bảng nhiệm vụ đã giao ── */}
         <div>
-          <p className="mb-2 text-xs font-semibold">
+          <p className="mb-2 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
             Nhiệm vụ đã giao ({state.stats.assignedTotal})
             {state.stats.lastAssignedAt && (
-              <span className="ml-2 font-normal text-muted-foreground">
+              <span className="font-normal text-muted-foreground">
                 · gần nhất {formatDateTime(state.stats.lastAssignedAt)}
               </span>
             )}
+            {/* M4.9 — footnote dài chuyển sang popover “?” */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                  aria-label="Nhiệm vụ do Chủ tịch giao hiển thị thế nào"
+                >
+                  <CircleHelp className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-80 text-xs leading-relaxed text-muted-foreground">
+                Nhiệm vụ do Chủ tịch giao mang nhãn “Chủ tịch giao” trong tab
+                Nhiệm vụ của từng agent — trader xoá/sửa như nhiệm vụ thường.
+              </PopoverContent>
+            </Popover>
           </p>
           {tasks.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
@@ -335,11 +399,6 @@ export function K4AssignedCard() {
               </Table>
             </div>
           )}
-          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Sparkles className="size-3 shrink-0" aria-hidden="true" />
-            Nhiệm vụ do Chủ tịch giao mang nhãn “Chủ tịch giao” trong tab Nhiệm
-            vụ của từng agent — trader xoá/sửa như nhiệm vụ thường.
-          </p>
         </div>
       </CardContent>
     </Card>

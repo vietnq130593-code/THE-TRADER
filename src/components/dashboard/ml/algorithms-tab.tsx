@@ -26,16 +26,16 @@ import {
   Waves,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useMlStatus } from "@/hooks/use-ml";
+import { useMlStatus, type MlStatusResponse } from "@/hooks/use-ml";
 import { cn } from "@/lib/utils";
 import { nf0 } from "./shared";
 
-interface AlgoConst {
+export interface AlgoConst {
   label: string;
   value: string;
 }
 
-interface AlgoSpec {
+export interface AlgoSpec {
   id: string;
   title: string;
   file: string;
@@ -101,10 +101,12 @@ function AlgoCard({ spec }: { spec: AlgoSpec }) {
   );
 }
 
-export function AlgorithmsTab() {
-  const { data } = useMlStatus();
-
-  const specs: AlgoSpec[] = [
+/**
+ * Danh mục thuật toán — HÀM XÂY (export) để hàng “đọc nhanh” M4.7 (#110)
+ * dùng chung nguồn số “{n} thuật toán” với tab, không bản sao rải rác.
+ */
+export function buildAlgoSpecs(data: MlStatusResponse | undefined): AlgoSpec[] {
+  return [
     {
       id: "adam",
       title: "Backpropagation + Adam (MLP)",
@@ -286,6 +288,11 @@ export function AlgorithmsTab() {
         : null,
     },
   ];
+}
+
+export function AlgorithmsTab() {
+  const { data } = useMlStatus();
+  const specs = buildAlgoSpecs(data);
 
   return (
     <div className="flex flex-col gap-3">

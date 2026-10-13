@@ -1,5 +1,12 @@
-@import "tailwindcss";
+/* #110 (sự cố FS — xem worklog Task 110-V): mount ossfs /upload của sandbox
+ * chết (daemon FUSE bị OOM-kill) → mọi readdir trên đó treo vĩnh viễn →
+ * tailwind v4 auto-detection (quét từ gốc repo) kẹt → trang không compile.
+ * FIX: source(none) tắt auto-detection, chỉ quét src tường minh qua @source —
+ * toàn bộ class của app đều nằm trong src/** nên ngữ nghĩa không đổi.
+ * Khi mount /upload hồi phục có thể bỏ source(none) + @source nếu muốn. */
+@import "tailwindcss" source(none);
 @import "tw-animate-css";
+@source "../../src/**/*";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -35,6 +42,12 @@
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
   --radius: 0.625rem;
+  /* UIUX_UPGRADE_BLUEPRINT §3.1 (#110) — token bổ sung cho hệ phân cấp 3 tầng:
+   * --tile-bg = mặt ô KPI (nổi 1 mức so card, ΔL ≈ 0.02) · --tier-1-value
+   * = cỡ chữ số KPI tier-1 (§3.2 T1). Màu "đang chạy" = PRIMARY pulse nhẹ
+   * (class .animate-soft-pulse bên dưới) — ERROR giữ đỏ, PAUSED amber. */
+  --tile-bg: oklch(0.975 0.008 163);
+  --tier-1-value: 1.35rem;
   --sidebar: oklch(0.985 0.003 160);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.52 0.115 163);
@@ -75,6 +88,9 @@
   --border: oklch(1 0 0 / 13%);
   --input: oklch(1 0 0 / 16%);
   --ring: oklch(0.68 0.1 170);
+  /* UIUX_UPGRADE_BLUEPRINT §3.1 (#110) — dark: tile sáng hơn card ~0.02 L. */
+  --tile-bg: oklch(0.245 0.018 250);
+  --tier-1-value: 1.35rem;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -129,6 +145,7 @@
   --color-up: var(--up);
   --color-down: var(--down);
   --color-flat: var(--flat);
+  --color-tile-bg: var(--tile-bg);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -166,4 +183,34 @@
 /* Tabular numbers for financial data */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* UIUX_UPGRADE_BLUEPRINT §3.1/§3.2 (#110) — bậc chữ T1 cho số KPI tier-1:
+ * 700 · tabular ·tracking chặt (mọi module dùng chung — một ngôn ngữ thành phần). */
+.tier-1-value {
+  font-size: var(--tier-1-value);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* §3.1 — chấm trạng thái "đang chạy": PRIMARY pulse nhẹ 2s (ERROR đỏ tĩnh,
+ * PAUSED amber tĩnh — chỉ RUNNING động để mắt bị kéo đúng chỗ một lần). */
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+.animate-soft-pulse {
+  animation: soft-pulse 2s ease-in-out infinite;
+}
+
+/* §3.3 — KPI tile chuẩn: mặt --tile-bg + viền riêng (dùng với .tier-1-value). */
+.kpi-tile {
+  background-color: var(--tile-bg);
 }

@@ -244,13 +244,18 @@ export function PriceChart() {
               SMA20: {fmtP(bar.sma20)}
             </p>
           )}
+          {/* #110 M4.5.3 — đơn vị trung thực: giá trị giao dịch (GT) chỉ
+           * hiển thị cho tài sản VND (bars.value quy VND); KL phiên luôn có
+           * cho mọi lớp tài sản. Giá mọi nơi đã qua formatUnitPrice
+           * (F-106-01 — FX_RATE/điểm index/cents đúng đơn vị). */}
           <p className="tabular-nums text-muted-foreground">
-            KL: {formatVolume(bar.volume)} cp · GT: {formatVndCompact(bar.value)}
+            KL: {formatVolume(bar.volume)}
+            {unitKind === "VND" ? ` cp · GT: ${formatVndCompact(bar.value)}` : " phiên"}
           </p>
         </div>
       );
     },
-    [bars, fmtP]
+    [bars, fmtP, unitKind]
   );
 
   const renderRsiTip = React.useCallback(

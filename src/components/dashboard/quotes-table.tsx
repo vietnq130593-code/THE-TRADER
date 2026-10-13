@@ -2,7 +2,16 @@
 
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, Star, StarOff, TableProperties } from "lucide-react";
+import {
+  Filter,
+  Landmark,
+  Microscope,
+  Search,
+  Star,
+  StarOff,
+  TableProperties,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +27,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { EmptyState } from "@/components/dashboard/kit";
+import { basketLabel, marketsOfBasket } from "@/components/dashboard/market/basket-filter";
 import { apiGet, apiPostJson } from "@/lib/api";
 import { useUiStore } from "@/lib/store";
 import {
@@ -30,7 +41,55 @@ import {
 import type { QuoteRow, QuotesResponse, WatchlistResponse, WatchlistToggleResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function QuotesTable() {
+/**
+ * #110 M4.5.2 — props mới (optional, không phá cách dùng cũ):
+ * bảng giá nhận rổ đang lọc từ card Đa rổ (state cục bộ market-workspace).
+ */
+export interface QuotesTableProps {
+  /** Rổ đang lọc (BasketStatView.key · null = tất cả nhóm). */
+  basketFilter?: string | null;
+  /** Bỏ lọc rổ — chip "Đang lọc: … ✕" trên bảng giá. */
+  onClearBasketFilter?: () => void;
+}
+
+/**
+ * #110-g (P4 M4.10) — giá/± tách đuôi đơn vị FX (" VND" · " EUR" · " JPY"…) thành
+ * span ẩn <md: hàng tỷ giá VND=X "25.889,00 VND" (cột 113px) + "−86,0000 VND"
+ * (cột 103px) là nguyên nhân chính khiến bảng giá dãn 466px > vùng thẻ ~356px
+ * trên mobile — đơn vị đã ngầm hiểu qua mã (VND=X · EURUSD=X). Desktop ≥md giữ
+ * nguyên chuỗi đầy đủ (span hiện lại); các ô chỉ hiện ≥md (Bid/Ask, cột mở rộng,
+ * dòng phụ TC·C·T) vẫn dùng fmtP nguyên chuỗi như cũ.
+ */
+const FX_UNIT_SUFFIX_RE = /^(.*\S)(\s[A-Z]{2,5})$/;
+
+function UnitPrice({
+  n,
+  q,
+  signed = false,
+}: {
+  n: number | null | undefined;
+  q: QuoteRow;
+  signed?: boolean;
+}) {
+  if (n == null || Number.isNaN(n)) return <>—</>;
+  const s = formatUnitPrice(Math.abs(n), unitKindOf(q.market, q.type), q.currency);
+  const m = FX_UNIT_SUFFIX_RE.exec(s);
+  const main = m ? m[1] : s;
+  const suffix = m ? m[2] : null;
+  const withSign = signed ? (n > 0 ? `+${main}` : n < 0 ? `-${main}` : main) : main;
+  return (
+    <>
+      {withSign}
+      {suffix && <span className="hidden md:inline">{suffix}</span>}
+    </>
+  );
+}
+
+
+export function QuotesTable({
+  basketFilter = null,
+  onClearBasketFilter,
+}: QuotesTableProps) {
   const selectedSymbol = useUiStore((s) => s.selectedSymbol);
   const setSelectedSymbol = useUiStore((s) => s.setSelectedSymbol);
   const watchlistOnly = useUiStore((s) => s.watchlistOnly);
@@ -38,6 +97,8 @@ export function QuotesTable() {
   // PHASE3 B3 §5.2 — toggle cột mở rộng (mặc định tắt, tránh tràn ngang mobile)
   const quotesExpanded = useUiStore((s) => s.quotesExpanded);
   const setQuotesExpanded = useUiStore((s) => s.setQuotesExpanded);
+  // #110 M4.5.2 — EmptyState rổ tham chiếu: nút dẫn sang module Hội đồng
+  const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
 
   const quotesQuery = useQuery({
     queryKey: ["quotes"],
@@ -90,16 +151,34 @@ export function QuotesTable() {
     ? (watchlistQuery.data?.watchlist.count ?? 0)
     : (quotesQuery.data?.quotes.length ?? 0);
 
+  // #110 M4.5.2 — lọc theo rổ thị trường (mapping basket-filter.ts):
+  // nhóm "Chỉ số" LUÔN giữ nguyên hiển thị (dùng cho tham chiếu);
+  // hiệu chỉnh v1.2 (#108) — rổ phi-VN là tham chiếu nghiên cứu, không phải
+  // kênh đầu tư.
+  const basketFiltered: QuoteRow[] = React.useMemo(() => {
+    if (basketFilter == null) return source;
+    const markets = marketsOfBasket(basketFilter);
+    return source.filter(
+      (q) => q.type === "INDEX" || markets.includes(q.market)
+    );
+  }, [source, basketFilter]);
+
+  // Rổ không còn hàng giá trực tiếp (BOND/FOREX/COMMODITY chưa đồng bộ hoặc
+  // rổ lạ) → EmptyState hướng dẫn sang module Hội đồng.
+  const basketEmpty =
+    basketFilter != null &&
+    basketFiltered.every((q) => q.type === "INDEX");
+
   const quotes = React.useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return source;
-    return source.filter(
+    if (!q) return basketFiltered;
+    return basketFiltered.filter(
       (row) =>
         row.symbol.toLowerCase().includes(q) ||
         row.name.toLowerCase().includes(q) ||
         row.sector.toLowerCase().includes(q)
     );
-  }, [source, search]);
+  }, [basketFiltered, search]);
 
   // B13 — group bảng giá theo SÀN (HOSE → HNX → UPCOM → US → HK) + nhóm Chỉ số
   // riêng (index VN + quốc tế); mỗi nhóm giữ thứ tự khối lượng của nguồn.
@@ -147,11 +226,6 @@ export function QuotesTable() {
   // B13 — giá theo đơn vị của loại tài sản (VND nguyên · index điểm · cents)
   const fmtP = (n: number | null | undefined, q: QuoteRow) =>
     formatUnitPrice(n, unitKindOf(q.market, q.type), q.currency);
-  const fmtSignedUnit = (n: number | null | undefined, q: QuoteRow) => {
-    if (n == null || Number.isNaN(n)) return "—";
-    const s = formatUnitPrice(Math.abs(n), unitKindOf(q.market, q.type), q.currency);
-    return n > 0 ? `+${s}` : n < 0 ? `-${s}` : s;
-  };
 
   const isLoading = watchlistOnly && !watchlistQuery.data ? watchlistQuery.isLoading : quotesQuery.isLoading;
   const isError = watchlistOnly && !watchlistQuery.data ? watchlistQuery.isError : quotesQuery.isError;
@@ -161,7 +235,11 @@ export function QuotesTable() {
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="text-base">
-          {watchlistOnly ? "Danh mục theo dõi" : "Bảng giá đa sàn"}
+          {watchlistOnly
+            ? "Danh mục theo dõi"
+            : basketFilter != null
+              ? `Bảng giá · rổ ${basketLabel(basketFilter)}`
+              : "Bảng giá đa sàn"}
         </CardTitle>
         <CardDescription className="col-start-1 row-start-2">
           Nhấp vào một mã để xem biểu đồ giá
@@ -243,40 +321,96 @@ export function QuotesTable() {
           </p>
         ) : (
           <>
-            <div className="max-h-96 overflow-y-auto custom-scrollbar">
-              <Table className={cn(quotesExpanded ? "min-w-[900px]" : "min-w-[600px]")}>
-                <TableHeader className="sticky top-0 z-10 bg-card">
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-10 pl-6">
-                      <span className="sr-only">Theo dõi</span>
-                    </TableHead>
-                    <TableHead>Mã</TableHead>
-                    <TableHead className="text-right">Giá</TableHead>
-                    <TableHead className="text-right">+/-</TableHead>
-                    <TableHead className="text-right">%</TableHead>
-                    <TableHead className="text-right">KL</TableHead>
-                    <TableHead className="pr-6 text-right">Bid/Ask</TableHead>
-                    {/* PHASE3 B3 §5.2 — cột mở rộng (chỉ ≥ sm) */}
-                    <TableHead className="hidden text-right sm:table-cell">Trần</TableHead>
-                    <TableHead className="hidden text-right sm:table-cell">Sàn</TableHead>
-                    <TableHead className="hidden text-right sm:table-cell">TC</TableHead>
-                    <TableHead className="hidden text-right sm:table-cell">Cao</TableHead>
-                    <TableHead className="hidden pr-6 text-right sm:table-cell">Thấp</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {groups.map((g) => (
-                    <React.Fragment key={g.key}>
-                      {/* B13 — hàng đầu nhóm sàn */}
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableCell
-                          colSpan={12}
-                          className="py-1.5 pl-6 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-                        >
-                          {g.label} · {g.rows.length} mã
-                        </TableCell>
-                      </TableRow>
-                      {g.rows.map((q) => (
+            {/* #110 M4.5.2 — chip "Đang lọc: … ✕" (bấm ≥ 44px) bỏ lọc rổ */}
+            {basketFilter != null && (
+              <div className="flex flex-wrap items-center gap-2 px-4 pb-3 md:px-6">
+                <Button
+                  id="quotes-basket-filter"
+                  variant="secondary"
+                  size="sm"
+                  onClick={onClearBasketFilter}
+                  className="h-11 min-w-11 gap-2 rounded-full px-4"
+                  aria-label={`Bỏ lọc rổ ${basketLabel(basketFilter)} — về tất cả nhóm`}
+                >
+                  <Filter className="size-3.5 text-primary" aria-hidden="true" />
+                  <span className="text-xs font-medium">
+                    Đang lọc: {basketLabel(basketFilter)}
+                  </span>
+                  <X className="size-4 text-muted-foreground" aria-hidden="true" />
+                </Button>
+              </div>
+            )}
+
+            {/* #110 M4.5.2 — rổ chưa có bảng giá trực tiếp (BOND/FOREX/
+             * COMMODITY chưa đồng bộ): EmptyState hướng dẫn sang Hội đồng.
+             * Hiệu chỉnh v1.2 (#108): rổ phi-VN là THAM CHIẾU nghiên cứu. */}
+            {basketEmpty ? (
+              <div className="px-4 pb-4 md:px-6">
+                <EmptyState
+                  icon={Microscope}
+                  title="Rổ này hiện chỉ theo dõi trong nghiên cứu Hội đồng — chưa có bảng giá trực tiếp"
+                  description={
+                    <>
+                      Chưa có hàng giá nào cho lớp tài sản này trong bảng giá đa
+                      sàn. Thống kê rổ (lợi suất · biến động 30 phiên) nằm trong
+                      module Hội đồng — theo dõi tham chiếu nghiên cứu, không
+                      phải đối tượng đầu tư theo chính sách VN-only.
+                    </>
+                  }
+                  action={
+                    <Button
+                      size="sm"
+                      className="h-11 gap-2"
+                      onClick={() => setActiveWorkspace("council")}
+                    >
+                      <Landmark className="size-4" aria-hidden="true" />
+                      Xem Hội đồng
+                    </Button>
+                  }
+                />
+              </div>
+            ) : null}
+
+            {/* Bảng giá — ẩn hẳn khi rổ trống và không còn nhóm Chỉ số nào */}
+            {(!basketEmpty || groups.length > 0) && (
+              <div className="max-h-96 overflow-y-auto custom-scrollbar md:overflow-x-auto">
+                {/* #110 M4.5.2 — chế độ "giọn": mobile <md chỉ 6 cột chính
+                 * (Sao · Mã · Giá · +/- · % · KL khớp), cột phụ Bid/Ask hiện
+                 * từ md; cột mở rộng chỉ khi bật toggle (≥ md). min-w CHỈ áp
+                 * md+ — mobile không bảng dãn > màn hình (sw===cw 390). */}
+                <Table className={cn(quotesExpanded ? "md:min-w-[900px]" : undefined)}>
+                  <TableHeader className="sticky top-0 z-10 bg-card">
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-11 pl-2 md:w-10 md:pl-6">
+                        <span className="sr-only">Theo dõi</span>
+                      </TableHead>
+                      <TableHead className="px-1.5 sm:px-2">Mã</TableHead>
+                      <TableHead className="px-1.5 text-right sm:px-2">Giá</TableHead>
+                      <TableHead className="px-1.5 text-right sm:px-2">+/-</TableHead>
+                      <TableHead className="px-1.5 text-right sm:px-2">%</TableHead>
+                      <TableHead className="px-1.5 text-right sm:px-2">KL</TableHead>
+                      <TableHead className="hidden px-1.5 text-right sm:px-2 md:table-cell md:pr-6">Bid/Ask</TableHead>
+                      {/* PHASE3 B3 §5.2 — cột mở rộng (chỉ ≥ md khi bật toggle) */}
+                      <TableHead className={cn(quotesExpanded ? "hidden px-1.5 text-right sm:px-2 md:table-cell" : "hidden")}>Trần</TableHead>
+                      <TableHead className={cn(quotesExpanded ? "hidden px-1.5 text-right sm:px-2 md:table-cell" : "hidden")}>Sàn</TableHead>
+                      <TableHead className={cn(quotesExpanded ? "hidden px-1.5 text-right sm:px-2 md:table-cell" : "hidden")}>TC</TableHead>
+                      <TableHead className={cn(quotesExpanded ? "hidden px-1.5 text-right sm:px-2 md:table-cell" : "hidden")}>Cao</TableHead>
+                      <TableHead className={cn(quotesExpanded ? "hidden px-1.5 text-right sm:px-2 md:table-cell md:pr-6" : "hidden")}>Thấp</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {groups.map((g) => (
+                      <React.Fragment key={g.key}>
+                        {/* B13 — hàng đầu nhóm sàn */}
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                          <TableCell
+                            colSpan={12}
+                            className="py-1.5 pl-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:pl-6"
+                          >
+                            {g.label} · {g.rows.length} mã
+                          </TableCell>
+                        </TableRow>
+                        {g.rows.map((q) => (
                     <TableRow
                       key={q.symbol}
                       onClick={() => setSelectedSymbol(q.symbol)}
@@ -294,12 +428,12 @@ export function QuotesTable() {
                         q.symbol === selectedSymbol ? "bg-accent" : "hover:bg-accent/50"
                       )}
                     >
-                      <TableCell className="w-10 py-2.5 pl-6">
+                      <TableCell className="w-11 py-0 pl-2 pr-0 md:w-10 md:py-2.5 md:pl-6">
                         <Button
                           variant="ghost"
                           size="icon"
                           className={cn(
-                            "size-7 text-muted-foreground transition-colors hover:text-amber-500",
+                            "size-9 text-muted-foreground transition-colors hover:text-amber-500 md:size-7",
                             watchedSymbols.has(q.symbol) && "text-amber-500"
                           )}
                           aria-label={
@@ -320,25 +454,26 @@ export function QuotesTable() {
                           )}
                         </Button>
                       </TableCell>
-                      <TableCell className="py-2.5">
+                      <TableCell className="px-1.5 py-2.5 sm:px-2">
                         <p className="font-semibold">{q.symbol}</p>
-                        <p className="max-w-[160px] truncate text-[11px] text-muted-foreground">
+                        {/* Giọn mobile: dòng tên/ngành ẩn < sm cho gọn 6 cột */}
+                        <p className="mt-0.5 hidden max-w-[160px] truncate text-[11px] text-muted-foreground sm:block">
                           {quotesExpanded
                             ? `TC ${fmtP(q.refPrice, q)} · C ${fmtP(q.high, q)} · T ${fmtP(q.low, q)}`
                             : q.sector || q.name}
                         </p>
                       </TableCell>
-                      <TableCell className="tabular-nums py-2.5 text-right font-medium">
+                      <TableCell className="px-1.5 py-2.5 text-right font-medium tabular-nums sm:px-2">
                         {/* Phiên #45 — giá tô màu theo hướng so tham chiếu:
                          * tăng xanh dương · giảm đỏ · đứng giá vàng (chuẩn bảng giá VN).
                          * Q2 HOSE: chạm trần ⌃ / chạm sàn ⌄ đậm hơn. */}
                         {q.ceilingPrice != null && q.last >= q.ceilingPrice ? (
                           <span className="font-bold text-up">
-                            ⌃ {fmtP(q.last, q)}
+                            ⌃ <UnitPrice n={q.last} q={q} />
                           </span>
                         ) : q.floorPrice != null && q.last <= q.floorPrice ? (
                           <span className="font-bold text-down">
-                            ⌄ {fmtP(q.last, q)}
+                            ⌄ <UnitPrice n={q.last} q={q} />
                           </span>
                         ) : (
                           <span
@@ -351,47 +486,47 @@ export function QuotesTable() {
                                   : "text-flat"
                             )}
                           >
-                            {fmtP(q.last, q)}
+                            <UnitPrice n={q.last} q={q} />
                           </span>
                         )}
                       </TableCell>
-                      <TableCell className={`tabular-nums py-2.5 text-right ${changeColor(q.change)}`}>
-                        {fmtSignedUnit(q.change, q)}
+                      <TableCell className={`px-1.5 py-2.5 text-right tabular-nums sm:px-2 ${changeColor(q.change)}`}>
+                        <UnitPrice n={q.change} q={q} signed />
                       </TableCell>
                       <TableCell
-                        className={`tabular-nums py-2.5 text-right font-medium ${changeColor(q.changePct)}`}
+                        className={`px-1.5 py-2.5 text-right font-medium tabular-nums sm:px-2 ${changeColor(q.changePct)}`}
                       >
                         {formatPct(q.changePct)}
                       </TableCell>
-                      <TableCell className="tabular-nums py-2.5 text-right text-muted-foreground">
+                      <TableCell className="px-1.5 py-2.5 text-right tabular-nums text-muted-foreground sm:px-2">
                         {formatVolume(q.volume)}
                       </TableCell>
-                      <TableCell className="tabular-nums py-2.5 pr-6 text-right text-xs">
+                      <TableCell className="hidden px-1.5 py-2.5 text-right tabular-nums text-xs sm:px-2 md:table-cell md:pr-6">
                         <span className="text-up">{fmtP(q.bidPrice, q)}</span>
                         <span className="text-muted-foreground"> / </span>
                         <span className="text-down">{fmtP(q.askPrice, q)}</span>
                       </TableCell>
                       {/* Cột trần/sàn: trần = xanh dương · sàn = đỏ (phiên #45) */}
-                      <TableCell className="hidden tabular-nums py-2.5 text-right font-semibold text-up sm:table-cell">
+                      <TableCell className={cn(quotesExpanded ? "hidden px-1.5 py-2.5 text-right font-semibold tabular-nums text-up sm:px-2 md:table-cell" : "hidden")}>
                         {fmtP(q.ceilingPrice, q)}
                       </TableCell>
-                      <TableCell className="hidden tabular-nums py-2.5 text-right font-semibold text-down sm:table-cell">
+                      <TableCell className={cn(quotesExpanded ? "hidden px-1.5 py-2.5 text-right font-semibold tabular-nums text-down sm:px-2 md:table-cell" : "hidden")}>
                         {fmtP(q.floorPrice, q)}
                       </TableCell>
-                      <TableCell className="hidden tabular-nums py-2.5 text-right text-muted-foreground sm:table-cell">
+                      <TableCell className={cn(quotesExpanded ? "hidden px-1.5 py-2.5 text-right tabular-nums text-muted-foreground sm:px-2 md:table-cell" : "hidden")}>
                         {fmtP(q.refPrice, q)}
                       </TableCell>
-                      <TableCell className="hidden tabular-nums py-2.5 text-right sm:table-cell">
+                      <TableCell className={cn(quotesExpanded ? "hidden px-1.5 py-2.5 text-right tabular-nums sm:px-2 md:table-cell" : "hidden")}>
                         {fmtP(q.high, q)}
                       </TableCell>
-                      <TableCell className="hidden tabular-nums py-2.5 pr-6 text-right sm:table-cell">
+                      <TableCell className={cn(quotesExpanded ? "hidden px-1.5 py-2.5 text-right tabular-nums sm:px-2 md:table-cell md:pr-6" : "hidden")}>
                         {fmtP(q.low, q)}
                       </TableCell>
                     </TableRow>
                       ))}
                     </React.Fragment>
                   ))}
-                  {quotes.length === 0 && (
+                  {quotes.length === 0 && !basketEmpty && (
                     <TableRow>
                       <TableCell
                         colSpan={12}
@@ -403,11 +538,19 @@ export function QuotesTable() {
                   )}
                 </TableBody>
               </Table>
-            </div>
-            <p className="px-6 py-3 text-[11px] text-muted-foreground">
-              Hiển thị {quotes.length}/{totalCount} mã · nhóm theo sàn (HOSE · HNX · UPCOM · US · HK · Chỉ số)
-              {watchlistOnly ? " · danh mục theo dõi" : ""}
-              {quotesExpanded ? " · cột mở rộng: trần/sàn/TC/cao/thấp" : ""}
+              </div>
+            )}
+            <p className="px-4 py-3 text-[11px] text-muted-foreground md:px-6">
+              {basketEmpty
+                ? groups.length > 0
+                  ? `Nhóm "Chỉ số" giữ nguyên hiển thị để tham chiếu · rổ ${basketLabel(basketFilter)} chưa có hàng giá trực tiếp.`
+                  : ""
+                : <>
+                  Hiển thị {quotes.length}/{totalCount} mã · nhóm theo sàn &amp; lớp tài sản (HOSE · HNX · UPCOM · US · HK · Trái phiếu · Forex · Hàng hoá · Chỉ số)
+                  {watchlistOnly ? " · danh mục theo dõi" : ""}
+                  {basketFilter != null ? ` · lọc theo rổ: ${basketLabel(basketFilter)}` : ""}
+                  {quotesExpanded ? " · cột mở rộng: trần/sàn/TC/cao/thấp" : ""}
+                </>}
             </p>
           </>
         )}

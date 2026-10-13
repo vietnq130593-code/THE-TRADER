@@ -8,6 +8,7 @@ import {
   BookOpenText,
   CalendarRange,
   ChevronDown,
+  CircleHelp,
   ExternalLink,
   Library,
   Scale,
@@ -19,10 +20,13 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { NewsRangeCalendar, type NewsDayRange } from "@/components/dashboard/news-range-calendar";
 import { apiGet } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -40,6 +44,12 @@ import type { NewsArchiveResponse, NewsArchiveItem } from "@/lib/types";
  *
  * #102 — 2 ô "Từ/Đến ngày" gom thành MỘT nút: bấm mở lịch đôi 2 bảng
  * tháng, chọn khoảng bằng ĐÚNG 2 CLICK (click đôi 1 ngày → chỉ xem ngày đó).
+ *
+ * #110 M4.9 (UIUX_UPGRADE_BLUEPRINT §4 M4.9): khung/affordance chuẩn hoá —
+ * tiêu đề ĐỘNG theo truy vấn (số tin của khoảng đang xem) · footer Huỷ +
+ * hành động chính DISABLED-CÓ-LÝ-DO (tooltip, pattern #102) · legend dài
+ * rút vào Popover "?" (CircleHelp) thay footnote dài dòng. Logic query
+ * (range · page · calendar) giữ nguyên.
  */
 
 const PAGE_SIZE = 30;
@@ -110,6 +120,18 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
   const first = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const last = Math.min(total, (page + 1) * PAGE_SIZE);
 
+  /** #110 M4.9 — bounds toàn bộ kho tin (ngày ICT đầu → hôm nay). */
+  const fullFrom = meta?.bounds.min ? ictDayOfIso(meta.bounds.min) : null;
+  const fullTo = ictToday();
+  const isFullRange = fullFrom != null && range.from === fullFrom && range.to === fullTo;
+  /** Hành động chính footer disabled-có-lý-do (pattern #102). */
+  const fullDisabled = archiveQuery.isLoading || isFullRange;
+  const fullDisabledReason = archiveQuery.isLoading
+    ? "Đang tải dữ liệu kho tin — chờ danh sách tin về"
+    : isFullRange
+      ? "Đang xem toàn bộ kho tin rồi — thu hẹp bằng lịch chọn ngày"
+      : null;
+
   /** Khoảng đủ 2 click (hoặc preset) → áp dụng NGAY + đóng lịch. */
   const applyRange = (r: NewsDayRange) => {
     setRange(r);
@@ -123,10 +145,16 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Library className="size-4 text-primary" aria-hidden="true" />
-            Kho tin tức thị trường
+            {/* #110 M4.9 — tiêu đề động: phản chiếu truy vấn đang xem */}
+            <span suppressHydrationWarning>
+              Kho tin tức thị trường{meta ? ` · ${total} tin` : ""}
+            </span>
           </DialogTitle>
-          <DialogDescription>
-            Toàn bộ tin crawler RSS 5 nguồn — lọc theo ngày và xem tin nào đang
+          <DialogDescription suppressHydrationWarning>
+            {range.from === range.to
+              ? `Ngày ${fmtViLabel(range.from, true)}`
+              : `${fmtViLabel(range.from, true)} → ${fmtViLabel(range.to, true)}`}{" — "}
+            toàn bộ tin crawler RSS 5 nguồn — lọc theo ngày và xem tin nào đang
             nuôi tri thức agents (A4 · RAG · lexicon).
           </DialogDescription>
         </DialogHeader>
@@ -179,7 +207,9 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
           )}
         </div>
 
-        {/* ── Thống kê khoảng ── */}
+        {/* ── Thống kê khoảng + Popover "?" chú giải (#110 M4.9 — thay
+            footnote dài dòng: bấm dấu ? để mở 3 đường tiêu thụ + 1 vòng
+            phản hồi học) ── */}
         {meta && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
             <span className="font-medium text-foreground">{total} tin</span>
@@ -199,6 +229,46 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
                 Nguồn: {Object.entries(meta.counts.bySource).map(([s, c]) => `${s} ${c}`).join(" · ")}
               </span>
             )}
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  id="news-archive-legend"
+                  className="ml-auto inline-flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+                  aria-label="Xem chú giải — tin làm giàu tri thức agents thế nào (A4 · RAG · lexicon · bandit)"
+                >
+                  <CircleHelp className="size-3.5" aria-hidden="true" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80 text-[11px] leading-relaxed text-muted-foreground">
+                <p className="mb-1.5 text-xs font-semibold text-foreground">
+                  Tin làm giàu tri thức agents — 3 đường tiêu thụ + 1 vòng phản hồi học
+                </p>
+                <p className="mb-1">
+                  <Badge variant="outline" className="mr-1 border-up/40 px-1 py-0 text-[9px] text-up">A4</Badge>
+                  10 tin mới nhất được agent News &amp; Sentiment đọc mỗi chu kỳ →
+                  phiếu cử tri Hội đồng.
+                </p>
+                <p className="mb-1">
+                  <Badge variant="outline" className="mr-1 border-primary/40 px-1 py-0 text-[9px] text-primary">RAG</Badge>
+                  Corpus 200 tin mới nhất cho truy hồi BM25 — tiêm ngữ cảnh liên
+                  quan vào prompt 5 agent nghiên cứu + Chủ tịch.
+                </p>
+                <p className="mb-1">
+                  <Badge variant="outline" className="mr-1 px-1 py-0 text-[9px]">Lexicon</Badge>
+                  Điểm cảm xúc quant (~75 thuật ngữ VN) −1..+1 — tổng hợp 24h vào
+                  bằng chứng Bayes.
+                </p>
+                <p>
+                  <Badge variant="outline" className="mr-1 px-1 py-0 text-[9px]">Bandit</Badge>
+                  Vòng phản hồi học: 6 tay dự báo (5 agent nghiên cứu + ML
+                  Forecast) bị chấm điểm bằng biến động THẬT rổ top-10 sau 5 phiên
+                  → trọng số phiếu tự nâng/hạ. Arm News &amp; Sentiment = giá trị
+                  nhận định từ tin tức (Beta(1,1) trung tính — chờ settle chín
+                  đầu tiên).
+                </p>
+              </PopoverContent>
+            </Popover>
           </div>
         )}
 
@@ -226,7 +296,7 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
           </ul>
         )}
 
-        {/* ── Phân trang ── */}
+        {/* ── Phân trang (disabled-có-lý-do: title giải rõ vì sao chưa bấm được) ── */}
         {total > PAGE_SIZE && (
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span suppressHydrationWarning>
@@ -240,6 +310,13 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0 || archiveQuery.isFetching}
                 aria-label="Trang trước"
+                title={
+                  archiveQuery.isFetching
+                    ? "Đang tải trang — chờ tí"
+                    : page === 0
+                      ? "Đã ở trang đầu"
+                      : "Xem trang trước"
+                }
               >
                 <ArrowLeft className="size-3.5" aria-hidden="true" /> Trước
               </Button>
@@ -250,6 +327,13 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
                 onClick={() => setPage((p) => (last < total ? p + 1 : p))}
                 disabled={last >= total || archiveQuery.isFetching}
                 aria-label="Trang sau"
+                title={
+                  archiveQuery.isFetching
+                    ? "Đang tải trang — chờ tí"
+                    : last >= total
+                      ? "Đã đến trang cuối"
+                      : "Xem trang sau"
+                }
               >
                 Sau <ArrowRight className="size-3.5" aria-hidden="true" />
               </Button>
@@ -257,32 +341,35 @@ export function NewsArchiveDialog({ open, onOpenChange }: Props) {
           </div>
         )}
 
-        {/* ── Legend 4 đường tiêu thụ ── */}
-        <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
-          <p className="mb-1 font-medium text-foreground">Tin làm giàu tri thức agents — 3 đường tiêu thụ + 1 vòng phản hồi học:</p>
-          <p>
-            <Badge variant="outline" className="mr-1 border-up/40 px-1 py-0 text-[9px] text-up">A4</Badge>
-            10 tin mới nhất được agent News &amp; Sentiment đọc mỗi chu kỳ →
-            phiếu cử tri Hội đồng.
-          </p>
-          <p>
-            <Badge variant="outline" className="mr-1 border-primary/40 px-1 py-0 text-[9px] text-primary">RAG</Badge>
-            Corpus 200 tin mới nhất cho truy hồi BM25 — tiêm ngữ cảnh liên quan
-            vào prompt 5 agent nghiên cứu + Chủ tịch.
-          </p>
-          <p>
-            <Badge variant="outline" className="mr-1 px-1 py-0 text-[9px]">Lexicon</Badge>
-            Điểm cảm xúc quant (~75 thuật ngữ VN) −1..+1 — tổng hợp 24h vào
-            bằng chứng Bayes.
-          </p>
-          <p>
-            <Badge variant="outline" className="mr-1 px-1 py-0 text-[9px]">Bandit</Badge>
-            Vòng phản hồi học: 6 tay dự báo (5 agent nghiên cứu + ML Forecast)
-            bị chấm điểm bằng biến động THẬT rổ top-10 sau 5 phiên → trọng số
-            phiếu tự nâng/hạ. Arm News &amp; Sentiment = giá trị nhận định
-            từ tin tức (hiện Beta(1,1) trung tính — chờ settle chín đầu tiên).
-          </p>
-        </div>
+        {/* ── #110 M4.9 — footer chuẩn: Huỷ (Đóng) + hành động chính
+            "Toàn bộ kho tin" DISABLED-CÓ-LÝ-DO (tooltip pattern #102).
+            Legend dài đã rút vào Popover "?" ở khối thống kê trên. ── */}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Đóng
+          </Button>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={fullDisabled ? 0 : -1} className="inline-flex">
+                  <Button
+                    disabled={fullDisabled}
+                    onClick={() =>
+                      applyRange({ from: fullFrom ?? ictDaysAgo(365), to: fullTo })
+                    }
+                  >
+                    Toàn bộ kho tin
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              {fullDisabledReason != null && (
+                <TooltipContent side="top" className="max-w-56 text-center">
+                  {fullDisabledReason}
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

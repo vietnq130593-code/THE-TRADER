@@ -4,7 +4,9 @@ import { PortfolioSection } from "@/components/dashboard/portfolio-section";
 
 /**
  * Phiên #34 — workspace "Danh mục": tách khỏi module Tổng quan cũ.
- * Component PortfolioSection giữ nguyên — chỉ bọc tabpanel + tiêu đề.
+ * #110 M4.1 — PortfolioSection trả về bố cục 3 tầng (KPI tier-1 + curve/donut
+ * + tabs vòng đời) dưới dạng fragment; wrapper này giữ tabpanel + tiêu đề
+ * sr-only và phẳng gap-6 giữa các tầng.
  */
 export function PortfolioWorkspace() {
   return (

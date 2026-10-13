@@ -103,6 +103,9 @@ export interface SignalWithRefs {
   status: string;
   rejectedAt: Date | null;
   rejectNote: string | null;
+  /** #110 M4.2 — chip đồng thuận CONSENSUS/WEAK_MAJORITY/NO_CONSENSUS. */
+  consensusGate: string | null;
+  consensusRatio: number | null;
 }
 
 /** Map SignalRow (đủ 15 trường cũ + 3 trường mới PHASE3 §4.1) — dùng chung 3 route signals. */
@@ -126,6 +129,8 @@ export function mapSignalRow(s: SignalWithRefs) {
     status: s.status,
     rejectedAt: s.rejectedAt,
     rejectNote: s.rejectNote,
+    consensusGate: s.consensusGate ?? null,
+    consensusRatio: s.consensusRatio ?? null,
   };
 }
 

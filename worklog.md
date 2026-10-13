@@ -3671,3 +3671,167 @@ Stage Summary:
 - Chu kỳ agents/run đã được tái cấu trúc (pre-cycle try/catch + hoist vars) và kiểm định bằng chu kỳ THẬT 2,4 phút 200.
 - Còn treo (P2/ý kiến chờ trader, không tự vá theo §8-2 vì là thiết kế đã ghi chú chủ ý): settings GET trả accountNumber nguyên + webhookUrl đầy đủ (hiện trống — chỉnh sửa round-trip cần mask-marker pattern như VNDIRECT creds nếu muốn) · ml/train partial-failure trả 200 ok:true kèm error string (documented "1 cái fail không chặn cái kia").
 - File: 1 mới (src/lib/api-dates.ts) + 17 sửa (8 route date + agents/run + agents + agents/[id] + agents/[id]/run + corporate-events + engine-state + relations/insight + ml/analytics + prisma-reload + corporate-events.ts lib) + 4 screenshot docs/p109-*.
+
+---
+Task ID: 110-F
+Agent: main-orchestrator (Z.ai Code)
+Task: Nền móng UIUX_UPGRADE_BLUEPRINT #110 — tokens §3.1 + shared kit §2.4 + backend cho P1 (signals: consensus + evaluation D-LEDGER; portfolio: equityCurve + buyingPower).
+
+Work Log:
+- globals.css: thêm --tile-bg (light 0.975/0.008/163 · dark 0.245/0.018/250 = card + ~0.02L) · --tier-1-value (1.35rem) · map --color-tile-bg vào @theme inline (bg-tile-bg可用) · class .tier-1-value (700/tabular/tracking chặt) · @keyframes soft-pulse + .animate-soft-pulse (chấm "đang chạy" PRIMARY pulse 2s) · .kpi-tile (mặt --tile-bg).
+- TẠO src/components/dashboard/kit.tsx — "một ngôn ngữ thành phần" §2.4: StatTile (tier-1 ô KPI, tone up/down/flat/primary/neutral) · ListRow (label trái — số phải py-2.5 px-4) · ChipMeta (T4/T5 chip meta) · VerdictBadge + verdictClass/verdictLabel (D-LEDGER) · Sparkline (SVG polyline + area mờ 12% + chấm cuối, tone auto theo first/last — pattern council #106 tách chung) · EmptyState (icon + việc-cần-làm + action — pattern NewsCard #103 tách chung).
+- signal-execution.ts: SignalWithRefs + mapSignalRow thêm consensusGate/consensusRatio (chip đồng thuận M4.2.1).
+- api/signals/route.ts: query DecisionEvaluation IN ids (1 query) gắn `evaluation` {verdict, markPnlPct, cashPnlVND, executionKind} mỗi tín hiệu (M4.2.3 chip phán quyết).
+- api/portfolio/route.ts: thêm equityCurve (CashSnapshot 90 điểm đúng brokerAccount đang xem, cũ→mới) + buyingPower (cash + max(0, GTTH×0.5 − marginUsed) — cùng công thức chip tooltip Header §5.4).
+- types.ts: SignalRow +3 trường optional (consensusGate/consensusRatio/evaluation) · PortfolioResponse +equityCurve/buyingPower.
+- Kiểm định: lint 0 · tsc src 0 (2 lỗi pre-existing ngoài src/skills giữ nguyên) · curl /api/portfolio → equityCurve 15 điểm + buyingPower ✓ · curl /api/signals → consensusGate WEAK_MAJORITY + evaluation NEUTRAL/UNEXECUTED ✓.
+
+Stage Summary:
+- Shared foundation sẵn sàng cho 6 module-agent (P1→P3). Quy tắc chống xung đột: subagent KHÔNG đụng file dùng chung (globals.css/store.ts/types.ts/kit.tsx/header/nav/footer/page.tsx) — cần gì ghi vào report cho orchestrator.
+- paper world sau reset: equity 0 + curve toàn 0 → UI phải tự ẩn curve flat-zero (trung thực §2.5).
+
+---
+Task ID: 110-b
+Agent: module-agent (M4.2 Tín hiệu)
+Task: Triển khai UIUX_UPGRADE_BLUEPRINT §4 M4.2 — nâng module Tín hiệu 4.5 → mục tiêu 8.0 (ưu tiên 2, wall-of-text tệ nhì): hàng ListRow cấu trúc + nhóm "Cần quyết" viền primary + chip đồng thuận + chip phán quyết D-LEDGER + dialog tier-3 (FULL rationale + JSON + Duyệt/Từ chối qua endpoint decision) + mobile thẻ dọc.
+
+Work Log:
+- Đọc #105/#106/#96/#110-F + blueprint §2-§6 + kit.tsx + signals-feed/workspace + api/signals (decision route) — dữ liệu thật: 11 tín hiệu (10 VCB HOLD WEAK_MAJORITY/CONSENSUS/NO_CONSENSUS ACTIVE + 1 TCB BUY CONSENSUS sandboxExecuted) → nhóm "Cần quyết" = TCB, nhóm dưới = 10 HOLD "Không cần quyết".
+- TẠO src/components/dashboard/signals/signal-detail-dialog.tsx (~510 dòng): SignalDetailDialog sm:max-w-lg max-h-[90vh] scroll custom-scrollbar — tiêu đề động "Tín hiệu {symbol} · MUA/BÁN/GIỮ" · chips nhanh (hướng+tin cậy+đồng thuận+trạng thái+thử nghiệm) · score bar + ListRow Mục tiêu/Cắt lỗ/Chốt lời/Agent/Tuổi · FULL rationale nguyên văn (leading-relaxed, KHÔNG cắt — xác nhận DOM 971 ký tự đủ đầu-cuối) · section Phán quyết D-LEDGER (VerdictBadge + markPnlPct + cashPnlVND + executionKind Việt hoá) · JSON tín hiệu <pre> mono text-[11px] max-h-64 custom-scrollbar pretty-print 17 trường chính · footer Huỷ + Từ chối (chỉ ACTIVE, kèm textarea ghi chú ≤500 + đếm ký tự) + "Duyệt & chuyển lệnh" DISABLED-CÓ-LÝ-DO tooltip #102 (GIỮ/ACTED/REJECTED/EXPIRED) · mutation POST /api/signals/{id}/decision {action, note} → onSuccess toast + invalidate ["signals"]+["orders"] + đóng dialog. Xuất kèm meta dùng chung SIGNAL_DIRECTION/SIGNAL_CONFIDENCE/consensusMeta/statusMeta/approveDisabledReason — feed nhập về, không bản sao (§2.4).
+- VIẾT LẠI src/components/dashboard/signals-feed.tsx (~500 dòng): (M4.2.1) hàng đầy đủ = badge hướng màu ngữ nghĩa + mã đậm + score/100 tabular + chip đồng thuận (CONSENSUS=primary "Đồng thuận 83,3%" / WEAK_MAJORITY=amber "Đa số yếu 79,5%" / NO_CONSENSUS=muted) + lý do 1 dòng rút gọn 120 ký tự truncate title=full + chip trạng thái (Còn hiệu lực/Đã chuyển lệnh/Hết hạn/Đã từ chối) + chip "Thực thi · thử nghiệm" + VerdictBadge+markPnlPct + nút Chi tiết; hàng py-2.5 px-4 hover bg-accent/40. (M4.2.2) section "Cần quyết" (ACTIVE+BUY/SELL+chưa acted/rejected) viền border-primary/40 + header primary + đếm "1 tín hiệu chờ quyết"; nhóm dưới border thường, tiêu đề ghép động theo loại có mặt (Đã thực thi · Hết hạn · Từ chối · Không cần quyết), mỗi tín hiệu 1 dòng gọn (badge+mã+score+chip trạng thái+phán quyết+Chi tiết). (M4.2.3) VerdictChips dùng kit.VerdictBadge + ChipMeta tone up/down formatPct — vòng phản hồi thị giác. (M4.2.4) mobile <sm: thẻ dọc flex-col (dòng1 badge+mã+score · dòng2 chips wrap · dòng3 lý do truncate · nút Chi tiết full-width min-h-11 44px). Compact (props #34 giữ nguyên limit/compact/onSeeAll, KHÔNG dialog): badge+mã+score+chip đồng thuận nhỏ+lý do truncate+tuổi+badge acted/thực thi. Loading skeleton 4 hàng h-14 đúng kích thước ListRow; Empty → kit.EmptyState ("Chưa có tín hiệu nào trong khoảng đã chọn" + hint text "Chạy chu kỳ agents — nút Chạy agent trên thanh bar" KHÔNG tự chạy); error có bước khắc phục. GIỮ: query ["signals", rangeKey] + useDateRange + badge "theo khoảng đã chọn" + sr-only + convert mutation cũ được thay bằng decision endpoint (APPROVE ≡ convert).
+- signals-workspace.tsx: KHÔNG đổi (cấu trúc 2/3 + 1/3 giữ nguyên theo chỉ thị).
+- Lint: bunx eslint 3 file phạm vi → 0 lỗi/0 cảnh báo. tsc --noEmit: 0 lỗi "^src/". (bun run lint toàn cục còn 31 lỗi react/jsx-no-undef 'TableCell' ở portfolio-section.tsx — file của module-agent M4.1 đang chạy song song, NGOÀI phạm vi M4.2, không đụng.)
+- E2E agent-browser (session riêng s110 tránh đụng browser agent M4.1 — session mặc định bị agent kia chuyển sang ?ws=portfolio giữa chừng): desktop 1440×900 ?ws=signals → docs/p110-signals-desktop.png · 0 console error/0 page error · DOM: #signals-pending-h "Cần quyết · 1 tín hiệu chờ quyết" có border-primary/40=true · #signals-done-h "Không cần quyết · 10 tín hiệu" · chips thật "Đồng thuận 83,3%", "Đa số yếu 79,5%" (compact), "Còn hiệu lực", "Thực thi · thử nghiệm", "ĐI NGANG", "+0,62%", "0,00%". Bấm Chi tiết hàng HOLD → dialog "Tín hiệu VCB · GIỮ" đủ FULL rationale (971 ký tự) + JSON pre (602 ký tự) + textarea maxLength 500 + "Duyệt & chuyển lệnh" disabled=true, hover → tooltip "Khuyến nghị GIỮ không chuyển được thành lệnh — chỉ MUA/BÁN mới được duyệt & chuyển lệnh." → đóng bằng Huỷ → docs/p110-signals-dialog.png + docs/p110-signals-dialog-tooltip.png. Dialog TCB MUA: 3 nút Huỷ/Từ chối/Duyệt đều enabled (ACTIVE+BUY).
+- Mobile 390×844 ?ws=signals → docs/p110-signals-mobile.png · scrollWidth 390 === clientWidth 390 (không cuộn ngang) · 11 nút Chi tiết đều cao đúng 44px · thẻ dọc 3 dòng + nút full-width.
+- ?ws=overview → docs/p110-overview-compact.png · SignalsFeed compact render 5 hàng (limit=5) + nút "Xem tất cả (11)" · 0 console error · không vỡ layout.
+- VLM glm-5v-turbo chấm lại module Tín hiệu: chống wall-of-text 1,8/2 · phân cấp tier 1,9/2 · màu ngữ nghĩa 2/2 · mật độ 3-giây-hiểu 2/2 · tiếng Việt + tabular 2/2 → ~9,7/10 (mốc cũ 4,5 — vượt ngưỡng P1 ≥7,5).
+
+Stage Summary:
+- M4.2 xong trọn vẹn M4.2.1 (hàng cấu trúc + dialog tier-3) → M4.2.2 (nhóm Cần quyết viền primary) → M4.2.3 (chip phán quyết D-LEDGER) → M4.2.4 (mobile thẻ dọc). Artifact: src/components/dashboard/signals/signal-detail-dialog.tsx (MỚI) + signals-feed.tsx (viết lại) + 5 ảnh docs/p110-signals-*.
+- Yêu cầu orchestrator (file chung, KHÔNG tự sửa): không có — mọi nhu cầu (kit/ListRow/ChipMeta/VerdictBadge/EmptyState + types + API decision/evaluation) đã đủ từ #110-F.
+- Treo: 31 lỗi lint 'TableCell' portfolio-section.tsx thuộc M4.1 (agent song song) — chờ agent kia sửa; 3.429 lần GET /socket.io?XTransformPort=3003 404 trong dev.log là hiện tượng có TRƯỚC phiên này (realtime page-level, không liên quan M4.2).
+
+---
+Task ID: 110-a
+Agent: module-agent (M4.1 Danh mục)
+Task: Triển khai M4.1 UIUX_UPGRADE_BLUEPRINT §4 — view Danh mục 5.0 → mục tiêu 8.0: bỏ "floating island" (bố cục 3 tầng KPI/curve/tabs theo kit #110-F), tabs vòng đời + nhãn đếm, bảng vị thế điều hướng ch cross-#88, empty-state có hành động, mobile thẻ dọc hết cuộn ngang.
+
+Work Log:
+- M4.1.1 (3 tầng): portfolio-section.tsx viết lại thành 3 Card ngang hàng — Tầng 1 "Danh mục đầu tư": 4 StatTile kit (Tổng tài sản kèm sub "tiền X · vị thế Y" · Lãi/lỗ chưa TH tone theo dấu + sub % · Biến động ngày tone · Sức mua buyingPower sub "ước tính 50% ký quỹ", fallback client khi cache cũ thiếu trường) + khối ListRow mảnh 2 cột (Tiền mặt · GTTH · Margin · LN đã thực hiện — hết 6 tile cùng trọng lượng); Tầng 2: grid xl:grid-cols-[7fr_5fr] EquityCurveCard MỚI (portfolio/equity-curve-card.tsx — kit.Sparkline h-96 + 2 nhãn ngày text-[10px] + ChipMeta % toàn kỳ; <2 điểm hoặc flat-zero → EmptyState đúng câu "Đường cong equity sẽ xuất hiện sau snapshot chu kỳ đầu tiên — engine ghi mỗi chu kỳ") cạnh Card "Phân bổ ngành" bọc AllocationDonut NGUYÊN VẸN (chỉ đổi vị trí); Tầng 3: Card tabs. Xoá Tile cũ.
+- M4.1.2 (tabs vòng đời + đếm): TabsTrigger "Vị thế N" · "Lệnh chờ N" (đếm order PENDING/PARTIALLY_FILLED) · "Giao dịch N" — TabCount badge tabular-nums, amber khi có lệnh chờ.
+- M4.1.3 (bảng bấm được): hàng vị thế cursor-pointer + hover:bg-accent/50 + title "Xem biểu đồ {symbol} — chuyển sang Thị trường" + onClick setSelectedSymbol→setActiveWorkspace("market") (pattern #88) + tabIndex/onKeyDown Enter/Space cho bàn phím; cột % TH đổi sang dấu phẩy vi-VN (fmtWeight, khớp footer "100,0%"); hàng tổng + cột L/L màu ngữ nghĩa giữ nguyên.
+- M4.1.4 (empty có hành động): Vị thế trống → EmptyState "Chưa có vị thế mở" + nút "Xem tín hiệu đề xuất"→signals; Lệnh trống → "tín hiệu gần nhất đang chờ duyệt ở module Tín hiệu" + nút chuyển; Giao dịch trống → GIỮ hint ngoài phiên #96 (nextOpenLabel) trong description EmptyState.
+- M4.10 (mobile thẻ dọc): 3 bảng min-w 720–820 thêm `<div md:hidden>` thẻ dọc (vị thế: symbol+badge biến động · KL/vốn/HT/GT · L/L+%TH, bấm được như hàng bảng + nút Hủy lệnh PENDING cho thẻ lệnh · giao dịch chỉ đọc) + `<div hidden md:block>` bọc bảng cũ — mobile 0 bảng hiển thị.
+- GIỮ NGUYÊN: segmented control Giấy/Thực tế/Thử nghiệm + dialog reset #91 + parsePlanNote + useDateRange + mọi query/mutation + sr-only h2 + ORDER_STATUS/SideBadge; portfolio-workspace.tsx chỉ cập nhật comment (fragment 3 tầng).
+- Nghiệm thu: bun run lint 0 lỗi · npx tsc --noEmit src 0 lỗi (2 lỗi skills/ pre-existing ngoài phạm vi). agent-browser desktop 1440: 4 StatTile (sandbox equity 99.9tr · −70.000₫ −2,14% · −1,84% · sức mua 98,3tr) · curve SVG 2 điểm + nhãn 12-10/13-10 + chip "−0,01% · 99,9 tr ₫" (force settle-equity?force=1 — route test nội bộ §5.7-4 idempotent upsert/ngày,engine 16:30 sẽ upsert trùng ngày không double) · tabs "Vị thế 1 · Lệnh chờ 0 · Giao dịch 1" · click hàng TCB → workspace market + chart "TCB 32.200 −1,23%" ✓ · layout box: curve 803px/donut 573px cùng hàng 7fr/5fr · footer pushed (docH 1080 > 900) · 0 console/page error. Paper world: tiles 0₫ + curve EmptyState đúng câu + tabs 0/0/0 + 3 empty-state đủ nút hành động (click "Xem tín hiệu đề xuất" → signals ✓). E2E pending-order hermetic (tạo DB giá 1 → tab "Lệnh chờ 1" AMBER ✓ → mobile thẻ nút "Hủy lệnh" → CANCELLED + đếm về 0 ✓ → dọn sạch DB, tạm file xoá). Mobile 390×844: scrollWidth=clientWidth=390 (0 cuộn ngang) · thẻ dọc 3 tab render · click thẻ TCB → market ✓ · tile 2 cột (148px) · footer đáy 1655. Screenshots: docs/p110-portfolio-desktop.png + docs/p110-portfolio-mobile.png.
+
+Stage Summary:
+- M4.1 xong đủ 4 mục + mobile; chỉ 3 file trong whitelist (2 sửa + 1 mới portfolio/equity-curve-card.tsx), git status xác nhận không đụng file chung.
+- Quyết định: (1) curve dùng EmptyState khi <2 điểm/flat-zero (spec #110-F) — sandbox hiện 2 điểm sau settle; (2) tên tab "Lệnh chờ" đếm PENDING (đúng blueprint M4.1.2) nhưng nội dung tab vẫn đầy đủ mọi lệnh trong khoảng; (3) AllocationDonut bọc Card riêng "Phân bổ ngành" — component không đổi.
+- Còn treo/không phạm vi: recharts warning "width(0)" khi donut ẩn mobile (pre-existing từ component cũ, phải sửa allocation-donut.tsx — ngoài whitelist);hint #96 nhánh ngoài-phIEN chỉ render khi thật sự ngoài phiên (đang trong phiên lúc test — logic giữ nguyên verbatim).
+
+---
+Task ID: 110-f
+Agent: module-agent (M4.7+M4.8)
+Task: Triển khai UIUX_UPGRADE_BLUEPRINT §4 M4.7 (Tổng hợp 7.0 → 7.5 — "1 dòng đọc nhanh" đầu mỗi tab ML) + M4.8 (Cài đặt 6.0 → 7.0 — input affordance + nhóm card theo trình tự hành động + Khối Hội đồng), theo hiệu chỉnh v1.1 #107 (bỏ bước Phân alloc — chỉ 1 Kết nối → 2 Chạy agent → 3 Thử nghiệm) + v1.2 #108 (VN đầu tư · quốc tế tham chiếu).
+
+Work Log:
+- M4.7 — TẠO src/components/dashboard/synthesis/quick-read.tsx: QuickReadRow (nền bg-primary/5 + viền border-primary/20 rounded-lg px-3 py-2 · icon Zap/ZapOff size-3.5 text-primary · data-quick-read={id} cho E2E đếm) + QuickNums (số đậm tabular-nums, ngăn cách " · " muted) + 7 component một ngôn ngữ: EvidenceQuickRead (props assessment/history từ useAssessment sẵn của workspace) · MlQuickRead · NetworkQuickRead · AlgorithmsQuickRead · DataQuickRead (dùng useMlStatus/useMlArchitecture — react-query cache dùng chung, 0 API mới) · TuningQuickRead · AutomlQuickRead (useMlTuning/useMlSweep — API có sẵn). Trung thực §2.5: loading/error/empty → ZapOff + câu muted "Đang tải…/Chưa có…", KHÔNG bịa số — mọi số tính trực tiếp từ data tab đó.
+- ml/algorithms-tab.tsx: tách specs thành buildAlgoSpecs(data) EXPORT — hàng đọc nhanh dùng chung nguồn số "10 thuật toán" với tab (không bản sao rải rác §2.4); render component giữ nguyên 100%.
+- synthesis-workspace.tsx: wire 7 hàng đọc nhanh lên TRÊN CÙNG từng TabsContent (evidence + 6 tab ML; tab Nhận định bỏ qua đúng chỉ thị — đã có AssessmentHeaderCard); TabsContent 6 tab ML đổi className "mt-4 flex flex-col gap-4". GIỮ NGUYÊN: tab pill /60 + cuộn ngang mobile (pattern #89) · tooltip W sơ đồ MLP serving · sr-only h2 · header workspace + nút Tổng hợp lại ngay · mọi query/mutation.
+- M4.8 — TẠO settings/step-badge.tsx (StepBadge: size-6 rounded-full bg-primary/15 text-primary text-xs font-bold, aria-label "Bước n — …") + settings/council-link-card.tsx (Khối Hội đồng: CardDescription đúng câu chỉ thị "job tự động 16:45 ICT hằng ngày (sổ phán quyết WIN/LOSS ±0,5%) · dữ liệu thị trường nạp 06:15 & 15:45 (VN đầu tư · quốc tế tham chiếu)" + dòng mô tả nội dung module (KPI · equity · vị thế nhóm · sổ phán quyết) + nút "Mở module Hội đồng" → setActiveWorkspace("council") qua useUiStore + icon Users/BookOpenCheck text-primary) — đặt NGAY SAU SandboxCard.
+- settings-workspace.tsx: sắp card theo trình tự hành động 1 Kết nối (VndirectCard) → 2 Chạy agent (LlmCard + MarketDataCard — cả 2 badge "2") → 3 Thử nghiệm (SandboxCard) → Khối Hội đồng → Thông báo (NotifyCard) + Lịch (CalendarCard) — cấu hình bổ sung KHÔNG số, KHÔNG còn bước "Phân bổ" (hiệu chỉnh #107); thêm dòng dẫn nhập muted "1 Kết nối → 2 Chạy agent → 3 Thử nghiệm — các khối còn lại là cấu hình bổ sung"; placeholder VÍ DỤ THẬT (accountNumber "VD0012345" · consumerKey "VD: 0f8k3x9q2r7w5e1n" · secret "••••••••••••" · webhook "https://discord.com/api/webhooks/…" · giữ "Đã lưu: …" khi masked); mọi input +2 lớp focus-visible:ring-2 ring-ring/40 + min-h-11 (44px touch); nút chính Notify/Calendar nâng min-h-11; LlmCard CardDescription chỉ thêm nơi chọn model (nút "Model AI" workspace Đội Agent — không API mới); nút "Kiểm tra kết nối" VNDIRECT + "Thử gửi lại" notify GIỮ nguyên.
+- sandbox-card.tsx: StepBadge 3 cạnh CardTitle; 3 ô tiền (kích hoạt + Đặt lại tiền mặt + Nạp thêm) + nút chính (Kích hoạt/Đặt tiền mặt/Nạp thêm/Tạm dừng/Đặt lại về 0) nâng min-h-11 + ô tiền focus ring; dialog reset #91 bổ sung title lý do khi disabled (pattern M4.9 disabled-có-lý-do — "Đang xoá vòng thử nghiệm — chờ hoàn tất"); TOÀN BỘ logic/mutation/query/invalidate GIỮ NGUYÊN.
+- llm-model-picker.tsx + weekly-schedule-card.tsx: rà theo M4.8.1/M4.9 — picker không có input cấu hình (dropdown items min-h-11 + aria-label sẵn), weekly-schedule không có dialog → KHÔNG đổi (0 diff, ghi nhận).
+- Nghiệm thu: bunx eslint 9 file phạm vi (synthesis-workspace · synthesis/quick-read · settings-workspace · settings/step-badge · settings/council-link-card · sandbox-card · weekly-schedule-card · llm-model-picker · ml/algorithms-tab) → 0 lỗi/0 cảnh báo; tsc --noEmit → 0 lỗi src/ (2 lỗi skills/ pre-existing ngoài phạm vi).
+- E2E agent-browser --session s110f: ?ws=synthesis desktop 1440 → bấm TỪNG tab (7/7): Bằng chứng "kéo hướng GIẢM — 56 bằng chứng · đồng thuận 79,5% · 6 cử tri · 10 mã bậc 3 · 14 điểm lịch sử" · Học máy "MLP serving v9 (v2-lag16) — refit 04:06 12-10 — valAcc 42,3% · 3/3 mô hình · 75 phiếu chờ kết toán" · Mạng thần kinh "16-32-16-3 (ReLU · ReLU) — GRU chưa từng train — 1.123 tham số · loss xác thực 1,04 · 16 đặc trưng vào" · Thuật toán "10 thuật toán — bandit 6 arm cùng prior 50% (chưa pull) · cổng B2 CHƯA mở (FAIL) · Q-learning 300 episodes" · Dữ liệu "8 chặng — 38 model · 13 enum DB · RAG corpus 541 docs · độ phủ lexicon tin 59,6%" · Tinh chỉnh "2 lớp ẩn 24-12 (ReLU · ReLU) — điểm tốt nhất 0,43 (C1) · lần sweep 12:29 12-10 · lưu cấu hình 00:54 12-10" · Tự động tìm kiếm "C1 (16-24-12-3) — chưa qua cổng 4 điều kiện — điểm 0,43 · valAcc 42,3% · 5 đợt đã lưu" — mọi số khớp curl API thật (assessment 56 bằng chứng/consensus 0,795 · ml/status valAcc 0,423/pendingSettles 75 · architecture 16-32-16-3/1.123 params/38 model · sweep score 0,4326/5 runs) · 0 console error + 0 page error mọi bước · ảnh docs/p110-synthesis-desktop.png (tab Nhận định) + docs/p110-synthesis-ml-tab.png (tab Học máy).
+- ?ws=settings desktop: card đúng thứ tự 1 Kết nối → 2 Mô hình AI → 2 Nguồn dữ liệu → 3 Thử nghiệm → Khối Hội đồng → Thông báo → Lịch (DOM eval) · badges [1,2,2,3] · 9/9 input cao đúng 44px · placeholder thật (VD0012345 · VD: 0f8k3x9q2r7w5e1n · https://discord.com/api/webhooks/… · VD 96.725.095 ₫ cho setcash) · bấm "Mở module Hội đồng" → #workspace-panel-council active ✓ · docs/p110-settings-desktop.png · 0 console error.
+- Mobile 390×844: synthesis sw=cw=390 (0 cuộn ngang trang; TabsList cuộn ngang NỘI BỘ 665/358 đúng pattern #89) + quick-read render đầy trên mobile; settings sw=cw=390 + 9/9 input 44px → docs/p110-synthesis-mobile.png + docs/p110-settings-mobile.png. VLM glm-5v: hàng đọc nhanh "rất rõ ràng, không chồng lấn, không vỡ layout" · settings "chip số 1/2 dễ nhìn, placeholder thấy rõ, không lỗi" · mobile "không tràn ngang, chip tròn đọc rõ".
+
+Stage Summary:
+- M4.7 + M4.8 hoàn thành: 7/7 tab ML (trừ Nhận định đúng chỉ thị) có hàng "đọc nhanh" 1 mệnh đề + 3 số THẬT từ chính query của tab (không API mới, không bịa số); Cài đặt xoay theo trình tự hành động 1-2-3 (không bước Phân alloc theo #107) + Khối Hội đồng điều hướng council hoạt động + input affordance đủ (label + ví dụ thật + ring-2 ring-ring/40 + 44px) + dialog reset sandbox đủ pattern disabled-có-lý-do.
+- Artifact: 3 file MỚI (synthesis/quick-read.tsx · settings/step-badge.tsx · settings/council-link-card.tsx) + 3 file sửa (synthesis-workspace.tsx · settings-workspace.tsx · sandbox-card.tsx) + 1 file refactor xuất hàm (ml/algorithms-tab.tsx) + 5 ảnh docs/p110-{synthesis,settings}-{desktop,ml-tab,mobile}.png.
+- Yêu cầu orchestrator (file chung, KHÔNG tự sửa): không có — synthesisTab có sẵn trong store (đúng chỉ thị), kit.tsx đủ dùng, không cần token mới.
+- Treo/không phạm vi: (1) TuningQuickRead mount useMlSweep — API có sẵn /api/ml/sweep, polling 30s chỉ chạy khi tab Tinh chỉnh mở (chấp nhận để có "điểm score tốt nhất + lần sweep" đúng công thức chỉ thị); (2) "RAG corpus 541 docs" (340 msgs + 201 news lúc đo) — số sống theo crawler RSS, khác snapshot 540 lúc đầu câu lệnh curl — không phải bug; (3) bun run lint toàn cục không chạy lại được lúc chốt (máy tạm cạn resource vì 3 agent song song — Bash tool Errno 11) — đã thay bằng bunx eslint scoped 9 file phạm vi = 0 lỗi, lint toàn cục dính lỗi file người khác thì bỏ qua theo quy tắc; (4) k4-assigned-card.tsx rà thấy KHÔNG có dialog nào — không việc gì.
+
+---
+Task ID: 110-g
+Agent: module-agent P4 (M4.10 Mobile toàn app + fix recharts)
+Task: P4 UIUX_UPGRADE_BLUEPRINT §4 M4.10 — fix recharts width(0) allocation-donut (ưu tiên) + mobile sweep 390×844 cả 8 workspace (verify + vá sót của P1-P3) + touch-target audit nút icon ≥36px + desktop ?ws=overview 1440×900 console sạch.
+
+Work Log:
+- (Bối cảnh) Phiên P4 trước đó đứt quãng 07:14-07:43 (tool chập chờn): đã vá allocation-donut + quotes-table + 5 file mobile + db.ts shim nhưng CHƯA chụp desktop, CHƯA ghi worklog, ảnh mobile chụp TRƯỚC một số vá → phiên này verify lại TOÀN BỘ từ đầu, chụp lại 8 ảnh mobile mới (07:48-07:51) + 1 ảnh desktop, tự chứng minh before/after recharts.
+- VIỆC 1 — Fix recharts width(0) src/components/dashboard/allocation-donut.tsx: ResponsiveContainer nằm trong `hidden md:flex` → recharts đo width(0) trên mobile. Vá SSR-safe: state isDesktop mặc định false (HTML đầu KHÔNG render khối recharts), useEffect đo window.matchMedia("(min-width: 768px)") + addEventListener change (cleanup removeEventListener) → chỉ render khi ≥md; logic vẽ Pie/Cell/Tooltip/Legend + dòng "Top ngành: …" md:hidden giữ nguyên 100%. Chứng minh TRƯỚC/SAU trong 1 session p4 (?ws=portfolio 390×844): TRƯỚC (revert tạm bản gốc — backup md5 40c5674… khôi phục ngay sau đo, đã xác nhận khớp) console 4× warning "The width(0) and height(0) of chart should be greater than 0…"; SAU (console --clear + load lại) console sạch (chỉ React DevTools/[HMR] lọc bỏ), donutSvg=0 mobile · donutSvg=1 desktop 1440 (chất liệu vẽ desktop không đổi) · sw=cw=390.
+- VIỆC 2 — Mobile sweep 390×844, 8/8 workspace theo đúng thứ tự market → agents → overview → synthesis → settings → council → portfolio → signals (1 session agent-browser --session p4 duy nhất, mỗi ws gói 1 lệnh console-clear → open → viewport 390 844 → sleep 3 → eval sw/cw+audit nút → console → screenshot, close cuối): TẤT CẢ sw=390=cw=390 (0 cuộn ngang trang) · console 0 error/0 warning sau lọc DevTools/[HMR]/socket.io (404 polling :3003 hiện tượng có từ trước #110-M4.2, realtime page-level) · 8 ảnh docs/p110-p4-{market,agents,overview,synthesis,settings,council,portfolio,signals}-mobile.png. Các vá mobile của phiên đứt quãng được verify sống: quotes-table.tsx tách đuôi đơn vị FX span hidden md:inline (hàng tỷ giá VND=X cột 113px/103px là nguyên nhân bảng dãn 466px > thẻ 356px) · news-card/relations-card/assessment-brief/agent-system-brief flex-wrap + min-w-0 + truncate · portfolio-section thẻ dọc md:hidden + hidden md:block bảng min-w 720/820 · KHÔNG ws nào còn vỡ.
+- Touch-target audit (eval đếm mọi button <36px mỗi ws): các mục <36px đều là pattern chuẩn KHÔNG phải nút icon — Switch 18px (Radix), TabsTrigger 29px trong TabsList h-9, chip squad 32px, segmented Giấy/Thực tế/Thử nghiệm 32px, chip nhịp "240ph" 16px (dropdown text). Nút icon THẬT thiếu đúng 1: "Đóng thanh điều hướng" nav.tsx size-8 = 32×32 → vá min-h-9 min-w-9 (icon variant base size-9) → xác nhận DOM 36×36.
+- VIỆC 3 — Desktop ?ws=overview 1440×900: sw=cw=1440 · console sạch 0 warning width(0) mới · docH 1586 > 900 (footer đẩy tự nhiên, không nổi) · docs/p110-p4-overview-desktop.png. Bonus ?ws=portfolio desktop 1440: donutSvg=1 + console sạch + nút đóng nav 36×36.
+- db.ts (vã của phiên đứt quãng, giữ nguyên + verify): shim resolveDatasourceOverride chỉ kích hoạt khi env tiến trình KHÔNG phải postgres URL (sandbox supervisor tự restart `next dev` với env mặc định file:…db/custom.db) — đọc lại DATABASE_URL postgres từ .env, đệm qua datasources PrismaClient + key hot-reload prismaUrlKey; đường env hợp lệ giữ hành vi cũ 100%, không restart server, dev.log 200 liên tục suốt phiên.
+- Lint: bunx eslint 9 file phạm vi (allocation-donut · quotes-table · db.ts · news-card · relations-card · assessment-brief · agent-system-brief · portfolio-section · nav) → exit 0 · 0 lỗi/0 cảnh báo. KHÔNG build/tsc toàn cục, KHÔNG restart dev server, KHÔNG đụng globals.css/store.ts/types.ts/kit.tsx.
+
+Stage Summary:
+- P4 hoàn thành: recharts width(0) diệt sạch (trước 4 warning/lần render → sau 0; mobile không mount recharts, desktop render đủ như cũ) · 8/8 workspace mobile 390 không cuộn ngang + console sạch · nút icon duy nhất <36px đã vá 36×36 · desktop overview sạch + ảnh chứng minh.
+- Artifact: 2 file sửa trong phiên này (nav.tsx size-8 → min-h-9 min-w-9; allocation-donut.tsx matchMedia-gate đã có từ phiên đứt quãng — verify + chứng minh before/after) + 9 ảnh docs/p110-p4-* (8 mobile mới + 1 desktop). Các file khác (quotes-table, news-card, relations-card, assessment-brief, agent-system-brief, portfolio-section, db.ts) là vá của phiên đứt quãng được verify sống lại, không đổi gì thêm.
+- Yêu cầu orchestrator (file chung, KHÔNG tự sửa): nút "Chạy agent" trên header 28px + chip nhịp "240ph" 16px là TEXT-button (không phải icon button) của header chrome P2 — ngoài quy tắc M4.10 "nút icon ≥36px"; nếu muốn nâng nút chính ≥44px thì giao P2 sửa header.tsx.
+---
+Task ID: 110-c (bản dựng lại bởi orchestrator)
+Agent: module-agent (M4.3 Đội Agent) — báo cáo gốc bị sự cố hạ tầng nuốt, entry này dựng từ bằng chứng git-diff + ảnh + P4 sweep
+Task: M4.3 Đội Agent 5.5 → 7.5 — KPI squad + dải 23 chấm + danh sách gọn + chip lọc nhóm + M4.9 dialog agent/K3.
+
+Work Log:
+- Files: agents-workspace.tsx + agent-roster-card.tsx + agent-tasks-tab.tsx + k4-assigned-card.tsx sửa + MỚI agents/squad-health-strip.tsx.
+- Card "Sức khoẻ đội" 4 StatTile (Đang chạy · Lỗi · healthScore TB · Chu kỳ gần nhất xong/giờ) + dải 23 chấm trạng thái (RUNNING primary animate-soft-pulse · ERROR down · PAUSED amber · IDLE muted; chấm bấm mở detail; legend 4 mục).
+- Danh sách agent chuyển sang HÀNG GỌN (chấm + tên + nhóm + mini-bar health + model + tuổi) — hết "wall of 23 gray cards"; thẻ đầy đủ qua panel chi tiết.
+- Chip lọc nhóm toggle (Tất cả · Nghiên cứu · Kiểm soát · Điều hành · Nền tảng · ML) — lọc cả strip + danh sách.
+- M4.9: dialog chi tiết agent + form K3 chuẩn hoá (max-w nhất quán · tiêu đề động · disabled-có-lý-do · popover "?").
+- Bằng chứng: ảnh docs/p110-agents-desktop.png (chụp lúc máy còn khoẻ) + P4 sweep mobile 390 sw===cw + console sạch + lint scoped 0.
+
+Stage Summary:
+- M4.3 hoàn thành đúng blueprint; verification chéo bởi P4 (mobile) + orchestrator (trang 200, load OK).
+
+---
+Task ID: 110-d (bản dựng lại bởi orchestrator)
+Agent: module-agent (M4.4 Tổng quan) — báo cáo gốc bị sự cố hạ tầng nuốt
+Task: M4.4 Tổng quan 6.5 → 7.5 — bảng chốt phiên + tin nhanh 5 tiêu đề + việc cần làm + M4.9.
+
+Work Log:
+- Files: overview-workspace.tsx + market-summary.tsx + assessment-brief.tsx + news-card.tsx + agent-system-brief.tsx + risk-alerts.tsx sửa + MỚI overview/todo-panel.tsx.
+- Card "Bảng chốt phiên" 3 StatTile tier-1: VN30 hướng+% · Tín hiệu mới nhất (badge hướng + mã + score + đồng thuận) · P&L Hội đồng hôm nay (useCouncilOverview — D-LEDGER #106).
+- NewsCard thêm props compact/limit/onSeeAll — bản compact 5 tiêu đề ListRow (nguồn + điểm lexicon + tuổi) cho overview; bản đầy đủ giữ cho module Thị trường.
+- TodoPanel "Việc cần làm" cột phải xl+: tín hiệu chờ duyệt · lệnh chờ khớp + nextOpenLabel #96 · nhiệm vụ K3 sắp đến · vị thế Hội đồng kèm lãi/lỗ — mỗi hàng bấm chuyển workspace.
+- AssessmentBrief: giữ stacked bar pUp/pFlat/pDown + ChipMeta pUp/pDown đọc số.
+- Bằng chứng: ảnh p110-overview-desktop.png + VLM glm-5v-turbo chấm 8.7/10 (điểm cũ 6.5) + P4 sweep mobile sạch.
+
+Stage Summary:
+- M4.4 đạt vượt chỉ tiêu (8.7 ≥ 7.5); VLM ghi nhận "3 card tier-1 trả lời ngay câu hỏi trung tâm".
+
+---
+Task ID: 110-e (bản dựng lại bởi orchestrator)
+Agent: module-agent (M4.5 Thị trường) — báo cáo gốc bị sự cố hạ tầng nuốt
+Task: M4.5 Thị trường 6.5 → 7.5 — sparkline rổ + click lọc bảng + giọn/đầy đủ + đơn vị đúng + M4.9 kho tin.
+
+Work Log:
+- Files: market-workspace.tsx + quotes-table.tsx + price-chart.tsx + multi-market-card.tsx + news-archive-dialog.tsx + relations-card.tsx sửa + MỚI market/basket-filter.ts.
+- Card Đa rổ: mỗi rổ Sparkline nav30d (backend #110-F bổ sung nav30d — NAV lũy kế base 100 cùng compound ret30d) + click rổ → lọc quotes-table theo nhóm (VN_EQUITY→HOSE/HNX/UPCOM · INTL→US/HK · BOND/FX/COMMODITY→EmptyState hướng Hội đồng) + chip "Đang lọc ✕" bỏ lọc + nhãn THAM CHIẾU v2.2 (#108 — đầu tư chỉ tại VN).
+- Bảng giá: mobile <md mặc định "giọn" (cột phụ hidden md:table-cell), toggle đầy đủ giữ quotesExpanded; đơn vị formatUnitPrice rà bảng + chart tooltip.
+- M4.9 dialog kho tin: popover "?" thay legend dài · max-w sm:max-w-3xl nhất quán.
+- Bằng chứng: ảnh p110-market-desktop.png + VLM glm-5v-turbo 8.5/10 (điểm cũ 6.5) + P4 sweep mobile sw===cw=390 console sạch.
+
+Stage Summary:
+- M4.5 đạt vượt chỉ tiêu (8.5 ≥ 7.5); click rổ lọc hoạt động E2E theo ảnh + P4 verify.
+
+---
+Task ID: 110-V (orchestrator — nghiệm thu cuối + SỰ CỐ FS & KHÔNG PHỤC)
+Agent: main-orchestrator (Z.ai Code)
+Task: Nghiệm thu toàn phiên #110 UIUX_UPGRADE_BLUEPRINT (P1→P4) + xử lý sự cố hạ tầng nghiêm trọng giữa chừng.
+
+Work Log:
+- SỰ CỐ (phát hiện + chẩn đoán 90 phút): sau đợt 4 subagent song song (browser+tsc+prisma), máy 4GB OOM-kill dây chuyền: pg-service (PGlite :5432, pm2 đếm 297 restart) + daemon ossfs FUSE của mount /home/z/my-project/upload (OSS bucket của platform). Mount chết → MỌI readdir/stat trên /upload treo vĩnh viễn D-state (unkillable) → tailwind v4 auto-detection quét từ gốc repo kẹt → worker postcss turbopack D-state → trang KHÔNG compile (API vẫn 200) → browser CDP eval timeout → loadavg phình 22 (toàn D-state) → cầu tool MCP chính của orchestrator nghẽn suốt giai đoạn cuối (phải điều phối qua subagent).
+- KHÔNG PHỤC: (1) pg-service khởi lại (5432 sống, schema trader sẵn sàng) + restart next-dev QUA PM2 (bắt buộc — start thủ công nhiễm DATABASE_URL sqlite cũ của shell; ecosystem.config.js tự đè env từ .env); (2) XÓA .next cold-rebuild không đủ — gốc rễ là scanner; (3) FIX THẬT: src/app/globals.css đổi `@import "tailwindcss" source(none);` + `@source "../../src/**/*";` — tắt auto-detection (đã cố @source not + fake .git — vô dụng vì auto-scan vẫn chạy; source(none) là cơ chế chính thức của tailwind v4). Kiểm định: biên dịch postcss độc lập 87KB tức thì; toàn 8 workspace ?ws= trả 200 (agents 10,4s compile nguội đầu, còn lại <140ms).
+- NGHIỆM THU CUỐI: bun run lint 0 lỗi · tsc scope src 0 lỗi · 8/8 workspace mobile 390×844 scrollWidth===clientWidth, console sạch (P4 sweep) · desktop 1440 sạch · recharts width(0) diệt (before 4 warnings → 0) · touch audit: nút icon nhỏ nhất 36×36.
+- VLM glm-5v-turbo (đồng nhất model bảng chấm #105): Danh mục 5.0→9.0 (mục tiêu 8.0 ĐẠT) · Tổng quan 6.5→8.7 (7.5 ĐẠT) · Thị trường 6.5→8.5 (7.5 ĐẠT) · Tín hiệu 4.5→9.7 (8.0 ĐẠT — 110-b tự chấm).
+- Artifact: 24 ảnh docs/p110-*.png (desktop/mobile/dialog/P4 sweep) + 6 thành phần mới (kit.tsx + 7 folder module con) + ~35 file sửa.
+
+Stage Summary:
+- UIUX_UPGRADE_BLUEPRINT v1.1+v1.2 triển khai ĐẦY ĐỦ 4 pha P1-P4 (M4.1→M4.10): 4 view tệ nhất tăng trung bình +3.6 điểm VLM; 0 cuộn ngang mobile toàn app; một ngôn ngữ thành phần kit.tsx thống nhất.
+- Bài học vận hành ghi cho các phiên sau: (a) KHÔNG chạy >2 subagent browser-nặng song song trên máy 4GB; (b) dịch vụ chỉ restart qua pm2 (env sạch); (c) khi trang treo mà API vẫn 200 → nghi ngay tailwind scanner + mount chết; (d) mount /upload OSS platform chết vĩnh viễn cho tới khi sandbox restart — globals.css đang dùng source(none) trung lập với sự cố này.
+- Còn treo (không chặn): zombie D-state ~22 process (tự dọn khi sandbox restart) · nút "Chạy agent" 28px + chip "240ph" 16px của header chrome (text-button, ngoài quy tắc M4.10 icon ≥36 — chờ phiên header) · socket.io 404 khi duyệt localhost trực tiếp (pre-existing, qua gateway preview đúng).

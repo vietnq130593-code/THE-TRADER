@@ -104,6 +104,11 @@ export interface PortfolioResponse {
     totalEquity: number;
     dayChangePct: number;
   };
+  /** #110 M4.1.1 — đường cong equity thế giới đang xem (cũ → mới, ≤ 90 điểm;
+   *  rỗng khi chưa có snapshot — UI tự ẩn, trung thực trạng thái). */
+  equityCurve?: Array<{ createdAt: string; equity: number }>;
+  /** #110 M4.1.1 — sức mua ước tính (cash + positionsMv×0.5 − marginUsed). */
+  buyingPower?: number;
 }
 
 export interface OrderRow {
@@ -652,6 +657,19 @@ export interface SignalRow {
    *  khoản thử nghiệm (Order sandbox neo signalId) — badge "Đã thực thi" ở
    *  feed. Optional: các nguồn mapSignalRow cũ không trả field này. */
   sandboxExecuted?: boolean;
+  /** #110 M4.2.1 — cổng đồng thuận hội đồng (CONSENSUS · WEAK_MAJORITY ·
+   *  NO_CONSENSUS · null khi tín hiệu không qua hội đồng). */
+  consensusGate?: string | null;
+  /** #110 M4.2.1 — tỉ lệ trọng số số đông (0..1) kèm consensusGate. */
+  consensusRatio?: number | null;
+  /** #110 M4.2.3 — phán quyết sổ đánh giá D-LEDGER (#106) gắn lên tín hiệu
+   *  đã đánh giá (null = chưa đánh giá). Chip "LỢI +2,3%"/"TỔN THẤT −1,1%". */
+  evaluation?: {
+    verdict: string;
+    markPnlPct: number | null;
+    cashPnlVND: number | null;
+    executionKind: string | null;
+  } | null;
 }
 
 export interface RiskAlertRow {
@@ -1339,6 +1357,8 @@ export interface BasketStatView {
   vol30d: number | null;
   bestDay: number | null;
   worstDay: number | null;
+  /** #110 M4.5.1 — NAV lũy kế 30 phiên base 100 (sparkline card Đa rổ). */
+  nav30d?: number[];
 }
 
 export interface CouncilBasketsResponse {

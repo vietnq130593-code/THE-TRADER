@@ -63,11 +63,40 @@ export async function GET(req: Request) {
       : [];
     const executedSet = new Set(executedRows.map((o) => o.signalId));
 
+    // #110 M4.2.3 — gắn phán quyết sổ đánh giá D-LEDGER (#106) lên tín hiệu
+    // đã được đánh giá: chip "LỢI +2,3%" / "TỔN THẤT −1,1%" ở feed — vòng
+    // phản hồi thị giác (trader thấy quyết định cũ kèm hậu quả). 1 query IN,
+    // signalId @unique nên map 1-1.
+    const evaluationRows = ids.length
+      ? await db.decisionEvaluation.findMany({
+          where: { signalId: { in: ids } },
+          select: {
+            signalId: true,
+            verdict: true,
+            markPnlPct: true,
+            cashPnlVND: true,
+            executionKind: true,
+          },
+        })
+      : [];
+    const evaluationBySignal = new Map(evaluationRows.map((e) => [e.signalId, e]));
+
     return NextResponse.json(
       toPlain({
         signals: signals.map((s) => ({
           ...mapSignalRow(s),
           sandboxExecuted: executedSet.has(s.id),
+          evaluation: (() => {
+            const e = evaluationBySignal.get(s.id);
+            return e
+              ? {
+                  verdict: e.verdict,
+                  markPnlPct: e.markPnlPct,
+                  cashPnlVND: e.cashPnlVND,
+                  executionKind: e.executionKind,
+                }
+              : null;
+          })(),
         })),
       })
     );

@@ -10,6 +10,10 @@ import type { PortfolioPosition } from "@/lib/types";
  * PHASE3_BLUEPRINT §5.3 — donut phân bổ danh mục theo ngành
  * (Instrument.sector × marketValue). Chỉ hiển thị desktop ≥ md;
  * mobile dùng dòng tổng hợp "Top ngành: …" (xử lý ở parent).
+ *
+ * #110-g M4.10: khối donut chỉ render khi thực sự hiển thị (matchMedia ≥768px,
+ * SSR-safe — mặc định không render, đo sau khi mount) để recharts
+ * ResponsiveContainer không đo width(0) trên mobile khi container `hidden md:flex`.
  */
 
 // Bảng màu ngành — tách biệt đủ, không dùng indigo/blue thuần
@@ -36,6 +40,18 @@ interface AllocationDonutProps {
 }
 
 export function AllocationDonut({ positions, totalMarketValue, loading }: AllocationDonutProps) {
+  // SSR-safe: mặc định false (không render donut ở HTML đầu tiên), sau khi mount
+  // đo matchMedia rồi mới render — tránh recharts warning width(0) khi ẩn ở mobile.
+  const [isDesktop, setIsDesktop] = React.useState(false);
+
+  React.useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const update = () => setIsDesktop(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
   const slices = React.useMemo<SectorSlice[]>(() => {
     const bySector = new Map<string, number>();
     for (const p of positions) {
@@ -74,7 +90,8 @@ export function AllocationDonut({ positions, totalMarketValue, loading }: Alloca
           <p className="text-[11px] text-muted-foreground md:hidden">
             Top ngành: {topSectorsLine || "—"}
           </p>
-          <div className="hidden items-center gap-4 md:flex">
+          {isDesktop && (
+            <div className="hidden items-center gap-4 md:flex">
             <div className="h-40 w-40 shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -124,8 +141,9 @@ export function AllocationDonut({ positions, totalMarketValue, loading }: Alloca
                   </span>
                 </li>
               ))}
-            </ul>
-          </div>
+              </ul>
+            </div>
+          )}
         </>
       )}
     </div>

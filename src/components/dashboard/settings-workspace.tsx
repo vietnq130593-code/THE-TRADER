@@ -49,6 +49,10 @@ import type { MarketDataMode, SettingsResponse } from "@/lib/types";
 // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.6): khối "Cơ chế thử nghiệm (tiền ảo)"
 // — query riêng /api/k/sandbox (không phụ thuộc useSettings nên luôn hiển thị).
 import { SandboxCard } from "@/components/dashboard/sandbox-card";
+// M4.8 (#110 — UIUX_UPGRADE_BLUEPRINT §4): chip số bước 1-2-3 cạnh CardTitle +
+// Khối Hội đồng (card cấu hình bổ sung, điều hướng sang module Hội đồng).
+import { StepBadge } from "@/components/dashboard/settings/step-badge";
+import { CouncilLinkCard } from "@/components/dashboard/settings/council-link-card";
 
 /**
  * Phiên #34 — workspace "Cài đặt": kết nối VNDIRECT (credentials masked),
@@ -81,11 +85,14 @@ const FORM_FIELDS: {
   label: string;
   secret: boolean;
   autoComplete: string;
+  /** M4.8 (#110) — placeholder ví dụ THẬT (không phải mô tả chung chung
+   *  “Nhập…”): trader nhìn vào biết ngay định dạng giá trị kỳ vọng. */
+  example: string;
 }[] = [
-  { key: "consumerKey", label: "Consumer Key", secret: true, autoComplete: "off" },
-  { key: "consumerSecret", label: "Consumer Secret", secret: true, autoComplete: "off" },
-  { key: "accessToken", label: "Access Token", secret: true, autoComplete: "off" },
-  { key: "accountNumber", label: "Số tài khoản", secret: false, autoComplete: "off" },
+  { key: "consumerKey", label: "Consumer Key", secret: true, autoComplete: "off", example: "VD: 0f8k3x9q2r7w5e1n" },
+  { key: "consumerSecret", label: "Consumer Secret", secret: true, autoComplete: "off", example: "••••••••••••" },
+  { key: "accessToken", label: "Access Token", secret: true, autoComplete: "off", example: "••••••••••••" },
+  { key: "accountNumber", label: "Số tài khoản", secret: false, autoComplete: "off", example: "VD0012345" },
 ];
 
 /** Số % gọn: "40%" / "12,5%". */
@@ -136,13 +143,25 @@ export function SettingsWorkspace() {
         </Card>
       ) : (
         <>
+          {/* M4.8 (#110 — UIUX_UPGRADE_BLUEPRINT §4, hiệu chỉnh v1.1 #107): nhóm
+              card theo TRÌNH TỰ HÀNH ĐỘNG — 1 Kết nối → 2 Chạy agent → 3 Thử
+              nghiệm (KHÔNG còn bước “Phân bổ”: khoản tiền thử nghiệm sandbox LÀ
+              thí nghiệm). Các card còn lại là cấu hình bổ sung: thông báo ·
+              lịch nghỉ lễ · hội đồng. */}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Cấu hình theo trình tự hành động: {" "}
+            <span className="font-medium text-foreground">1 Kết nối</span> →{" "}
+            <span className="font-medium text-foreground">2 Chạy agent</span> →{" "}
+            <span className="font-medium text-foreground">3 Thử nghiệm</span> —
+            các khối còn lại là cấu hình bổ sung.
+          </p>
           <VndirectCard settings={data} />
-          {/* K1 (#87 §5.6): đặt sát kết nối VNDIRECT — 2 khối tài khoản/đồng tiền */}
-          <SandboxCard />
+          <LlmCard settings={data} />
           <MarketDataCard settings={data} />
+          <SandboxCard />
+          <CouncilLinkCard />
           <NotifyCard settings={data} />
           <CalendarCard settings={data} />
-          <LlmCard settings={data} />
         </>
       )}
     </div>
@@ -246,6 +265,7 @@ function VndirectCard({ settings }: { settings: SettingsResponse }) {
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
+          <StepBadge n={1} label="Kết nối" />
           <KeyRound className="size-4 text-muted-foreground" aria-hidden="true" />
           Kết nối VNDIRECT
         </CardTitle>
@@ -278,9 +298,12 @@ function VndirectCard({ settings }: { settings: SettingsResponse }) {
                     value={form[f.key]}
                     onChange={(e) => setField(f.key, e.target.value)}
                     placeholder={
-                      masked ? `Đã lưu: ${masked}` : "Chưa cấu hình"
+                      masked ? `Đã lưu: ${masked}` : f.example
                     }
-                    className={cn("min-h-11 pr-10", f.secret && "font-mono text-sm")}
+                    className={cn(
+                      "min-h-11 pr-10 focus-visible:ring-2 focus-visible:ring-ring/40",
+                      f.secret && "font-mono text-sm"
+                    )}
                   />
                   {f.secret && (
                     <button
@@ -480,6 +503,7 @@ function MarketDataCard({ settings }: { settings: SettingsResponse }) {
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
+          <StepBadge n={2} label="Chạy agent" />
           <Database className="size-4 text-muted-foreground" aria-hidden="true" />
           Nguồn dữ liệu thị trường
         </CardTitle>
@@ -664,10 +688,15 @@ function LlmCard({ settings }: { settings: SettingsResponse }) {
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
+          <StepBadge n={2} label="Chạy agent" />
           <Cpu className="size-4 text-muted-foreground" aria-hidden="true" />
           Mô hình AI &amp; đội agent
         </CardTitle>
-        <CardDescription>Thông tin runtime — chỉ đọc</CardDescription>
+        <CardDescription>
+          Đội 23 agent chạy trên model AI đang chọn (nút “Model AI” ở workspace Đội
+          Agent — kèm nút Kiểm tra model thật) · nguồn giá ở card trên · thông tin
+          runtime chỉ đọc
+        </CardDescription>
         {llm.free && (
           <CardAction>
             <Badge variant="outline" className="border-up/40 text-up">
@@ -922,10 +951,10 @@ function NotifyCard({ settings }: { settings: SettingsResponse }) {
               id="notify-webhook"
               value={webhookUrl}
               onChange={(e) => setWebhookUrl(e.target.value)}
-              placeholder="https://hooks.example.com/trader"
+              placeholder="https://discord.com/api/webhooks/…"
               autoComplete="url"
               inputMode="url"
-              className="h-11"
+              className="min-h-11 focus-visible:ring-2 focus-visible:ring-ring/40"
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -937,7 +966,7 @@ function NotifyCard({ settings }: { settings: SettingsResponse }) {
               placeholder="trader@example.com"
               autoComplete="email"
               inputMode="email"
-              className="h-11"
+              className="min-h-11 focus-visible:ring-2 focus-visible:ring-ring/40"
             />
           </div>
         </div>
@@ -945,29 +974,32 @@ function NotifyCard({ settings }: { settings: SettingsResponse }) {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            size="sm"
-            className="min-h-9 gap-2"
+            className="min-h-11 gap-2"
             onClick={handleSave}
             disabled={update.isPending}
           >
             {update.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (
-              <Save className="size-3.5" aria-hidden="true" />
+              <Save className="size-4" aria-hidden="true" />
             )}
             Lưu kênh
           </Button>
           <Button
             variant="outline"
-            size="sm"
-            className="min-h-9 gap-2"
+            className="min-h-11 gap-2"
             onClick={() => void handleRetry()}
             disabled={retrying || pending === 0}
+            title={
+              pending === 0
+                ? "Không có bản tin nào đang chờ — bản tin mới vào hàng đợi mỗi chu kỳ S1"
+                : undefined
+            }
           >
             {retrying ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (
-              <RefreshCw className="size-3.5" aria-hidden="true" />
+              <RefreshCw className="size-4" aria-hidden="true" />
             )}
             Thử gửi lại ({pending})
           </Button>
@@ -1139,7 +1171,7 @@ function CalendarCard({ settings }: { settings: SettingsResponse }) {
               value={extraText}
               onChange={(e) => setExtraText(e.target.value)}
               placeholder="2026-10-20, 2026-10-21"
-              className="h-11"
+              className="min-h-11 focus-visible:ring-2 focus-visible:ring-ring/40"
             />
             <p className="text-[11px] text-muted-foreground">
               Vd quốc tang / nghỉ bù thông báo muộn — A9 ngừng kiểm EOD những ngày này
@@ -1152,7 +1184,7 @@ function CalendarCard({ settings }: { settings: SettingsResponse }) {
               value={removeText}
               onChange={(e) => setRemoveText(e.target.value)}
               placeholder="2027-02-05"
-              className="h-11"
+              className="min-h-11 focus-visible:ring-2 focus-visible:ring-ring/40"
             />
             <p className="text-[11px] text-muted-foreground">
               Bỏ ngày ước lượng sai khi có công bố chính thức
@@ -1162,15 +1194,14 @@ function CalendarCard({ settings }: { settings: SettingsResponse }) {
         <div>
           <Button
             variant="outline"
-            size="sm"
-            className="min-h-9 gap-2"
+            className="min-h-11 gap-2"
             onClick={handleSave}
             disabled={update.isPending}
           >
             {update.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (
-              <Save className="size-3.5" aria-hidden="true" />
+              <Save className="size-4" aria-hidden="true" />
             )}
             Lưu lịch tuỳ chỉnh
           </Button>

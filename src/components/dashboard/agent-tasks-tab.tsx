@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   CalendarClock,
   CalendarDays,
+  CircleHelp,
   Loader2,
   Pause,
   Play,
@@ -25,6 +26,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -34,6 +40,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { formatDateTime } from "@/lib/format";
 import { describeSchedule } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
@@ -100,6 +112,19 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
     !createTask.isPending &&
     (kind === "once" || /^\d{2}:\d{2}$/.test(time));
 
+  // M4.9 (#110 — pattern #102 “DISABLED-CÓ-LÝ-DO”): vì sao chưa tạo được —
+  // hiển thị trong tooltip bọc nút chính (riêng phần pending hiển thị spinner).
+  const submitDisabledReason: string | null =
+    title.trim().length === 0
+      ? "Nhập tiêu đề nhiệm vụ (bắt buộc) để tạo"
+      : title.trim().length > 200
+        ? "Tiêu đề vượt quá 200 ký tự"
+        : description.length > 2000
+          ? "Mô tả vượt quá 2000 ký tự"
+          : kind !== "once" && !/^\d{2}:\d{2}$/.test(time)
+            ? "Giờ chạy phải đúng dạng HH:MM"
+            : null;
+
   function buildSchedule(): string | null {
     if (kind === "once") return null;
     if (!/^\d{2}:\d{2}$/.test(time)) return null;
@@ -128,6 +153,8 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
   }
 
   const tasks = tasksQuery.data?.tasks ?? [];
+  // M4.9 — tiêu đề dialog xoá động theo nhiệm vụ đang xác nhận.
+  const taskToDelete = tasks.find((t) => t.id === confirmDeleteId) ?? null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -137,7 +164,27 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
         className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3"
         aria-label="Tạo nhiệm vụ định kỳ"
       >
-        <p className="text-xs font-semibold">Tạo nhiệm vụ</p>
+        {/* M4.9 — legend dài chuyển sang popover “?” (thay footnote dài dòng) */}
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs font-semibold">Tạo nhiệm vụ</p>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                aria-label="Cách chọn lịch chạy nhiệm vụ"
+              >
+                <CircleHelp className="size-3.5 text-muted-foreground" aria-hidden="true" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-80 text-xs leading-relaxed text-muted-foreground">
+              <p className="mb-1.5 text-xs font-semibold text-foreground">Lịch chạy</p>
+              {kind === "once"
+                ? "Nhiệm vụ một lần — dùng nút “Chạy ngay” trong danh sách khi cần."
+                : "Giờ chạy kế tiếp do server tính theo giờ Việt Nam (ICT) — không lệ múi giờ máy. Định kỳ hằng ngày HH:MM · hằng tuần thứ + HH:MM."}
+            </PopoverContent>
+          </Popover>
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label htmlFor={`task-title-${agentCode}`} className="text-[11px]">
@@ -226,25 +273,46 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
             </Select>
           </div>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            {kind === "once"
-              ? "Nhiệm vụ một lần — dùng nút “Chạy ngay” trong danh sách khi cần."
-              : "Giờ chạy kế tiếp do server tính theo giờ Việt Nam (ICT) — không lệ múi giờ máy."}
-          </p>
-          <Button
-            type="submit"
-            disabled={!canSubmit}
-            className="h-11 gap-1.5 sm:h-9 sm:w-auto"
-            aria-label="Tạo nhiệm vụ"
-          >
-            {createTask.isPending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Plus className="size-4" aria-hidden="true" />
-            )}
-            Tạo nhiệm vụ
-          </Button>
+        {/* M4.9 — nút chính disabled-có-lý-do (tooltip #102), bỏ footnote dài */}
+        <div className="flex justify-end">
+          {createTask.isPending || submitDisabledReason == null ? (
+            <Button
+              type="submit"
+              disabled={createTask.isPending}
+              className="h-11 gap-1.5 sm:h-9 sm:w-auto"
+              aria-label="Tạo nhiệm vụ"
+            >
+              {createTask.isPending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Plus className="size-4" aria-hidden="true" />
+              )}
+              Tạo nhiệm vụ
+            </Button>
+          ) : (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* span bọc để tooltip vẫn hiện trên nút disabled (pattern #102) */}
+                  <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                    <Button
+                      type="button"
+                      className="h-11 gap-1.5 sm:h-9 sm:w-auto"
+                      disabled
+                      aria-disabled="true"
+                      aria-label="Tạo nhiệm vụ"
+                    >
+                      <Plus className="size-4" aria-hidden="true" />
+                      Tạo nhiệm vụ
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-64 text-left">
+                  {submitDisabledReason}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
         </div>
       </form>
 
@@ -283,16 +351,21 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
         </ul>
       )}
 
-      {/* ── Dialog xác nhận xoá ── */}
+      {/* ── Dialog xác nhận xoá (M4.9 chuẩn hoá: max-w-lg · tiêu đề động
+          theo nhiệm vụ đang xoá · footer Huỷ + nút chính disabled-có-lý-do) ── */}
       <Dialog
         open={confirmDeleteId != null}
         onOpenChange={(open) => {
           if (!open) setConfirmDeleteId(null);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Xoá nhiệm vụ?</DialogTitle>
+            <DialogTitle>
+              {taskToDelete
+                ? `Xoá nhiệm vụ “${taskToDelete.title}”?`
+                : "Xoá nhiệm vụ?"}
+            </DialogTitle>
             <DialogDescription>
               Nhiệm vụ sẽ bị xoá vĩnh viễn cùng lịch định kỳ của nó. Lịch sử
               AgentRun đã chạy vẫn được giữ nguyên để truy vết.
@@ -301,28 +374,47 @@ export function AgentTasksTab({ agentId, agentCode }: AgentTasksTabProps) {
           <DialogFooter className="gap-2 sm:gap-0">
             <DialogClose asChild>
               <Button variant="outline" className="h-11 sm:h-9">
-                Giữ lại
+                Huỷ
               </Button>
             </DialogClose>
-            <Button
-              variant="destructive"
-              className="h-11 gap-1.5 sm:h-9"
-              disabled={deleteTask.isPending}
-              onClick={() => {
-                if (confirmDeleteId) {
-                  deleteTask.mutate(confirmDeleteId, {
-                    onSettled: () => setConfirmDeleteId(null),
-                  });
-                }
-              }}
-            >
-              {deleteTask.isPending ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
+            {deleteTask.isPending ? (
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* span bọc để tooltip vẫn hiện trên nút disabled (pattern #102) */}
+                    <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                      <Button
+                        variant="destructive"
+                        className="h-11 gap-1.5 sm:h-9"
+                        disabled
+                        aria-disabled="true"
+                      >
+                        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                        Xoá nhiệm vụ
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-64 text-left">
+                    Đang xoá nhiệm vụ — đợi giây lát, hộp thoại tự đóng khi xong.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : (
+              <Button
+                variant="destructive"
+                className="h-11 gap-1.5 sm:h-9"
+                onClick={() => {
+                  if (confirmDeleteId) {
+                    deleteTask.mutate(confirmDeleteId, {
+                      onSettled: () => setConfirmDeleteId(null),
+                    });
+                  }
+                }}
+              >
                 <Trash2 className="size-4" aria-hidden="true" />
-              )}
-              Xoá nhiệm vụ
-            </Button>
+                Xoá nhiệm vụ
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

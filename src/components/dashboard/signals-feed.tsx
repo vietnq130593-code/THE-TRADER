@@ -1,63 +1,312 @@
 "use client";
 
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
-import {
-  ArrowRight,
-  FlaskConical,
-  Loader2,
-  Minus,
-  Radar,
-  TrendingDown,
-  TrendingUp,
-} from "lucide-react";
-import { toast } from "sonner";
+import { ArrowRight, FlaskConical, Play, Radar } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { apiGet, apiPost } from "@/lib/api";
+import {
+  ChipMeta,
+  EmptyState,
+  VerdictBadge,
+  type StatTileTone,
+} from "@/components/dashboard/kit";
+import {
+  SIGNAL_DIRECTION,
+  SignalDetailDialog,
+  consensusMeta,
+  statusMeta,
+} from "@/components/dashboard/signals/signal-detail-dialog";
+import { apiGet } from "@/lib/api";
 import { useDateRange } from "@/hooks/use-date-range";
-import { formatPrice } from "@/lib/format";
+import { formatPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { SignalRow } from "@/lib/types";
 
-const DIRECTION: Record<
-  string,
-  { label: string; className: string; icon: React.ComponentType<{ className?: string }> }
-> = {
-  BUY: {
-    label: "Mua",
-    className: "bg-up/15 text-up hover:bg-up/15",
-    icon: TrendingUp,
-  },
-  SELL: {
-    label: "Bán",
-    className: "bg-down/15 text-down hover:bg-down/15",
-    icon: TrendingDown,
-  },
-  HOLD: {
-    label: "Giữ",
-    className: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    icon: Minus,
-  },
-};
+/**
+ * M4.2 (UIUX_UPGRADE_BLUEPRINT §4 — #110-b): hết "wall-of-text". Màn chính
+ * chỉ còn HÀNG GỌN cấu trúc (badge hướng · mã + score · chip đồng thuận ·
+ * lý do 1 dòng truncate · chip trạng thái + phán quyết D-LEDGER · nút Chi
+ * tiết); toàn bộ chiều sâu (FULL rationale + JSON + Duyệt/Từ chối) chuyển
+ * xuống dialog tier-3 `SignalDetailDialog`.
+ *
+ * Nhóm theo trạng thái (M4.2.2): "Cần quyết" (ACTIVE + MUA/BÁN chưa xử lý)
+ * nổi trên cùng với viền PRIMARY + đếm; phần còn lại (đã thực thi · hết
+ * hạn · từ chối · không cần quyết) gọn 1 dòng mỗi tín hiệu.
+ *
+ * Bản compact (props cũ cho workspace Tổng quan — giữ nguyên interface
+ * limit/compact/onSeeAll từ #34) nâng cấp nhẹ theo cùng ngôn ngữ: badge +
+ * mã + score + chip đồng thuận nhỏ + lý do truncate + tuổi, KHÔNG dialog.
+ */
 
-const CONFIDENCE: Record<string, { label: string; className: string }> = {
-  HIGH: { label: "Tin cậy cao", className: "border-up/40 text-up" },
-  MEDIUM: { label: "Tin cậy vừa", className: "border-amber-500/40 text-amber-600 dark:text-amber-400" },
-  LOW: { label: "Tin cậy thấp", className: "text-muted-foreground" },
-};
+/** M4.2.1 — lý do rút gọn ~120 ký tự cho hàng (title giữ nguyên văn). */
+function shortRationale(text: string): string {
+  if (!text) return "—";
+  if (text.length <= 120) return text;
+  return `${text.slice(0, 120).trimEnd()}…`;
+}
+
+/** Chip phán quyết D-LEDGER (M4.2.3) — VerdictBadge + lãi/lỗ đánh dấu. */
+function VerdictChips({ s }: { s: SignalRow }) {
+  const e = s.evaluation;
+  if (!e) return null;
+  const pctTone: StatTileTone =
+    e.markPnlPct != null && e.markPnlPct > 0
+      ? "up"
+      : e.markPnlPct != null && e.markPnlPct < 0
+        ? "down"
+        : "neutral";
+  return (
+    <>
+      <VerdictBadge verdict={e.verdict} />
+      {e.markPnlPct != null && (
+        <ChipMeta
+          tone={pctTone}
+          title="Lãi/lỗ đánh dấu (%) so mốc ra tín hiệu — sổ phán quyết D-LEDGER"
+        >
+          {formatPct(e.markPnlPct)}
+        </ChipMeta>
+      )}
+    </>
+  );
+}
+
+/* ─────────────────── Hàng "Cần quyết" — cấu trúc đầy đủ ─────────────────── */
+
+function PendingSignalRow({
+  s,
+  onDetail,
+}: {
+  s: SignalRow;
+  onDetail: (s: SignalRow) => void;
+}) {
+  const dir = SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD;
+  const DirIcon = dir.icon;
+  const cons = consensusMeta(s.consensusGate, s.consensusRatio);
+  const st = statusMeta(s);
+  return (
+    <li className="transition-colors hover:bg-accent/40">
+      {/* Desktop — 1 hàng ngang cấu trúc (M4.2.1) */}
+      <div className="hidden items-center gap-3 px-4 py-2.5 sm:flex">
+        <Badge className={cn("gap-1", dir.className)}>
+          <DirIcon className="size-3" aria-hidden="true" />
+          {dir.label}
+        </Badge>
+        <span className="flex min-w-[92px] items-baseline gap-1.5">
+          <span className="text-sm font-bold tracking-tight">{s.symbol}</span>
+          <span className="tabular-nums text-[11px] text-muted-foreground">
+            {s.score.toFixed(0)}/100
+          </span>
+        </span>
+        {cons ? (
+          <ChipMeta tone={cons.tone} title={cons.title}>
+            {cons.label}
+          </ChipMeta>
+        ) : null}
+        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={s.rationale}>
+          {shortRationale(s.rationale)}
+        </p>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <ChipMeta tone={st.tone} title={st.title}>
+            {st.label}
+          </ChipMeta>
+          {s.sandboxExecuted && (
+            <ChipMeta
+              tone="primary"
+              title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1) — xem lệnh ở Danh mục → Thử nghiệm"
+            >
+              <FlaskConical className="size-3" aria-hidden="true" />
+              Thực thi · thử nghiệm
+            </ChipMeta>
+          )}
+          <VerdictChips s={s} />
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-3 text-xs"
+          onClick={() => onDetail(s)}
+        >
+          Chi tiết
+        </Button>
+      </div>
+      {/* Mobile — thẻ dọc (M4.2.4): badge+mã+score / chips / lý do / nút to */}
+      <div className="flex flex-col gap-1.5 px-4 py-2.5 sm:hidden">
+        <div className="flex items-center gap-2">
+          <Badge className={cn("gap-1", dir.className)}>
+            <DirIcon className="size-3" aria-hidden="true" />
+            {dir.label}
+          </Badge>
+          <span className="text-sm font-bold tracking-tight">{s.symbol}</span>
+          <span className="tabular-nums text-[11px] text-muted-foreground">
+            {s.score.toFixed(0)}/100
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {cons ? (
+            <ChipMeta tone={cons.tone} title={cons.title}>
+              {cons.label}
+            </ChipMeta>
+          ) : null}
+          <ChipMeta tone={st.tone} title={st.title}>
+            {st.label}
+          </ChipMeta>
+          {s.sandboxExecuted && (
+            <ChipMeta
+              tone="primary"
+              title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1)"
+            >
+              <FlaskConical className="size-3" aria-hidden="true" />
+              Thực thi · thử nghiệm
+            </ChipMeta>
+          )}
+          <VerdictChips s={s} />
+        </div>
+        <p className="truncate text-xs text-muted-foreground" title={s.rationale}>
+          {shortRationale(s.rationale)}
+        </p>
+        <Button
+          variant="outline"
+          className="min-h-11 w-full"
+          onClick={() => onDetail(s)}
+        >
+          Chi tiết
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+/* ─────────────── Hàng đã xử lý — gọn 1 dòng (M4.2.2) ─────────────── */
+
+function DoneSignalRow({
+  s,
+  onDetail,
+}: {
+  s: SignalRow;
+  onDetail: (s: SignalRow) => void;
+}) {
+  const dir = SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD;
+  const DirIcon = dir.icon;
+  const st = statusMeta(s);
+  return (
+    <li className="transition-colors hover:bg-accent/40">
+      {/* Desktop — 1 dòng gọn: badge + mã + trạng thái + phán quyết + Chi tiết */}
+      <div className="hidden items-center gap-3 px-4 py-2 sm:flex">
+        <Badge className={cn("gap-1", dir.className)}>
+          <DirIcon className="size-3" aria-hidden="true" />
+          {dir.label}
+        </Badge>
+        <span className="flex items-baseline gap-1.5">
+          <span className="text-sm font-semibold tracking-tight">{s.symbol}</span>
+          <span className="tabular-nums text-[11px] text-muted-foreground">
+            {s.score.toFixed(0)}/100
+          </span>
+        </span>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <ChipMeta tone={st.tone} title={st.title}>
+            {st.label}
+          </ChipMeta>
+          <VerdictChips s={s} />
+        </span>
+        <span className="flex-1" aria-hidden="true" />
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-3 text-xs"
+          onClick={() => onDetail(s)}
+        >
+          Chi tiết
+        </Button>
+      </div>
+      {/* Mobile — thẻ dọc gọn */}
+      <div className="flex flex-col gap-1.5 px-4 py-2.5 sm:hidden">
+        <div className="flex items-center gap-2">
+          <Badge className={cn("gap-1", dir.className)}>
+            <DirIcon className="size-3" aria-hidden="true" />
+            {dir.label}
+          </Badge>
+          <span className="text-sm font-bold tracking-tight">{s.symbol}</span>
+          <span className="tabular-nums text-[11px] text-muted-foreground">
+            {s.score.toFixed(0)}/100
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <ChipMeta tone={st.tone} title={st.title}>
+            {st.label}
+          </ChipMeta>
+          <VerdictChips s={s} />
+        </div>
+        <Button variant="outline" className="min-h-11 w-full" onClick={() => onDetail(s)}>
+          Chi tiết
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+/* ─────────────── Hàng compact — workspace Tổng quan (props #34) ─────────────── */
+
+function CompactSignalRow({ s }: { s: SignalRow }) {
+  const dir = SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD;
+  const DirIcon = dir.icon;
+  const cons = consensusMeta(s.consensusGate, s.consensusRatio);
+  const acted = s.actedAt != null || s.status === "ACTED";
+  return (
+    <li className="flex flex-col gap-1 py-2.5 pr-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Badge className={cn("gap-1", dir.className)}>
+          <DirIcon className="size-3" aria-hidden="true" />
+          {dir.label}
+        </Badge>
+        <span className="text-sm font-bold tracking-tight">{s.symbol}</span>
+        <span className="tabular-nums text-xs text-muted-foreground">
+          {s.score.toFixed(0)}/100
+        </span>
+        {cons ? (
+          <ChipMeta tone={cons.tone} title={cons.title}>
+            {cons.label}
+          </ChipMeta>
+        ) : null}
+        {s.sandboxExecuted && (
+          <ChipMeta
+            tone="primary"
+            title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1)"
+          >
+            Thực thi
+          </ChipMeta>
+        )}
+        <span className="ml-auto flex items-center gap-1.5">
+          {acted && (
+            <ChipMeta tone="neutral" title="Tín hiệu đã được duyệt và chuyển thành lệnh chờ khớp">
+              Đã chuyển lệnh
+            </ChipMeta>
+          )}
+          <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+            {formatDistanceToNow(new Date(s.createdAt), { addSuffix: true, locale: vi })}
+          </span>
+        </span>
+      </div>
+      {s.rationale && (
+        <p className="truncate text-xs text-muted-foreground" title={s.rationale}>
+          {s.rationale}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/* ─────────────────── SignalsFeed ─────────────────── */
 
 /**
  * Phiên #34 — props tùy chọn cho bản compact trên workspace Tổng quan:
  * - limit: số dòng hiển thị tối đa (chỉ hiệu lực khi compact).
- * - compact: mỗi dòng gọn hơn (ẩn cột phụ, không nút Chuyển lệnh).
+ * - compact: mỗi dòng gọn hơn (không nhóm, không dialog).
  * - onSeeAll: callback footer "Xem tất cả (N) →" (vd chuyển sang tab Tín hiệu).
- * Mặc định (không truyền props) giữ 100% hành vi cũ.
  */
 export interface SignalsFeedProps {
   limit?: number;
@@ -66,7 +315,6 @@ export interface SignalsFeedProps {
 }
 
 export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedProps) {
-  const queryClient = useQueryClient();
   // #105 — khoảng thời gian toàn cục trên thanh bar: lọc tín hiệu theo khoảng.
   const { rangeQuery, rangeKey, dateRange } = useDateRange();
   const { data, isLoading, isError, error } = useQuery({
@@ -76,28 +324,39 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
     staleTime: 60_000,
   });
 
-  const convertMutation = useMutation({
-    mutationFn: (id: string) =>
-      apiPost<{ order: { symbol: string; side: string; quantity: number; price: number } }>(
-        `/api/signals/${id}/convert`
-      ),
-    onSuccess: (res) => {
-      void queryClient.invalidateQueries({ queryKey: ["signals"] });
-      void queryClient.invalidateQueries({ queryKey: ["orders"] });
-      toast.success("Đã tạo lệnh chờ khớp", {
-        description: `${res.order.side === "BUY" ? "MUA" : "BÁN"} ${res.order.quantity} cp ${res.order.symbol} @ ${formatPrice(res.order.price)} ₫`,
-      });
-    },
-    onError: (err: Error) => {
-      toast.error(err.message || "Không chuyển được tín hiệu thành lệnh.");
-    },
-  });
+  // Dialog tier-3 (chỉ feed đầy đủ — compact không mở dialog).
+  const [detail, setDetail] = React.useState<SignalRow | null>(null);
 
   const signals = data?.signals ?? [];
-  // Bản compact chỉ hiện `limit` dòng đầu (mặc định 5 khi compact mà không truyền limit).
   const maxRows = compact ? (limit ?? 5) : signals.length;
   const visible = signals.slice(0, maxRows);
   const hiddenCount = signals.length - visible.length;
+
+  // M4.2.2 — nhóm "Cần quyết": ACTIVE + MUA/BÁN + chưa actedAt/rejectedAt.
+  const pendingIds = new Set(
+    signals
+      .filter(
+        (s) =>
+          s.status === "ACTIVE" &&
+          s.direction !== "HOLD" &&
+          s.actedAt == null &&
+          s.rejectedAt == null,
+      )
+      .map((s) => s.id),
+  );
+  const pending = signals.filter((s) => pendingIds.has(s.id));
+  const done = signals.filter((s) => !pendingIds.has(s.id));
+
+  // Tên nhóm dưới ghép từ các loại thật sự có mặt (m4.2.2):
+  const doneTitle =
+    [
+      done.some((s) => s.actedAt != null || s.status === "ACTED") ? "Đã thực thi" : null,
+      done.some((s) => s.status === "EXPIRED") ? "Hết hạn" : null,
+      done.some((s) => s.rejectedAt != null || s.status === "REJECTED") ? "Từ chối" : null,
+      done.some((s) => s.status === "ACTIVE") ? "Không cần quyết" : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || "Đã xử lý";
 
   return (
     <Card className="gap-4">
@@ -114,173 +373,108 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
         <CardDescription>
           {compact
             ? `Khuyến nghị mới nhất từ các agent · ${signals.length} tín hiệu`
-            : "Khuyến nghị mới nhất từ các agent"}
+            : pending.length > 0
+              ? `Khuyến nghị mới nhất từ các agent · ${pending.length.toLocaleString("vi-VN")} chờ quyết trong ${signals.length.toLocaleString("vi-VN")} tín hiệu`
+              : "Khuyến nghị mới nhất từ các agent"}
         </CardDescription>
       </CardHeader>
       <CardContent className="pb-0">
         {isLoading ? (
-          <div className="flex flex-col gap-3 pb-4">
+          // Skeleton đúng kích thước hàng ListRow (h-14) — không khối to (§2.5).
+          <div className="flex flex-col gap-2 pb-4">
             {Array.from({ length: compact ? 3 : 4 }).map((_, i) => (
-              <Skeleton key={i} className={compact ? "h-14 w-full rounded-lg" : "h-24 w-full rounded-lg"} />
+              <Skeleton key={i} className="h-14 w-full rounded-lg" />
             ))}
           </div>
         ) : isError ? (
-          <p className="pb-6 text-sm text-down">
-            {error?.message ?? "Không tải được tín hiệu."}
-          </p>
+          <div className="mb-4 rounded-lg border border-down/30 bg-down/5 px-4 py-3">
+            <p className="text-sm font-medium text-down">
+              {error?.message ?? "Không tải được tín hiệu."}
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Thử tải lại trang; nếu vẫn lỗi, kiểm tra API <code>/api/signals</code> trong log
+              server.
+            </p>
+          </div>
         ) : signals.length === 0 ? (
-          <p className="pb-6 text-sm text-muted-foreground">Chưa có tín hiệu nào.</p>
-        ) : (
-          <ul
-            className={cn(
-              "divide-y overflow-y-auto custom-scrollbar",
-              compact ? "max-h-none" : "max-h-[32rem]"
-            )}
-          >
-            {visible.map((s) => {
-              const dir = DIRECTION[s.direction] ?? DIRECTION.HOLD;
-              const DirIcon = dir.icon;
-              const conf = CONFIDENCE[s.confidence] ?? CONFIDENCE.MEDIUM;
-              const convertible = !compact && s.direction !== "HOLD" && !s.actedAt;
-              if (compact) {
-                // Dòng compact: hướng + mã + điểm + lý do cắt 1 dòng + tuổi.
-                return (
-                  <li key={s.id} className="flex flex-col gap-1 py-2.5 pr-1">
-                    <div className="flex items-center gap-2">
-                      <Badge className={cn("gap-1", dir.className)}>
-                        <DirIcon className="size-3" aria-hidden="true" />
-                        {dir.label}
-                      </Badge>
-                      <span className="text-sm font-bold tracking-tight">{s.symbol}</span>
-                      <span className="tabular-nums text-xs text-muted-foreground">
-                        {s.score.toFixed(0)}/100
-                      </span>
-                      {s.sandboxExecuted && (
-                        <Badge
-                          variant="outline"
-                          className="gap-1 border-primary/40 text-[10px] text-primary"
-                          title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1)"
-                        >
-                          <FlaskConical className="size-3" aria-hidden="true" />
-                          Thực thi
-                        </Badge>
-                      )}
-                      {s.actedAt && (
-                        <Badge variant="secondary" className="ml-auto text-[10px]">
-                          Đã chuyển lệnh
-                        </Badge>
-                      )}
-                    </div>
-                    {s.rationale && (
-                      <p className="truncate text-xs text-muted-foreground" title={s.rationale}>
-                        {s.rationale}
-                      </p>
-                    )}
-                  </li>
-                );
-              }
-              return (
-                <li key={s.id} className="flex flex-col gap-2 py-3.5 pr-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge className={cn("gap-1", dir.className)}>
-                      <DirIcon className="size-3" aria-hidden="true" />
-                      {dir.label}
-                    </Badge>
-                    <span className="text-sm font-bold tracking-tight">{s.symbol}</span>
-                    <span className="max-w-[220px] truncate text-xs text-muted-foreground">
-                      {s.name}
-                    </span>
-                    {convertible && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="ml-auto h-8 gap-1.5 px-2.5 text-xs"
-                        disabled={convertMutation.isPending}
-                        onClick={() => convertMutation.mutate(s.id)}
-                      >
-                        {convertMutation.isPending &&
-                        convertMutation.variables === s.id ? (
-                          <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <ArrowRight className="size-3" aria-hidden="true" />
-                        )}
-                        Chuyển lệnh
-                      </Button>
-                    )}
-                    {s.actedAt && (
-                      <Badge variant="secondary" className="ml-auto text-[10px]">
-                        Đã chuyển lệnh
-                      </Badge>
-                    )}
-                    {s.sandboxExecuted && (
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "gap-1 border-primary/40 text-[10px] text-primary",
-                          !s.actedAt && "ml-auto"
-                        )}
-                        title="Agents đã tự thực thi tín hiệu này trong tài khoản thử nghiệm (K1) — xem lệnh ở Danh mục → Thử nghiệm"
-                      >
-                        <FlaskConical className="size-3" aria-hidden="true" />
-                        Đã thực thi · thử nghiệm
-                      </Badge>
-                    )}
-                  </div>
-
-                  <p className="text-sm leading-relaxed">{s.rationale}</p>
-
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-                    <div className="flex min-w-32 flex-1 items-center gap-2 sm:max-w-48">
-                      <span className="whitespace-nowrap text-muted-foreground">
-                        Điểm {s.score.toFixed(0)}/100
-                      </span>
-                      <Progress
-                        value={s.score}
-                        className="h-1.5 [&_[data-slot=progress-indicator]]:bg-primary"
-                      />
-                    </div>
-                    <Badge variant="outline" className={cn("text-[10px]", conf.className)}>
-                      {conf.label}
-                    </Badge>
-                  </div>
-
-                  <div className="tabular-nums flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                    {s.targetPrice != null && (
-                      <span>
-                        Mục tiêu:{" "}
-                        <span className="font-medium text-foreground">
-                          {formatPrice(s.targetPrice)} ₫
-                        </span>
-                      </span>
-                    )}
-                    {s.stopLoss != null && (
-                      <span>
-                        Cắt lỗ:{" "}
-                        <span className="font-medium text-down">
-                          {formatPrice(s.stopLoss)} ₫
-                        </span>
-                      </span>
-                    )}
-                    {s.takeProfit != null && (
-                      <span>
-                        Chốt lời:{" "}
-                        <span className="font-medium text-up">
-                          {formatPrice(s.takeProfit)} ₫
-                        </span>
-                      </span>
-                    )}
-                    <span className="ml-auto">
-                      {s.agentName ?? "Agent"} ·{" "}
-                      {formatDistanceToNow(new Date(s.createdAt), {
-                        addSuffix: true,
-                        locale: vi,
-                      })}
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
+          <EmptyState
+            icon={Radar}
+            title={
+              dateRange != null
+                ? "Chưa có tín hiệu nào trong khoảng đã chọn"
+                : "Chưa có tín hiệu nào"
+            }
+            description={
+              dateRange != null
+                ? "Không có tín hiệu nào sinh ra trong khoảng đang chọn — thử mở rộng khoảng trên bộ chọn thời gian của thanh bar trên cùng, hoặc chạy chu kỳ agents mới."
+                : "Tín hiệu xuất hiện sau khi agents chạy chu kỳ phân tích và hội đồng bỏ phiếu khuyến nghị."
+            }
+            action={
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-dashed px-3 py-1 text-xs text-muted-foreground">
+                <Play className="size-3.5" aria-hidden="true" />
+                Chạy chu kỳ agents — nút “Chạy agent” trên thanh bar trên cùng
+              </span>
+            }
+            className="mb-4"
+          />
+        ) : compact ? (
+          <ul className="divide-y overflow-y-auto custom-scrollbar max-h-none">
+            {visible.map((s) => (
+              <CompactSignalRow key={s.id} s={s} />
+            ))}
           </ul>
+        ) : (
+          <div className="flex max-h-[32rem] flex-col gap-3 overflow-y-auto custom-scrollbar pb-1">
+            {/* ── Nhóm "Cần quyết" — viền PRIMARY, nổi trên cùng (M4.2.2) ── */}
+            {pending.length > 0 && (
+              <section
+                aria-labelledby="signals-pending-h"
+                className="overflow-hidden rounded-lg border border-primary/40"
+              >
+                <div
+                  id="signals-pending-h"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-primary/25 bg-primary/[0.06] px-4 py-2"
+                >
+                  <span className="text-xs font-semibold uppercase tracking-wider text-primary">
+                    Cần quyết
+                  </span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                    {pending.length.toLocaleString("vi-VN")} tín hiệu chờ quyết
+                  </span>
+                </div>
+                <ul className="divide-y divide-border/60">
+                  {pending.map((s) => (
+                    <PendingSignalRow key={s.id} s={s} onDetail={setDetail} />
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {/* ── Nhóm đã xử lý — gọn 1 dòng mỗi tín hiệu (M4.2.2) ── */}
+            {done.length > 0 && (
+              <section
+                aria-labelledby="signals-done-h"
+                className="overflow-hidden rounded-lg border border-border/60"
+              >
+                <div
+                  id="signals-done-h"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-border/60 bg-muted/30 px-4 py-2"
+                >
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {doneTitle}
+                  </span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                    {done.length.toLocaleString("vi-VN")} tín hiệu
+                  </span>
+                </div>
+                <ul className="divide-y divide-border/60">
+                  {done.map((s) => (
+                    <DoneSignalRow key={s.id} s={s} onDetail={setDetail} />
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
         )}
 
         {/* Footer compact — "Xem tất cả (N) →" chuyển sang workspace Tín hiệu */}
@@ -295,6 +489,17 @@ export function SignalsFeed({ limit, compact = false, onSeeAll }: SignalsFeedPro
           </button>
         )}
       </CardContent>
+
+      {/* Dialog tier-3 — FULL rationale + JSON + Duyệt/Từ chối (M4.2.1).
+       * Mount có điều kiện: đóng dialog = unmount = state (ghi chú) reset. */}
+      {!compact && detail != null && (
+        <SignalDetailDialog
+          signal={detail}
+          onOpenChange={(open) => {
+            if (!open) setDetail(null);
+          }}
+        />
+      )}
     </Card>
   );
 }
