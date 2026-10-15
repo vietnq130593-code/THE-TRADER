@@ -4002,3 +4002,19 @@ Stage Summary:
 - Fix bẫy env trong package.json (env -u DATABASE_URL × 5 script) = reset tương lai TỰ CHỮA qua .zscripts/dev.sh của platform (db:push hết vẽ P1012).
 - PM2 God Daemon quay lại nuôi app (pm2 save dump); engine :3003 platform-managed sống nguyên.
 - Dữ liệu Supabase nguyên vẹn 100% — mỗi lần reset từ giờ chỉ cần app dậy lại là toàn bộ dữ liệu mua bán/tín hiệu có mặt tức thì.
+
+---
+Task ID: 115
+Agent: orchestrator (main session)
+Task: Đọc tin tuyển dụng NEXGEN BROS (AI Engineer LLM/RAG/AI Automation, Thủ Đức 15-25M) + phân tích The Trader dưới góc nhìn nhà tuyển dụng + lập tài liệu nguồn dựng CV
+
+Work Log:
+- Đọc JD: topcv.vn bị Cloudflare chặn (page_reader + agent-browser đều blocked) → truy xuất qua web-search đa nguồn (Facebook group laptrinhvienit bản full của NEXGEN BROS + LinkedIn + topcv meta) — khớp nội dung: 564 Võ Nguyên Giáp P. Phước Long A TP Thủ Đức · 15-25M thỏa thuận · T2-T6 8h30-17h30 + T7 cách tuần · hạn 31/10/2026 · nộp lananh.ta@nexgenbros.com tiêu đề 'HỌ VÀ TÊN – AI ENGINEER' · JD: RAG/AI Agent/chatbot/workflow AI cho eCommerce/MarTech + LLM API/prompt tuning + phối hợp Dev/Marketing/Vận hành · Yêu cầu: 1 năm AI/ML/Backend HOẶC project thực tế LLM/RAG/Agent · Python/REST/DB · Portfolio/GitHub là lợi thế.
+- Phân tích The Trader theo vai nhà tuyển dụng (trả lời user trong chat): 6 nhóm điểm ăn điểm — RAG thực chiến (BM25 tự code + tuning vận hành + RetrievalLog + token budget) · 23-agent council + cổng đồng thuận 80% + anti-pattern (TOCTOU/idempotent/fail-soft) + bandit Thompson · automation scheduler 4 job + backoff + D-LEDGER ±0,5% · prompt 3 đường + metric chất lượng output · production (Supabase 215k bar, fixbug 4 lớp, E2E+VLM, worklog 115 phiên) · portfolio sẵn có; kèm 4 câu phòng thủ (Python vs TS · domain · solo · not LangChain).
+- QUAN TRỌNG — user đính chính: tên dự án là **THE TRADER**, KHÔNG phải 'TMO' (TMO là tên dự án khác user viết nhầm) — mọi tài liệu sau này dùng đúng The Trader.
+- Viết docs/CV_THE_TRADER.md (~200 dòng): §1 bối cảnh ứng tuyển đầy đủ · §2 vốn liệu 6 nhóm góc nhìn recruiter · §3 bullet CV sẵn dùng 3 bản (VI full + EN full + 6 dòng mở đầu trúng keyword JD) · §4 kịch bản demo 3 phút + câu chốt 30s · §5 Q&A phòng thủ 5 câu · §6 checklist việc cần làm trước 31/10 (Python BM25 demo · dọn README · CV 1-2 trang · rehearse · gửi sớm) · §7 fact sheet 13 số liệu định lượng.
+
+Stage Summary:
+- Tài liệu dựng CV hoàn chỉnh tại docs/CV_THE_TRADER.md — copy-paste được ngay (bullet VI/EN + demo script + Q&A + fact sheet), sửa toàn bộ tên dự án thành The Trader theo đính chính.
+- Thông tin JD truy xuất được đầy đủ dù topcv chặn bot (nguồn Facebook gốc của NEXGEN BROS + LinkedIn + search meta khớp chéo).
+- Không đụng code app — chỉ thêm docs; app vẫn khỏe (PM2 the-trader :3000 · engine :3003).
