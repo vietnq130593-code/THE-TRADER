@@ -1,8 +1,9 @@
 # TÀI LIỆU NGUỒN DỰNG CV — DỰ ÁN THE TRADER
 
 > Tài liệu nội bộ phục vụ soạn CV + chuẩn bị phỏng vấn vị trí **AI Engineer (LLM / RAG / AI Automation)**.
-> Tên dự án: **The Trader** — Hệ thống giao dịch đa tác tử (Multi-Agent Trading System).
+> Tên dự án: **The Trader** — Nền tảng AI đa tác tử tự vận hành 24/7 (paper trading, domain chứng khoán VN).
 > ⚠️ Ghi chú: KHÔNG dùng tên "TMO" (đó là dự án khác, đã viết nhầm) — mọi nơi trong CV/phỏng vấn đều gọi **The Trader**.
+> ✅ **v2 — đã qua review chuyên gia CV 15/10/2026** (bullet v2 ngắn theo luật 6-giây-scan · đủ keyword ATS · khung hóa paper trading · cảnh báo bảo mật repo).
 
 ---
 
@@ -87,9 +88,41 @@
 
 ---
 
-## 3. Bullet CV sẵn dùng (copy–paste, đã sửa tên The Trader)
+## 3. Bullet CV v2 (đã áp dụng review chuyên gia — 1 bullet = 1 achievement, ≤2 dòng, keyword JD đặt nửa đầu)
+
+> **NGUYÊN TẮC 2 TẦNG**: CV viết cho HR + ATS bằng tiếng ngành chuẩn; jargon sâu (BPTT, TOCTOU, hermetic, fail-soft…) chỉ dùng khi phỏng vấn gặp tech lead.
 
 ### Bản tiếng Việt (CV TopCV)
+
+> **The Trader — Nền tảng AI đa tác tử tự vận hành 24/7** (paper trading, chứng khoán VN) · 07/2026 → nay · 115 phiên bản có worklog · GitHub + demo theo điều kiện §6.1
+> - Thiết kế **23 LLM agents** chạy tự động theo kiến trúc hội đồng 5 nhóm — **~1.100 chu kỳ, 0 lỗi**; **62 REST API endpoint** (Next.js 16) + chat REST đa lượt với từng agent
+> - Tự code **RAG engine BM25** (0 thư viện): 4 hyperparameter **tinh chỉnh qua UI lưu DB**; mỗi truy hồi ghi log đo lường docs/token → chất lượng retrieval kiểm chứng được
+> - **Prompt engineering + cổng đồng thuận 80%**: 3 đường tiêm prompt, chấm điểm output tự động; quyết định LLM tự duyệt/từ chối tức thì kèm lý do + audit trail (12/12 test tự động)
+> - **AI automation 4 job** (tick 10s · crawl tin 15p · 2 job sync dữ liệu thật): backoff nhân đôi, chống request chồng; **vòng phản hồi tự chấm lại độ chính xác dự báo ±0,5%/ngày**
+> - **ML thuần tự code** (MLP + GRU ensemble, Thompson sampling) · **Postgres cloud 215.627 bản ghi dữ liệu thật** · QA tự động E2E browser + VLM
+
+### Bản tiếng Anh (nếu CV song ngữ / apply LinkedIn)
+
+> **The Trader — Self-running multi-agent AI platform** (paper trading, Vietnam equities) · Jul 2026 → present · 115 documented releases · GitHub + live demo per §6.1
+> - Designed **23 LLM agents** in a 5-group council architecture — **~1,100 automated cycles, zero failures**; **62 REST API endpoints** (Next.js 16) + per-agent conversational chat API
+> - Hand-coded **BM25 RAG engine** (zero libraries): 4 hyperparameters **tunable via UI with DB persistence**; every retrieval logged (docs hit, token budget) for measurable quality
+> - **Prompt engineering + 80% consensus gate**: 3-path prompt injection, automated output scoring; LLM decisions auto-approved/rejected instantly with full audit trail (12/12 automated tests)
+> - **AI automation with feedback loop**: 4 scheduled jobs (10s ticks, RSS crawling, 2 data syncs) with exponential backoff & in-flight guards; **self-grades forecast accuracy ±0.5% daily**
+> - **Hand-coded ML stack** (MLP + GRU ensemble, Thompson sampling) · **Supabase Postgres with 215,627 real market-data records** · automated QA: E2E browser + VLM review
+
+### Mẫu 6 dòng mở CV (summary — mỗi chữ trúng keyword JD)
+
+> Nền tảng AI đa tác tử **đang chạy tự động 24/7**: **23 LLM agents** · **RAG BM25 tự code** (0 thư viện) · **AI automation 4 job + vòng phản hồi tự đánh giá ±0,5%/ngày** · **prompt engineering** với chấm điểm output tự động · **cổng đồng thuận 80%** · **62 REST API** · Postgres cloud 215K+ bản ghi thật · Next.js 16 / TypeScript strict
+
+### Mục Skills cho CV (mẫu — kê trung thực, Python khai đúng mức)
+
+> - **AI/LLM**: RAG (BM25 tự triển khai) · Prompt engineering · AI Agent orchestration · chatbot/agent-chat API · đánh giá chất lượng output tự động
+> - **Backend**: REST API (62 endpoint) · PostgreSQL/Prisma · scheduler & cron automation · socket.io realtime
+> - **Ngôn ngữ**: TypeScript (chuyên — dự án thật 4 tháng) · Python (thành thạo cơ bản, có demo port BM25 — §6.2) · SQL
+> - **Frontend**: Next.js 16 · React 19 · Tailwind 4
+> - **DevOps/QA**: PM2 · Git (115 phiên commit có quy trình) · Supabase · kiểm thử tự động (E2E browser, VLM review)
+
+### ❌ Bullet v1 (LƯU TRỮ — không dùng: quá dài 3-4 dòng, thiếu keyword chatbot/REST API/prompt, jargon trộn lẫn — giữ lại để đối chiếu)
 
 > **The Trader — Hệ thống giao dịch chứng khoán đa tác tử AI (solo project, đang vận hành)**
 > - Dựng hệ **23 LLM agents** theo kiến trúc hội đồng (chiến lược/ phân tích/ rủi ro/ chủ tịch) với **cổng đồng thuận 80%** — quyết định tự duyệt/từ chối tức thì, có audit trail đầy đủ
@@ -97,19 +130,6 @@
 > - Xây **AI workflow tự động end-to-end**: scheduler engine riêng (tick 10s · RSS 15p · sync EOD · sync quốc tế) với backoff nhân đôi + guard chống request chồng; **vòng phản hồi D-LEDGER tự chấm lại chính xác dự báo ±0,5%** mỗi ngày
 > - **Machine Learning tự code**: MLP 10-16-8-3 + GRU-24 (BPTT 3 cổng) ensemble, Bandit Thompson chọn nguồn tin, trực quan hóa bằng trọng số thật
 > - Công nghệ: **Next.js 16 · TypeScript strict · Prisma · Supabase Postgres (215k+ rows thật) · socket.io · PM2**; nghiêm ngặt QA: giao thức fixbug 4 lớp, E2E browser + VLM, 12/12 test hermetic
-
-### Bản tiếng Anh (nếu CV song ngữ / apply LinkedIn)
-
-> **The Trader — Multi-Agent AI Trading System (solo, in production)**
-> - Built **23-LLM-agent council architecture** with an **80% consensus gate** — instant approve/reject decisions with full audit trail and human-in-the-loop fallback
-> - Implemented **RAG engine with hand-coded BM25** (no library): tunable hyperparameters (topK/k1/b/recency) via UI + DB persistence, per-retrieval logging (docs hit, tokens, block size) for measurable quality
-> - Engineered **end-to-end AI automation**: dedicated scheduler service (10s ticks, RSS crawling, EOD/intl syncs) with exponential backoff & in-flight guards; **D-LEDGER feedback loop self-grades forecast accuracy ±0.5% daily**
-> - Hand-coded **ML stack**: MLP (10-16-8-3) + GRU-24 ensemble, Thompson-sampling bandit for source selection, weight-true visualizations
-> - **Next.js 16 · TypeScript strict · Prisma · Supabase Postgres (215k+ real rows) · socket.io · PM2**; rigorous QA: 4-layer fix protocol, E2E browser + VLM verification, 12/12 hermetic tests
-
-### Mẫu 6 dòng mở CV (đặt đầu mục Experience — mỗi chữ trúng keyword JD)
-
-> Multi-agent AI system in production: **23 LLM agents** · hand-coded **BM25 RAG** with per-retrieval logging · **consensus-gated auto decision (80%)** · 4-job **automation scheduler** with backoff · **self-evaluating decision ledger (±0.5%)** · **Supabase Postgres 215k+ rows** · Next.js 16 / TypeScript strict
 
 ---
 
@@ -136,11 +156,12 @@
 
 ---
 
-## 6. Việc cần làm trước hạn 31/10/2026
+## 6. Việc cần làm trước hạn 31/10/2026 (đã sắp lại theo ưu tiên review CV)
 
-- [ ] **Script Python BM25 demo** (60–100 dòng, port từ `rankRag` TS, chạy trên corpus ~700 docs) — xóa sổ gap "Python" trong JD, để kèm link trong CV
-- [ ] **Dọn repo công khai**: xác nhận README có badge + screenshot + link demo nổi đầu (recruiter mở repo 10 giây phải thấy giá trị)
-- [ ] **CV 1–2 trang** mở đầu bằng 6 dòng The Trader (mục 3), ghi rõ số liệu định lượng (mục 7)
+- [ ] **§6.1 QUYẾT ĐỊNH ĐƯỜNG LINK PORTFOLIO (quan trọng nhất — rủi ro bảo mật)**: repo hiện chứa `.env` credentials Supabase trong git tree + history (commit #113 chủ đích để khôi phục sandbox). Chọn 1: **(A) khuyến nghị** — repo private + CV chỉ kèm demo video 3 phút + 5-6 screenshot tuyển · **(B)** dựng public mirror sạch (không .env, history flatten, README 30 dòng) · **(C)** giữ public hiện tại thì PHẢI rotate key Supabase + xoá .env + làm sạch history trước khi đưa link vào CV. ⚠️ Tuyệt đối không đưa link repo hiện trạng vào CV khi chưa xử lý — tech lead thấy commit .env = red flag vệ sinh bảo mật.
+- [ ] **§6.2 Script Python BM25 demo** (60–100 dòng, port từ `rankRag` TS, chạy trên corpus ~700 docs) — xóa sổ gap "Python" trong JD, để kèm link trong CV
+- [ ] **Cập nhật README làm landing portfolio** (nếu đi phương án B/C): 3 dòng mở (là gì · nổi bật gì · bằng chứng đâu) + 3 screenshot đẹp; vá thông tin lỗi thời ("6 cử tri shadow-mode" → auto-decision live #112 · "7 workspace" → 8 + ML)
+- [ ] **CV 1–2 trang**: mở đầu bằng 6 dòng summary (mục 3) + bullet v2 + Skills (mục 3) — kiểm tra bảng keyword §8 trước khi xuất file
 - [ ] **Rehearse demo 3 phút** (mục 4) — quay thử 1 lần tự xem
 - [ ] Gửi sớm trước 31/10 — tiêu đề mail đúng format `HỌ VÀ TÊN – AI ENGINEER`
 
@@ -150,14 +171,15 @@
 
 | Số liệu | Giá trị |
 |---|---|
-| Số LLM agents | 23 |
+| Số LLM agents | 23 (5 nhóm hội đồng) |
 | Cổng đồng thuận | 80% (duyệt/từ chối tức thì) |
+| **REST API endpoint** | **62** (verify 15/10/2026 — `git ls-files "src/app/api/**/route.ts"`) |
 | Thuật toán RAG | BM25 tự code · corpus ~700 docs · tuning 4 tham số |
 | Scheduler jobs | 4 (tick 10s · RSS 15p · EOD 15:45 · intl 06:15) |
 | ML | MLP 10-16-8-3 · GRU-24 BPTT · Thompson bandit · ensemble 2/3 |
 | Vòng phản hồi | DecisionEvaluation ±0,5%/ngày |
 | Dữ liệu thật | 90 instruments · 215.627 bar · ~9.700 bar đa tài sản 4 nguồn |
-| AgentRun đã chạy | ~1.100 (chu kỳ thật 60–150s, 0 failure) |
+| AgentRun đã chạy | ~1.100 (chu kỳ thật 60–150s, **0 failure**) |
 | Hermetic test auto-decision | 12/12 PASS |
 | Fixbug protocol | 4 lớp · trần 8 vòng · 36 findings/phiên lớn nhất |
 | Worklog phiên bản | 115 commit chi tiết |
@@ -166,4 +188,25 @@
 
 ---
 
-*Tài liệu này là nguồn dựng CV — mọi số liệu lấy từ hệ thống đang vận hành + worklog phiên #112–#115. Cập nhật lần cuối: 15/10/2026.*
+## 8. Bảng tự kiểm ATS keyword (chạy trước khi xuất CV — mỗi dòng JD phải tìm thấy chữ tương ứng trong CV)
+
+| Keyword JD | Nơi xuất hiện trong CV (bullet v2) | Trạng thái |
+|---|---|---|
+| RAG | Bullet 2 "RAG engine BM25" + Skills | ✅ |
+| LLM | Bullet 1 "23 LLM agents" + Skills "nền tảng LLM" | ✅ |
+| AI Agent | Bullet 1 "23 LLM agents… kiến trúc hội đồng" | ✅ |
+| **Chatbot** | Bullet 1 "chat REST đa lượt với từng agent" (tính năng thật: `/api/agents/[id]/chat`) + Skills "chatbot/agent-chat API" | ✅ (v2 mới bổ sung — v1 thiếu) |
+| Workflow AI / Automation | Bullet 4 "AI automation 4 job" | ✅ |
+| LLM API / tích hợp | Bullet 1 + Skills "AI/LLM" | ✅ |
+| **Tối ưu prompt** | Bullet 3 "Prompt engineering + cổng đồng thuận…" + Skills | ✅ (v2 mới bổ sung — v1 thiếu) |
+| Chất lượng output | Bullet 3 "chấm điểm output tự động" | ✅ |
+| Python | Skills "Python (thành thạo cơ bản, demo port BM25)" — cần §6.2 xong mới ghi | 🔶 chờ demo |
+| **REST API** | Bullet 1 "62 REST API endpoint" + Skills | ✅ (v2 mới bổ sung — v1 thiếu) |
+| Database | Bullet 5 "Postgres cloud 215.627 bản ghi" + Skills SQL | ✅ |
+| Portfolio/GitHub/Demo | §6.1 quyết định đường link + demo video | 🔶 chờ quyết định |
+
+> Mẹo ATS TopCV: copy CV ra file .docx/plain-text rồi Ctrl+F từng keyword trên — nếu dòng nào KHÔNG tìm thấy chữ nguyên vẹn (đừng đếm từ đồng nghĩa), sửa trước khi nộp.
+
+---
+
+*Tài liệu này là nguồn dựng CV — mọi số liệu lấy từ hệ thống đang vận hành + worklog phiên #112–#115. v2 sau review chuyên gia CV 15/10/2026. Cập nhật lần cuối: 15/10/2026.*

@@ -4018,3 +4018,19 @@ Stage Summary:
 - Tài liệu dựng CV hoàn chỉnh tại docs/CV_THE_TRADER.md — copy-paste được ngay (bullet VI/EN + demo script + Q&A + fact sheet), sửa toàn bộ tên dự án thành The Trader theo đính chính.
 - Thông tin JD truy xuất được đầy đủ dù topcv chặn bot (nguồn Facebook gốc của NEXGEN BROS + LinkedIn + search meta khớp chéo).
 - Không đụng code app — chỉ thêm docs; app vẫn khỏe (PM2 the-trader :3000 · engine :3003).
+
+---
+Task ID: 116
+Agent: orchestrator (main session)
+Task: Vào vai chuyên gia viết CV review docs/CV_THE_TRADER.md + áp dụng fix vào tài liệu (v2)
+
+Work Log:
+- Review theo lăng kính chuyên gia CV công nghệ (luật 6-giây-scan HR · ATS TopCV keyword matching · 2 tầng HR/tech-lead): chấm 7.5/10 — vốn liệu xuất sắc nhưng ngôn ngữ CV còn lỗi.
+- P0×5: (1) RỦI RO BẢO MẬT — .env credentials nằm trong git tree+history (#113 chủ đích khôi phục sandbox) → đưa link repo vào CV = tech lead thấy commit .env = red flag; đề xuất 3 phương án (A repo private + demo video khuyến nghị · B public mirror sạch · C rotate key + filter history); (2) bullet 3-4 dòng nhồi 4-5 ý vi phạm luật scan — keyword chính rơi ngoài vùng đọc chữ F; (3) thiếu 3 keyword JD: chatbot (khắc phục hợp pháp bằng tính năng THẬT /api/agents/[id]/chat) · REST API (verify được 62 endpoint thật bằng git ls-files) · prompt (JD "tối ưu prompt"); (4) thiếu mốc thời gian dự án 07/2026→nay; (5) "giao dịch chứng khoán" chưa khung "paper" → bẫy câu hỏi "lãi bao nhiêu" — chuyển tiêu đề "Nền tảng AI đa tác tử tự vận hành 24/7 (paper trading)".
+- P1×5: jargon 2 tầng trộn lẫn (BPTT/TOCTOU/hermetic vô nghĩa với HR) · "fixbug 4 lớp" thuật ngữ nội bộ → "quy trình QA 4 bước" · "đang vận hành" → "chạy tự động 24/7 qua PM2" · EN "real rows" → "real market-data records" + chuẩn dấu phẩy nghìn locale · README lỗi thời ("6 cử tri shadow-mode" vs auto-decision live #112, "7 workspace" vs 8).
+- Kiểm chứng trước khi review: 62 REST endpoint (git ls-files src/app/api/**/route.ts) · .env tracked · README hiện trạng 12 dòng.
+- Áp dụng vào docs/CV_THE_TRADER.md (v2): heading + v2 marker · §3 bullet v2 VI/EN (mỗi bullet ≤2 dòng, 1 achievement, keyword nửa đầu: 62 REST API + chat agent + prompt engineering + 0 lỗi/~1.100 chu kỳ + paper trading + mốc thời gian) · 6-dòng summary v2 · MỤC SKILLS MỚI (AI/LLM · Backend · Ngôn ngữ — Python khai trung thực mức "thành thạo cơ bản + demo port BM25" · Frontend · DevOps/QA) · bullet v1 lưu trữ có nhãn ❌ để đối chiếu · §6 reorder theo ưu tiên (§6.1 quyết định portfolio đường link — bảo mật lên đầu · §6.2 Python demo) · §7 fact sheet thêm 62 endpoint + 0 failure đậm · §8 MỚI bảng tự kiểm ATS keyword 12 dòng (9 ✅ · 2 🔶 chờ demo/decision) + mẹo Ctrl+F plain-text.
+
+Stage Summary:
+- Tài liệu nguồn CV nâng v2 hoàn chỉnh: bullet đạt chuẩn scan HR + đủ keyword ATS (chatbot/REST API/prompt engineering bổ sung đúng sự thật) + khung paper trading + lộ trình xử lý rủi ro bảo mật repo trước khi đưa link vào CV.
+- Phát hiện quan trọng nhất ngoài review CV: repo chứa .env credentials — cần user quyết định phương án A/B/C ở §6.1 TRƯỚC khi nộp CV có link GitHub.
