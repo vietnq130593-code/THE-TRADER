@@ -4050,3 +4050,26 @@ Work Log:
 
 Stage Summary:
 - KẾT LUẬN SỨC KHỎE: TOÀN HỆ THỐNG XANH — hạ tầng 2 tiến trình sống ổn định 3h+ · 23 agents 142/142 chu kỳ hoàn tất 0 lỗi · dữ liệu Supabase nguyên vẹn và TĂNG (219.303 bar) · auto-decision + D-LEDGER chạy đúng · 1 cửa sổ mạng transient đã tự hồi phục bằng fail-soft (không cần hành động).
+
+---
+Task ID: 118
+Agent: orchestrator (main session)
+Task: Chụp 6 ảnh giao diện app cho portfolio/CV — cổng đồng thuận · dialog tier-3 · sơ đồ MLP trọng số thật · RetrievalLog · dashboard · UI tuning RAG
+
+Work Log:
+- Điều kiện chụp: PM2 the-trader online 6h · GET :3000 → 200 · GET :3003 → 200 · agent-browser 0.38.1 viewport desktop 1600×900.
+- Khảo sát cấu trúc UI trước khi chụp (tránh click nhầm): nav 8 workspace · synthesis 8 tab · cổng đồng thuận B9 ở tab Nhận định · MLP serving diagram ở tab Mạng thần kinh (NnTab) · RetrievalLog stats ở tab Dữ liệu (RagIntradayBlock) · RAG tuning 4 ô ở tab Tinh chỉnh · dialog tier-3 = SignalDetailDialog mở bằng nút "Chi tiết" trong workspace Tín hiệu.
+- Bẫy đã xử lý: (1) find role=tab theo text "mạng thần kinh" trúng nav item "Tổng hợp" (description chứa cùng chữ) → lọc text.trim() === chính xác; (2) JS el.click() không kích hoạt Radix Tabs → dùng find role tab click của agent-browser; (3) input tuning dùng id (tuning-topK…) không có name → query theo id.
+- Chụp 6 ảnh vào docs/screenshots/ (viewport 1600×900, cuộn element vào giữa khung, xác minh bounding-box inView trước mỗi lần chụp):
+  1. 01-dashboard-overview.png — workspace Tổng quan (bảng chốt phiên · stat nhanh · nhận định Bayes · tin & việc cần làm).
+  2. 02-consensus-gate.png — card "Cổng đồng thuận 80%" tab Nhận định: tally 3 cụm Tăng 0% · Giảm 74,3% · Đi ngang 25,7% + đường ngưỡng 80% nét đứt.
+  3. 03-mlp-real-weights.png — sơ đồ MLP 10-16-8-3 · 4 cột · trọng số THẬT bản serving v8 (cạnh dày/mảnh + màu theo dấu).
+  4. 04-retrieval-log.png — khối "BM25 RAG (L1)" corpus 700 docs · 30 ngày 20 lần truy hồi · 100% tiêm prompt · lần cuối 20:13 15-10 + chuỗi intraday 1.769 bar.
+  5. 05-rag-tuning-ui.png — section "RAG BM25 — truy hồi tri thức" 4 ô: topK 8 · k₁ 1,5 · b 0,75 · wRecency 0,3 + nút Lưu cấu hình.
+  6. 06-tier3-dialog.png — dialog tier-3 "Tín hiệu TCB · MUA": rationale đầy đủ · điểm 65/100 · consensusGate WEAK_MAJORITY 74,3% · khối JSON · nút hành động.
+- Verify chất lượng từng ảnh bằng VLM (z-ai vision CLI, prompt checklist theo yêu cầu từng màn): 6/6 PASS — đúng section, đúng số liệu, không blank/skeleton.
+- Vệ sinh: đóng browser session · console 0 error (chỉ HMR info) · dev.log sạch (tick /api/market/tick 200 đều đặn; 404 socket.io polling là artefact duyệt localhost trực tiếp bỏ qua gateway — luồng preview qua caddy vẫn đúng).
+
+Stage Summary:
+- Bộ 6 ảnh portfolio sẵn sàng: docs/screenshots/01…06 .png (~1,5 MB tổng) — mỗi ảnh đã được VLM xác minh nội dung đúng thực thể UI + số liệu thật từ Supabase (tỷ lệ đồng thuận 74,3% khớp giữa ảnh 2 và 6 — cùng chu kỳ dữ liệu).
+- Ảnh dùng được ngay cho CV §6.1 (phương án A demo) và slide phỏng vấn; không lộ credential nào trên màn hình.
