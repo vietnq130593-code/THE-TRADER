@@ -4034,3 +4034,19 @@ Work Log:
 Stage Summary:
 - Tài liệu nguồn CV nâng v2 hoàn chỉnh: bullet đạt chuẩn scan HR + đủ keyword ATS (chatbot/REST API/prompt engineering bổ sung đúng sự thật) + khung paper trading + lộ trình xử lý rủi ro bảo mật repo trước khi đưa link vào CV.
 - Phát hiện quan trọng nhất ngoài review CV: repo chứa .env credentials — cần user quyết định phương án A/B/C ở §6.1 TRƯỚC khi nộp CV có link GitHub.
+
+---
+Task ID: 117
+Agent: orchestrator (main session)
+Task: Kiểm tra tình trạng vận hành app + trạng thái 23 agents — báo cáo sức khỏe toàn hệ thống
+
+Work Log:
+- Hạ tầng: PM2 the-trader online (uptime 3h từ 09:11) · GET / 200 trong 75ms · engine :3003 health JSON ok:true (ticks 1209 · lastTickAt realtime · lastTickError null · lastNewsAt 12:25 · 8 job scheduler cấu hình đủ: eod 15:45 · intl 06:15 · reprobe/mlTrain SUN 04:00 · mlSweep 04:15 · settle 16:15 · k1Equity 16:30 · councilEval 16:45).
+- Agents (truy vấn Supabase trực tiếp): 23/23 agent 5 nhóm (research 5 · control 3 · executive 4 · platform 4 · ml 7) · AgentRun 48h: 142 runs 100% COMPLETED 0 lỗi · 137 tin nhắn 48h · K2 liên tục enabled 240ph — 12 chu kỳ, cuối 09:12, kế tiếp 13:12 · model glm-4.6.
+- Dữ liệu: Bar 219.303 (tăng 3.676 bar từ #112 — EOD sync chạy đều mỗi ngày) · bar mới nhất BSH hôm nay · Signals 44 (5 ACTED · 5 REJECTED · 34 EXPIRED — cổng 80% hoạt động) · D-LEDGER 44 DecisionEvaluation · audit trail đầy đủ.
+- SỰ CỐ PHÁT HIỆN (đã tự khỏi): cửa sổ lỗi kết nối Supabase pooler P1001 trong dev.log dòng 818-996 (~1h sau start) — toàn bộ là fail-soft read AppSetting ("đọc thất bại → dùng rỗng/default"), SAU đó 1.516 dòng request 200 OK liên tục đến hiện tại → transient network window, 0 mất dữ liệu, 0 ảnh hưởng logic.
+- Browser E2E module Đội Agent + Tổng quan: "23/23 agent đã chạy" · dải sức khỏe 23 chấm · mô tả hội đồng đúng · 0 console error · 0 page error · 2 screenshots docs/p117-agents.png + p117-overview.png.
+- Script diagnostic tạm scripts/status-agents-tmp.ts đã dọn sạch sau dùng (3 lần chỉnh tên model/field theo schema: taskStatus thay status · Bar.date thay ts · Quote không có updatedAt).
+
+Stage Summary:
+- KẾT LUẬN SỨC KHỎE: TOÀN HỆ THỐNG XANH — hạ tầng 2 tiến trình sống ổn định 3h+ · 23 agents 142/142 chu kỳ hoàn tất 0 lỗi · dữ liệu Supabase nguyên vẹn và TĂNG (219.303 bar) · auto-decision + D-LEDGER chạy đúng · 1 cửa sổ mạng transient đã tự hồi phục bằng fail-soft (không cần hành động).
