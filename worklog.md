@@ -3981,3 +3981,24 @@ Work Log:
 Stage Summary:
 - .env (cấu hình Supabase — nguồn dữ liệu chính của app) giờ nằm TRONG repo GitHub: sau mỗi sandbox reset chỉ cần `git pull` + `pm2 start` là toàn bộ cấu hình dữ liệu tự khôi phục, không phải dò worklog dựng lại như #91.
 - Đánh đổi được chủ repo chấp nhận rõ ràng: repo chứa credentials Supabase (DB password + service role key); GitHub PAT không bị lộ trong bất kỳ file nào được push.
+
+---
+Task ID: 114
+Agent: orchestrator (main session)
+Task: Xác minh sandbox có phải bản mới nhất + phục hồi sau reset platform 08:55 (user nghi ngờ lần reset tiếp theo)
+
+Work Log:
+- Xác minh git: fetch origin → HEAD = origin/main = 6b94f4a (#113, gồm .env) — 0 behind / 0 ahead / reflog đầy đủ → MÃ NGUỒN ĐÚNG LÀ BẢN MỚI NHẤT, không cần pull. .env push hôm qua sống sót reset và phát huy ngay (bun install nhận ".env", prisma đọc đúng URL mây).
+- Chẩn đoán sự cố: platform RESTART hộp lúc 08:55 → PM2 God Daemon chết (~/.pm2 trống), app :3000 chết; script tự khởi động platform .zscripts/dev.sh vẽ P1012 tại bước `bun run db:push` (bẫy DATABASE_URL=file:custom.db inject sẵn trong env container CHE .env — khẳng định lại #112) → set -e tự bắn script TRƯỚC khi tới bước start Next.js → app không bao giờ tự dậy; engine :3003 + pg-service :5432 do platform khởi động riêng → sống, engine không dùng DATABASE_URL nên không dính bẫy (health 200).
+- Filesystem nhiễm rác: 72 entry untracked từ snapshot cũ quay lại (12/5 platform scaffold: Caddyfile/logo.svg/robots.txt/.gitkeep · 5/10 backups+DESIGN.md · 11-12/10: 6 script cũ + 8 route API cũ đã bị xoá ở #107-#111 [accounts/council experiments/allocation-session/health/market history/symbols/overview/api route.ts] + 26 component ui shadcn thừa + 11 file dashboard cũ + hooks cũ + lib api/supabase/council cũ + tailwind.config.ts TW3 + tests/tools/supabase/ + mini-services/market-data cũ) — nếu app start với đống này, Next sẽ SERVE các route đã xoá = "phiên bản chạy bị cũ trộn lẫn" đúng nghi ngờ user. Đã git grep xác nhận 0 file tracked tham chiếu đống rác.
+- Dọn: git clean -fd -e .zscripts -e Caddyfile (dry-run trước) → 70 mục bị xoá; giữ .zscripts + Caddyfile (hạ tầng platform, caddy thật chạy /app/Caddyfile); backup zip 5/10 chuyển /tmp/quarantine-phi114; .gitignore thêm 5 rule platform artifacts (/.zscripts/ /Caddyfile /public/logo.svg /public/robots.txt mini-services/.gitkeep) → status sạch vĩnh viễn dù platform tái sinh chúng sau reset.
+- FIX VĨNH VIỄN bẫy env (root-cause reset tự chữa): package.json 5 script bọc `env -u DATABASE_URL` (dev/start/db:push/db:generate/db:studio) — biến inject bị gỡ, Next.js + prisma CLI tự nạp .env Supabase; kiểm chứng ngay trong shell đang inject: bun run db:push → "already in sync" + client v6.19.3 regenerate OK. Tác dụng kép: (1) mọi lệnh từ tool shell hết cần prefix thủ công; (2) script platform .zscripts/dev.sh sau reset TƯƠNG LAI sẽ chạy thông suốt bun install → db:push → bun run dev → health → mini-services → APP TỰ DẬY không cần can thiệp.
+- Khởi động app: nohup bun run dev chết theo tool call (khẳng định lần 3 bài học #94/#112) → cài lại pm2 -g (mất theo reset) → pm2 start bun --name the-trader (stdout→dev.log) + pm2 save → SỐNG SÓT qua nhiều tool call (uptime liên tục, GET / 200 80ms); engine :3003 của platform tự reconnect bắn tick (POST /api/market/tick 200 liên tục trong dev.log).
+- Nghiệm thu dữ liệu Supabase (nguồn chính — KHÔNG mất): GET /api/signals → 12 tín hiệu thật (VIC 89,8% ACTED · TCB 89,5% ACTED · VCB 78,3% REJECTED đúng cổng 80%) — logic auto-decision #112 chạy đúng trên dữ liệu mây.
+- Browser E2E: desktop tiêu đề + render đầy đủ "Bảng chốt phiên" dữ liệu thật (VN30 −0,09% · MUA VIC score 75/100 đồng thuận 89,8%) · module Tín hiệu hiển thị đúng "Cổng đồng thuận 80%: Đã duyệt/Đã từ chối" kèm lý do full · mobile 390 scrollW=clientW=390 (0 tràn) · footer đẩy xuống tự nhiên (doc 3803px) · 0 console error · 0 page error sau mọi tương tác · 2 screenshots docs/p114-*.
+
+Stage Summary:
+- TRẢ LỜI USER: (1) Mã nguồn sandbox ĐÚNG bản mới nhất GitHub (6b94f4a) — không phải pull lại; (2) NHƯNG platform restart 08:55 làm app chết + 70 file cũ quay lại đĩa → "phiên bản đang chạy" sẽ bẩn — ĐÃ dọn sạch + khởi động lại trên nền sạch.
+- Fix bẫy env trong package.json (env -u DATABASE_URL × 5 script) = reset tương lai TỰ CHỮA qua .zscripts/dev.sh của platform (db:push hết vẽ P1012).
+- PM2 God Daemon quay lại nuôi app (pm2 save dump); engine :3003 platform-managed sống nguyên.
+- Dữ liệu Supabase nguyên vẹn 100% — mỗi lần reset từ giờ chỉ cần app dậy lại là toàn bộ dữ liệu mua bán/tín hiệu có mặt tức thì.

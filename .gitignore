@@ -64,3 +64,10 @@ dev-engine.log
 # #91 — PGlite Postgres dev engine data (mini-services/pg-service) — local only
 /db/pglite/
 /pg-service.log
+
+# #114 — platform scaffold/runtime artifacts (tự sinh lại sau mỗi sandbox reset — không thuộc app)
+/.zscripts/
+/Caddyfile
+/public/logo.svg
+/public/robots.txt
+mini-services/.gitkeep

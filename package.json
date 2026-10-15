@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "env -u DATABASE_URL next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "env -u DATABASE_URL next start",
     "lint": "eslint",
-    "db:push": "prisma db push",
-    "db:generate": "prisma generate",
-    "db:studio": "prisma studio"
+    "db:push": "env -u DATABASE_URL prisma db push",
+    "db:generate": "env -u DATABASE_URL prisma generate",
+    "db:studio": "env -u DATABASE_URL prisma studio"
   },
   "dependencies": {
     "@prisma/client": "^6",
