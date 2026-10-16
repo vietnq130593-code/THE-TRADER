@@ -72,11 +72,11 @@
 
 ### 2.5 Kỹ nghệ production — thứ khiến Tech Lead gật đầu
 
-- **Supabase Postgres cloud**: 90 instruments · **215.627 bar thật** · 42 signals · ~1.100 AgentRun — nguồn dữ liệu chính, bền qua reset
+- **Supabase Postgres cloud**: 90 instruments · **219.313 bar thật (2013→nay)** · 48 signals · 1.213 AgentRun — nguồn dữ liệu chính, bền qua reset
 - Đa nguồn dữ liệu thật: Treasury CSV 1.332 · Frankfurter ECB 2.898 · er-api VND=X · Yahoo query2 22/22 mã 5.481 bar (~9.700 bar đa tài sản)
 - **Giao thức fixbug 4 lớp, trần 8 vòng**, báo cáo §9, P0/P1/P2 phân tầng, vòng xác nhận độc lập
 - **Nghiệm thu tự động hóa**: E2E browser automation (desktop + mobile 390, 0 console error) + VLM chấm screenshot + regression curl toàn API
-- **Worklog 115 phiên bản commit** chi tiết từng finding (F-207, F-1115-01…) — trung thực ghi cả lỗi lẫn cách vá
+- **Worklog 120 phiên bản commit** chi tiết từng finding (F-207, F-1115-01…) — trung thực ghi cả lỗi lẫn cách vá
 - Next.js 16 · TypeScript 5 strict · Tailwind 4 · Prisma · PM2 · tự vá bẫy env platform (`env -u DATABASE_URL`) để hệ tự sống lại sau reset
 
 ### 2.6 Bộ tài sản portfolio sẵn có
@@ -94,25 +94,25 @@
 
 ### Bản tiếng Việt (CV TopCV)
 
-> **The Trader — Nền tảng AI đa tác tử tự vận hành 24/7** (paper trading, chứng khoán VN) · 07/2026 → nay · 115 phiên bản có worklog · GitHub + demo theo điều kiện §6.1
-> - Thiết kế **23 LLM agents** chạy tự động theo kiến trúc hội đồng 5 nhóm — **~1.100 chu kỳ, 0 lỗi**; **62 REST API endpoint** (Next.js 16) + chat REST đa lượt với từng agent
+> **The Trader — Nền tảng AI đa tác tử tự vận hành 24/7** (paper trading, chứng khoán VN) · 07/2026 → nay · 120 phiên bản có worklog · GitHub + demo theo điều kiện §6.1
+> - Thiết kế **23 LLM agents** chạy tự động theo kiến trúc hội đồng 5 nhóm — **~1.200 chu kỳ, 98%+ hoàn tất**; **62 REST API endpoint** (Next.js 16) + chat REST đa lượt với từng agent
 > - Tự code **RAG engine BM25** (0 thư viện): 4 hyperparameter **tinh chỉnh qua UI lưu DB**; mỗi truy hồi ghi log đo lường docs/token → chất lượng retrieval kiểm chứng được
 > - **Prompt engineering + cổng đồng thuận 80%**: 3 đường tiêm prompt, chấm điểm output tự động; quyết định LLM tự duyệt/từ chối tức thì kèm lý do + audit trail (12/12 test tự động)
 > - **AI automation 4 job** (tick 10s · crawl tin 15p · 2 job sync dữ liệu thật): backoff nhân đôi, chống request chồng; **vòng phản hồi tự chấm lại độ chính xác dự báo ±0,5%/ngày**
-> - **ML thuần tự code** (MLP + GRU ensemble, Thompson sampling) · **Postgres cloud 215.627 bản ghi dữ liệu thật** · QA tự động E2E browser + VLM
+> - **ML thuần tự code** (MLP + GRU ensemble, Thompson sampling) · **Postgres cloud 219.000+ bản ghi dữ liệu thật** · QA tự động E2E browser + VLM
 
 ### Bản tiếng Anh (nếu CV song ngữ / apply LinkedIn)
 
-> **The Trader — Self-running multi-agent AI platform** (paper trading, Vietnam equities) · Jul 2026 → present · 115 documented releases · GitHub + live demo per §6.1
-> - Designed **23 LLM agents** in a 5-group council architecture — **~1,100 automated cycles, zero failures**; **62 REST API endpoints** (Next.js 16) + per-agent conversational chat API
+> **The Trader — Self-running multi-agent AI platform** (paper trading, Vietnam equities) · Jul 2026 → present · 120 documented releases · GitHub + live demo per §6.1
+> - Designed **23 LLM agents** in a 5-group council architecture — **~1,200 automated cycles, 98%+ completed**; **62 REST API endpoints** (Next.js 16) + per-agent conversational chat API
 > - Hand-coded **BM25 RAG engine** (zero libraries): 4 hyperparameters **tunable via UI with DB persistence**; every retrieval logged (docs hit, token budget) for measurable quality
 > - **Prompt engineering + 80% consensus gate**: 3-path prompt injection, automated output scoring; LLM decisions auto-approved/rejected instantly with full audit trail (12/12 automated tests)
 > - **AI automation with feedback loop**: 4 scheduled jobs (10s ticks, RSS crawling, 2 data syncs) with exponential backoff & in-flight guards; **self-grades forecast accuracy ±0.5% daily**
-> - **Hand-coded ML stack** (MLP + GRU ensemble, Thompson sampling) · **Supabase Postgres with 215,627 real market-data records** · automated QA: E2E browser + VLM review
+> - **Hand-coded ML stack** (MLP + GRU ensemble, Thompson sampling) · **Supabase Postgres with 219,000+ real market-data records** · automated QA: E2E browser + VLM review
 
 ### Mẫu 6 dòng mở CV (summary — mỗi chữ trúng keyword JD)
 
-> Nền tảng AI đa tác tử **đang chạy tự động 24/7**: **23 LLM agents** · **RAG BM25 tự code** (0 thư viện) · **AI automation 4 job + vòng phản hồi tự đánh giá ±0,5%/ngày** · **prompt engineering** với chấm điểm output tự động · **cổng đồng thuận 80%** · **62 REST API** · Postgres cloud 215K+ bản ghi thật · Next.js 16 / TypeScript strict
+> Nền tảng AI đa tác tử **đang chạy tự động 24/7**: **23 LLM agents** · **RAG BM25 tự code** (0 thư viện) · **AI automation 4 job + vòng phản hồi tự đánh giá ±0,5%/ngày** · **prompt engineering** với chấm điểm output tự động · **cổng đồng thuận 80%** · **62 REST API** · Postgres cloud 219K+ bản ghi thật · Next.js 16 / TypeScript strict
 
 ### Mục Skills cho CV (mẫu — kê trung thực, Python khai đúng mức)
 
@@ -178,11 +178,11 @@
 | Scheduler jobs | 4 (tick 10s · RSS 15p · EOD 15:45 · intl 06:15) |
 | ML | MLP 10-16-8-3 · GRU-24 BPTT · Thompson bandit · ensemble 2/3 |
 | Vòng phản hồi | DecisionEvaluation ±0,5%/ngày |
-| Dữ liệu thật | 90 instruments · 215.627 bar · ~9.700 bar đa tài sản 4 nguồn |
-| AgentRun đã chạy | ~1.100 (chu kỳ thật 60–150s, **0 failure**) |
+| Dữ liệu thật | 90 instruments · 219.313 bar (2013→nay) · ~9.700 bar đa tài sản 4 nguồn |
+| AgentRun đã chạy | 1.213 (98,3% hoàn tất · 0 lỗi 5 ngày gần nhất) |
 | Hermetic test auto-decision | 12/12 PASS |
 | Fixbug protocol | 4 lớp · trần 8 vòng · 36 findings/phiên lớn nhất |
-| Worklog phiên bản | 115 commit chi tiết |
+| Worklog phiên bản | 120 commit chi tiết |
 | Screenshot nghiệm thu | 215+ |
 | Stack | Next.js 16 · TypeScript 5 strict · Tailwind 4 · Prisma 6 · Supabase PG 17 · socket.io · PM2 |
 
@@ -202,7 +202,7 @@
 | Chất lượng output | Bullet 3 "chấm điểm output tự động" | ✅ |
 | Python | Skills "Python (thành thạo cơ bản, demo port BM25)" — cần §6.2 xong mới ghi | 🔶 chờ demo |
 | **REST API** | Bullet 1 "62 REST API endpoint" + Skills | ✅ (v2 mới bổ sung — v1 thiếu) |
-| Database | Bullet 5 "Postgres cloud 215.627 bản ghi" + Skills SQL | ✅ |
+| Database | Bullet 5 "Postgres cloud 219K+ bản ghi" + Skills SQL | ✅ |
 | Portfolio/GitHub/Demo | §6.1 quyết định đường link + demo video | 🔶 chờ quyết định |
 
 > Mẹo ATS TopCV: copy CV ra file .docx/plain-text rồi Ctrl+F từng keyword trên — nếu dòng nào KHÔNG tìm thấy chữ nguyên vẹn (đừng đếm từ đồng nghĩa), sửa trước khi nộp.

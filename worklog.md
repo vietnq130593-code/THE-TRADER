@@ -4073,3 +4073,38 @@ Work Log:
 Stage Summary:
 - Bộ 6 ảnh portfolio sẵn sàng: docs/screenshots/01…06 .png (~1,5 MB tổng) — mỗi ảnh đã được VLM xác minh nội dung đúng thực thể UI + số liệu thật từ Supabase (tỷ lệ đồng thuận 74,3% khớp giữa ảnh 2 và 6 — cùng chu kỳ dữ liệu).
 - Ảnh dùng được ngay cho CV §6.1 (phương án A demo) và slide phỏng vấn; không lộ credential nào trên màn hình.
+
+---
+Task ID: 119
+Agent: orchestrator (main session)
+Task: Nghiên cứu + triển khai tích hợp OpenCode CLI dùng model free trong sandbox, bền qua reset, tái sử dụng ở local
+
+Work Log:
+- Cài OpenCode 1.19.2 (npm i -g opencode-ai) vào sandbox; `opencode models` liệt kê sẵn 12 model free Zen (catalog models.dev: 41 model -free).
+- VERIFY E2E (khám phá chính): `opencode run -m opencode/nemotron-3.5-lightning-free "Reply with exactly: SANDBOX_OK"` < /dev/null → trả đúng SANDBOX_OK — **free tier KHÔNG cần đăng nhập, chạy ngay trong sandbox** (curl ngoài CLI bị FreeTierError "free tier can only be used from within OpenCode").
+- Điều tra 5 thực nghiệm cô lập stub GitHub Models: models.github.ai bị sandbox DNS-pin về glb-*.github.com — mọi request (stream/tools/Accept-json/bad-model/GET /) đều trả `200 text/plain "OK"` kể cả model không tồn tại → endpoint giả, chỉ dùng được ở local; opencode.ai resolve IP Cloudflare thật (2606:4700::) → Zen chạy thật.
+- Bẫy CLI: `opencode run` treo vĩnh viễn trong shell không TTY do chờ stdin → LUÔN dùng `< /dev/null`; latency free tier 1-5 phút/call (nemotron 2-3 phút OK; glm-5.3-flash-free vượt 4 phút 1 lần).
+- Triển khai bền vững: `opencode.json` project root (commit-safe — default model free + provider github-models với `{env:GITHUB_MODELS_TOKEN}`) · `AGENTS.md` (hướng dẫn repo cho agent) · `scripts/setup-opencode.sh` idempotent (cài CLI + nạp key .env bằng grep an toàn + ghi auth.json nếu có Zen paid key — test PASS) · `.env` thêm GITHUB_MODELS_TOKEN (PAT) + placeholder OPENCODE_API_KEY/ZHIPU_API_KEY · `docs/OPENCODE_SETUP.md` guide đầy đủ sandbox/local/3 nguồn free/giới hạn đã xác minh.
+- GitHub Copilot API (api.githubcopilot.com) từ chối PAT ("Personal Access Tokens are not supported") — loại khỏi phương án.
+
+Stage Summary:
+- Giải pháp HOÀN CHỈNH chạy được ngay: sau reset chỉ cần `git pull && bash scripts/setup-opencode.sh` (~30s) là có lại OpenCode + 41 model free không cần login.
+- Ràng buộc nghiệm thu: free tier chỉ gọi từ trong CLI (23 LLM agents của app KHÔNG dùng được nguồn này); GitHub Models chỉ chạy ở local (sandbox stub); rate limit ~200 req/5h; PAT trong .env = repo phải private (khớp khuyến nghị §6.1 CV).
+
+---
+Task ID: 120
+Agent: orchestrator (main session)
+Task: Đánh giá khối lượng dữ liệu database Supabase tích lũy đến 16-10-2026
+
+Work Log:
+- Script audit tạm (prisma $queryRaw: pg_stat + COUNT chính xác + span thời gian + phân bố) — 3 vòng sửa tên cột theo schema thật (Bar.instrumentId · AgentRun.taskStatus · IntradayBar.startTime · Agent.group) rồi XOÁ sạch sau dùng.
+- KẾT QUẢ TỔNG: DB 163 MB · 229.915 dòng app (32 bảng đếm) + bảng vendor.
+- Lõi dữ liệu: Bar 219.313 dòng/106 MB · 90 mã · span 2013-01-02 → 2026-10-15 (**13,8 năm EOD thật**) · tăng +3.686 bar từ #112 (4 ngày, backfill+daily) · phân bố 6 tháng đều 1.800-2.050/tháng.
+- Phát hiện 1 — bảng vendor ngoài Prisma: public.market_data 95.259 dòng/27 MB (2013→10-05, dormant) + market_data_raw 2,5 MB + data_quality_events — bảng seed nguồn dữ liệu gốc (search_path pooler trống nên phải query public.market_data đủ điều kiện; role postgres đủ quyền).
+- Phát hiện 2 — AgentRun 1.213: 1.192 COMPLETED (98,3%) + **21 FAILED** — toàn bộ lỗi tập trung 10-06→10-11 trên 4 agent research (cùng timestamp = lỗi upstream LLM/dữ liệu theo cụm), **0 lỗi 5 ngày liên tiếp gần nhất** → claim "0 lỗi" cũ chỉ đúng theo cửa sổ đo hẹp.
+- Vận hành: AgentMessage 1.165 (68 trong ngày audit — agents đang chạy khi đo) · NewsItem 810/11 ngày RSS (~74/ngày) · Signal 48 (27 CONSENSUS + 6 WEAK_MAJORITY + 15 null) · D-LEDGER 44/44 nối signal · AuditLog 967 · IntradayBar 5.032 bar/2 phiên (pipeline 5-phút B4 mới tích luỹ, simulated) · MlModel 32 bản · ForeignFlow 664.
+- Cập nhật docs/CV_THE_TRADER.md cho trung thực: "~1.100 chu kỳ, 0 lỗi" → "~1.200 chu kỳ, 98%+ hoàn tất" (VI+EN); 215.627 → 219.313 bar; worklog 115 → 120 phiên bản; fact sheet + bảng ATS đồng bộ.
+
+Stage Summary:
+- Bộ dữ liệu đủ nghiên cứu/học máy: 13,8 năm giá EOD × 90 mã + 810 tin tức + telemetry 1.213 run + 44 quyết định có chấm điểm — số nói lên nền tảng chạy THẬT dài hạn, không phải demo.
+- Sửa trị số CV theo đo đạc mới (98,3% hoàn tất) — tránh bẫy tech lead mở DB kiểm chứng thấy 21 run FAILED.
