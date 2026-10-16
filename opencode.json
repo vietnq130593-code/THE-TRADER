@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/nemotron-3.5-lightning-free",
+  "share": "disabled",
+  "autoupdate": false,
+  "provider": {
+    "github-models": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "GitHub Models (PAT free)",
+      "options": {
+        "baseURL": "https://models.github.ai/inference",
+        "apiKey": "{env:GITHUB_MODELS_TOKEN}"
+      },
+      "models": {
+        "openai/gpt-4o-mini": { "name": "GPT-4o mini" },
+        "openai/gpt-4.1-mini": { "name": "GPT-4.1 mini" },
+        "openai/gpt-4.1": { "name": "GPT-4.1" }
+      }
+    }
+  }
+}
