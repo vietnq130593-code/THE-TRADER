@@ -23,6 +23,9 @@ import {
   psiLevel,
   type PsiLevel,
 } from "@/lib/ml/psi";
+// F-18B (#132): đọc arch-string thật của bản serving từ weights JSON — dùng
+// chung parser chuẩn với /api/ml/architecture (nn.ts) thay vì đoán.
+import { mlpArchString, parseMlpArch } from "@/lib/ml/nn";
 
 export const dynamic = "force-dynamic";
 
@@ -476,6 +479,26 @@ export async function GET() {
       }
     })();
 
+    // F-18B (#132) — archString bản serving ("10-16-8-3") từ weights JSON,
+    // fail-soft: weights/arch không parse được → undefined (FE ẩn badge,
+    // KHÔNG phóng đo). Câu hỏi chủ sở hữu: "ML dự báo 5 phiên có số nơ-rôn
+    // khác hẳn kiến trúc ANN trình chỉnh sửa" — giờ Tổng quan + Bench serving
+    // đều hiện arch thật để đối chiếu cùng một nguồn sự thật.
+    const dlArchString = (() => {
+      if (!dlRow?.weights) return undefined;
+      try {
+        const w = JSON.parse(dlRow.weights) as { arch?: unknown };
+        if (typeof w.arch !== "string") {
+          // Bản cực cũ không ghi arch-string (trước #94) → undefined trung thực
+          // (FE ẩn badge) — không phóng đo 10-16-8-3 như architecture route.
+          return undefined;
+        }
+        return mlpArchString(parseMlpArch(w.arch));
+      } catch {
+        return undefined;
+      }
+    })();
+
     const payload = {
       dlMlp:
         dlRow && dlMetrics
@@ -484,6 +507,8 @@ export async function GET() {
               status: dlRow.status,
               trainedAt: dlRow.trainedAt.toISOString(),
               featureSet: dlFeatureSet,
+              // F-18B (#132) — additive: FE cũ bỏ qua, FE mới hiện badge arch.
+              archString: dlArchString,
               metrics: {
                 ...dlMetrics,
                 horizonDays: dlMetrics.horizonDays ?? 5,

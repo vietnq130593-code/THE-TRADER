@@ -9,6 +9,8 @@ import {
   writeSweepConfig,
   type SweepChampionInfo,
 } from "@/lib/ml/sweep";
+// F-18B (#132) — arch-string serving từ weights (parser chuẩn nn.ts).
+import { mlpArchString, parseMlpArch } from "@/lib/ml/nn";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -46,17 +48,21 @@ async function servingSnapshot(): Promise<{
   valAcc: number | null;
   featureSet: string;
   windowHash: string | null;
+  /** F-18B (#132) — arch-string thật ("10-16-8-3") từ weights JSON; null khi
+   * weights không parse được (FE ẩn ô arch, không phóng đo). */
+  archString: string | null;
 } | null> {
   try {
     const row = await db.mlModel.findFirst({
       where: { kind: "dl-mlp", status: "serving" },
       orderBy: { version: "desc" },
-      select: { version: true, metrics: true, meta: true },
+      select: { version: true, metrics: true, meta: true, weights: true },
     });
     if (!row) return null;
     let valAcc: number | null = null;
     let featureSet = "v1-lag10";
     let windowHash: string | null = null;
+    let archString: string | null = null;
     try {
       const m = JSON.parse(row.metrics) as { valAcc?: unknown };
       if (typeof m.valAcc === "number" && Number.isFinite(m.valAcc)) valAcc = m.valAcc;
@@ -72,7 +78,16 @@ async function servingSnapshot(): Promise<{
         // meta hỏng → giữ mặc định
       }
     }
-    return { version: row.version, valAcc, featureSet, windowHash };
+    // F-18B (#132) — arch từ weights (chuẩn hoá qua parser nn.ts).
+    if (row.weights) {
+      try {
+        const w = JSON.parse(row.weights) as { arch?: unknown };
+        if (typeof w.arch === "string") archString = mlpArchString(parseMlpArch(w.arch));
+      } catch {
+        // weights hỏng → null trung thực
+      }
+    }
+    return { version: row.version, valAcc, featureSet, windowHash, archString };
   } catch (err) {
     console.error("[api/ml/sweep] servingSnapshot lỗi (fail-soft):", err);
     return null;

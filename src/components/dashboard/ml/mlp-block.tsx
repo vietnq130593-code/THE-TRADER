@@ -45,6 +45,36 @@ function FeatureSetBadge({ featureSet }: { featureSet: string | null | undefined
   );
 }
 
+/* ───────────── F-18B (#132) · badge kiến trúc ANN bản serving ───────────── */
+
+/** Arch bản serving ("ANN 10-16-8-3") — cùng nguồn sự thật với sơ đồ trọng
+ *  lượng thật ở tab Mạng thần kinh (weights JSON). Tooltip nói rõ đây là bản
+ *  ĐANG dự báo, tách biệt với trình chỉnh sửa (cấu hình lần train kế tiếp) —
+ *  trả lời câu hỏi chủ sở hữu “số nơ-rôn khác hẳn kiến trúc ANN trình
+ *  chỉnh sửa”. Thiếu archString (weights cũ không parse được) → ẩn badge. */
+function ServingArchBadge({
+  archString,
+  featureCount,
+}: {
+  archString: string | null | undefined;
+  featureCount: number | null | undefined;
+}) {
+  if (archString == null) return null;
+  return (
+    <Badge
+      variant="outline"
+      className="font-mono text-[10px] font-semibold"
+      title={
+        `Kiến trúc ANN bản đang phục vụ: ${archString} (vào – các lớp ẩn – ra 3 xác suất Tăng/Ngang/Giảm)` +
+        (featureCount != null ? ` · ${featureCount} đặc trưng z-score` : "") +
+        " — đây là bản ĐANG dự báo 5 phiên. Trình chỉnh sửa ở tab Mạng thần kinh là cấu hình cho lần huấn luyện KẾ TIẾP (hai phần có thể khác nhau cho tới khi champion qua cổng hoặc train lại qua guard)."
+      }
+    >
+      ANN {archString}
+    </Badge>
+  );
+}
+
 /* ───────────── A3 · Drift PSI (badge + khối chi tiết) ───────────── */
 
 /** Badge "Drift" cạnh version/status khối MLP — mức theo chiều PSI cao nhất. */
@@ -134,6 +164,7 @@ export function MlpBlock({
         </h3>
         {model && <VersionBadge version={model.version} />}
         {model && <StatusBadge status={model.status} />}
+        {model && <ServingArchBadge archString={model.archString} featureCount={m?.features} />}
         {model && <FeatureSetBadge featureSet={model.featureSet} />}
         {model && <DriftBadge drift={drift} />}
         {model && <TrainedAtCaption trainedAt={model.trainedAt} />}
@@ -164,6 +195,16 @@ export function MlpBlock({
 
           {/* A3 — giám sát drift đặc trưng (PSI 30 phiên gần nhất) */}
           <DriftDetail drift={drift} />
+
+          {/* F-18B (#132) — ghi chú phân vai: arch này là bản ĐANG phục vụ,
+              tách biệt trình chỉnh sửa tab Mạng thần kinh (lần train kế tiếp). */}
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Kiến trúc ANN ở trên là của bản đang phục vụ (dự báo 5 phiên ngay
+            hôm nay). Trình chỉnh sửa ở tab Mạng thần kinh là cấu hình cho lần
+            huấn luyện kế tiếp — hai phần khác nhau là bình thường cho tới khi
+            champion qua cổng 4 điều kiện (tab Tự động tìm kiếm) hoặc train lại
+            qua serving-swap guard.
+          </p>
 
           {topSymbols.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">

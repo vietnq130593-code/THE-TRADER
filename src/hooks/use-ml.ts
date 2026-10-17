@@ -92,6 +92,9 @@ export interface MlModelStatus<TMetrics> {
   /** B1 (#81) — nhãn bộ đặc trưng (v1-lag10 / v2-lag16); API cũ thiếu →
    *  undefined (UI hiển thị trung thực theo mặc định). */
   featureSet?: string;
+  /** F-18B (#132) — arch-string bản serving ("10-16-8-3") từ weights JSON;
+   *  undefined khi weights không parse được (UI ẩn badge — không phóng đo). */
+  archString?: string;
   metrics: TMetrics;
 }
 

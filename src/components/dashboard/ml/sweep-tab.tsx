@@ -462,6 +462,16 @@ export function SweepTab() {
                   <p className="font-mono text-lg font-semibold leading-tight">
                     v{serving.version}
                   </p>
+                  {/* F-18B (#132) — arch serving từ weights (đối chiếu cùng nguồn
+                      sự thật với tab Mạng thần kinh + Tổng quan). */}
+                  {serving.archString != null && (
+                    <p
+                      className="mt-0.5 font-mono text-[11px] font-semibold text-muted-foreground"
+                      title={`Kiến trúc ANN bản đang phục vụ: ${serving.archString} — champion chỉ thay thế khi qua cổng 4 điều kiện`}
+                    >
+                      ANN {serving.archString}
+                    </p>
+                  )}
                 </div>
                 <div className="rounded-lg border bg-muted/30 px-3 py-2">
                   <span className="text-[11px] text-muted-foreground">valAcc</span>
@@ -660,6 +670,13 @@ export function SweepTab() {
                     {latest.champion.swapProposed
                       ? "ĐÃ HOÁN ĐỔI sang serving — champion qua đủ cổng 4 điều kiện (audit ML_SWEEP_SWAP)."
                       : `Không đổi serving — ${latest.champion.swapReason}`}
+                  </p>
+                  {/* F-18B (#132): chỉ đường hiển thị kết quả — trả lời câu hỏi
+                      “UI hiển thị kết quả tính toán của Champion board ở đâu”. */}
+                  <p className="opacity-80">
+                    {latest.champion.swapProposed
+                      ? "Kết quả đầy đủ của đợt (mọi ứng viên, điểm, Brier, ΔBrier CI) vẫn xem được trên bảng Champion board và Lịch sử bên dưới; tab Mạng thần kinh hiện banner nguồn gốc NAS + sơ đồ serving mới."
+                      : "Kết quả tính toán của đợt hiển thị công khai trên bảng Champion board + Lịch sử bên dưới (mọi ứng viên kể cả thua); serving và trình chỉnh sửa tab Mạng thần kinh giữ nguyên cho tới khi có champion qua cổng."}
                   </p>
                   {/* F-18 (#131): trạng thái đồng bộ thiết lập champion → ml-tuning */}
                   {latest.champion.swapProposed && latest.champion.tuningSync != null && (

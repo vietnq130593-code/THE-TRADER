@@ -60,6 +60,9 @@ export interface MlSweepServing {
   valAcc: number | null;
   featureSet: string;
   windowHash: string | null;
+  /** F-18B (#132) — arch-string thật bản serving ("10-16-8-3") từ weights;
+   * null khi weights không parse được (FE ẩn ô, không phóng đo). */
+  archString?: string | null;
 }
 
 export interface MlSweepHyper {

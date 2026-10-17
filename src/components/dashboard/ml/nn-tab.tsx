@@ -31,6 +31,7 @@ import * as React from "react";
 import {
   AlertTriangle,
   Brain,
+  GitCompareArrows,
   Info,
   Layers,
   Loader2,
@@ -1142,6 +1143,20 @@ export function NnTab() {
           )}
         </div>
 
+        {/* F-18B (#132): caption phân vai — bản serving là mô hình ĐANG dự báo,
+            trình chỉnh sửa bên dưới là cấu hình lần train KẾ TIẾP (hai đối tượng
+            khác nhau — nguyên nhân “kiến trúc khác hẳn” mà chủ sở hữu thấy). */}
+        {mlp && (
+          <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            Bản này đang trực tiếp dự báo 5 phiên (đưa vào ensemble + prompt
+            agents) — được huấn luyện lần cuối {formatDateTime(mlp.trainedAt ?? "")}.
+            Trình chỉnh sửa bên dưới là cấu hình cho lần huấn luyện kế tiếp,
+            hai phần khác kiến trúc là bình thường — xem dải đối chiếu dưới
+            bảng lớp.
+          </p>
+        )}
+
         {mlp ? (
           <>
             <MlpDiagram mlp={mlp} />
@@ -1190,6 +1205,67 @@ export function NnTab() {
           </EmptyNote>
         )}
       </section>
+
+      {/* F-18B (#132): dải đối chiếu serving ↔ bản nháp — trả lời trực tiếp
+          câu hỏi “số nơ-rôn ML dự báo 5 phiên khác hẳn trình chỉnh sửa, hai
+          phần này sẽ luôn khác nhau à?”: khác là ĐÚNG THIẾT KẾ cho tới khi
+          champion qua cổng (NAS đồng bộ cả hai) hoặc train tay qua guard. */}
+      {mlp != null && draft != null && mlp.archString !== draft.archString ? (
+        <div
+          className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+          role="status"
+          aria-label="Đối chiếu kiến trúc serving và bản nháp"
+        >
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300">
+            <GitCompareArrows className="size-4 shrink-0" aria-hidden="true" />
+            Hai kiến trúc đang khác nhau — đúng thiết kế, không phải lỗi
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg border bg-background/60 px-3 py-2">
+              <p className="text-[11px] font-semibold">
+                Đang phục vụ — dự báo 5 phiên
+              </p>
+              <p className="mt-0.5 font-mono text-sm font-semibold">
+                v{mlp.version} · {mlp.archString}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Train cuối {formatDateTime(mlp.trainedAt ?? "")} · chỉ đổi khi
+                champion qua cổng 4 điều kiện (tab Tự động tìm kiếm) hoặc train
+                lại qua serving-swap guard (valAcc ≥ bản cũ).
+              </p>
+            </div>
+            <div className="rounded-lg border bg-background/60 px-3 py-2">
+              <p className="text-[11px] font-semibold">
+                Bản nháp — lần huấn luyện kế tiếp
+              </p>
+              <p className="mt-0.5 font-mono text-sm font-semibold">
+                {draft.archString}
+                {draft.featureSet != null ? ` · ${draft.featureSet}` : ""}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Áp dụng khi bấm “Huấn luyện ngay” hoặc retrain Chủ nhật 04:00
+                ICT; NAS champion qua cổng sẽ ghi đè cấu hình này tự động.
+              </p>
+            </div>
+          </div>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Hai phần hội tụ về cùng một kiến trúc khi champion qua cổng
+            (serving được hoán đổi + thiết lập được NAS ghi tự động — F-18) hoặc
+            khi bản train tay qua guard. Kết quả tính toán của các đợt tìm kiếm
+            (điểm, Brier, ΔBrier CI, toàn bộ ứng viên kể cả thua) hiển thị công
+            khai ở tab <strong>Tự động tìm kiếm — Champion board</strong>.
+          </p>
+        </div>
+      ) : mlp != null && draft != null && mlp.archString === draft.archString ? (
+        <p
+          className="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] leading-relaxed text-emerald-700 dark:text-emerald-400"
+          role="status"
+        >
+          <GitCompareArrows className="size-4 shrink-0" aria-hidden="true" />
+          Serving v{mlp.version} và bản nháp cùng kiến trúc {mlp.archString} —
+          lần huấn luyện kế tiếp giữ đúng cấu hình đang phục vụ.
+        </p>
+      ) : null}
 
       {/* F-18 (#131): banner nguồn gốc thiết lập — NAS đồng bộ tự động */}
       {nasSource != null && (
