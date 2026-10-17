@@ -379,7 +379,8 @@ export interface MlPipelineStage {
 /** #94 — cấu hình MLP ĐANG CHỈNH (hiệu lực từ AppSetting ml-tuning — KHÔNG
  *  phải bản serving): arch N-layer + activation từng lớp + trọng số loss từng
  *  đầu ra [DOWN, FLAT, UP] + hyper huấn luyện. Trình chỉnh sửa kiến trúc ANN
- *  (tab Mạng thần kinh) khởi tạo draft local từ đây. */
+ *  (tab Mạng thần kinh) khởi tạo draft local từ đây.
+ *  F-18 (#131): + featureSet (16/24 chiều) + source (champion NAS đồng bộ). */
 export interface MlArchDraft {
   arch: { in: number; hidden: number[]; out: number };
   archString: string;
@@ -394,6 +395,17 @@ export interface MlArchDraft {
     valFraction: number;
     seed: number;
   };
+  /** F-18 (#131): bộ đặc trưng của draft ("v2-lag16" 16 chiều | "v3-macro" 24 chiều). */
+  featureSet?: string;
+  /** F-18 (#131): nguồn gốc thiết lập — champion NAS sweep đồng bộ tự động
+   *  (null = trader tự chỉnh / chưa từng đồng bộ). UI hiển thị banner nguồn. */
+  source?: {
+    at: string;
+    runId: string;
+    tag: string;
+    arch: string;
+    modelVersion?: number;
+  } | null;
 }
 
 export interface MlArchitectureResponse {

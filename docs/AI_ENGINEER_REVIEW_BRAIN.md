@@ -435,6 +435,28 @@ Kèm **lịch công bố tĩnh** (`src/lib/macro-calendar.ts`, config JSON): GSO
 
 ---
 
+#### F-18 · NAS auto-promote — champion tự cập nhật thiết lập Mạng thần kinh (bổ sung v4 — #131, từ câu hỏi chủ sở hữu)
+
+**Nguồn gốc (18/10):** chủ sở hữu nhìn Champion board thấy "kiến trúc 24-12 tốt nhất" và hỏi vì sao tab Mạng thần kinh không tự cập nhật thiết lập — *"NAS tính toán kiến trúc tốt nhất thì phải có cơ chế tự động cập nhật kiến trúc, thuật toán và các tinh chỉnh được tính toán ra luôn"*. Hiệu đính sự thật kèm theo: đợt sweep gần nhất (17/10 23:57 ICT, budget kiểm thử 1, v3-macro) champion **C1 24-24-12-3** KHÔNG qua cổng 4 điều kiện (valAcc 38,0% < serving 39,4% · ΔBrier CI [0,0147; 0,0213] > 0 · 939 tham số > cap 678) → giữ serving v8 — nên chẳng có gì để cập nhật; NHƯNG câu hỏi đúng ở tầng thiết kế: **khi champion THẬT SỰ qua cổng và swap serving, code cũ cũng không bao giờ ghi arch/hyper champion xuống `ml-tuning`** — tab Mạng thần kinh vẫn hiện cấu hình cũ và lần train tay kế tiếp quay về arch cũ, đè mất champion.
+
+**Thiết kế — vòng NAS khép kín (một chiều, không vòng lặp ngược):**
+
+| Bước | Cơ chế | File |
+|---|---|---|
+| 1 · Swap serving | champion qua cổng 4 điều kiện → $transaction swap MlModel (giữ nguyên #99) | `sweep.ts` |
+| 2 · **Đồng bộ thiết lập** | `syncChampionTuningToSetting`: ghi hidden + activations + lossWeights + FULL hyper (epochs·patience·batch·lr·l2·val·seed) + featureSet (v3-macro → 24 chiều) xuống AppSetting `ml-tuning`, GIỮ section rag; marker `nasSync {at, runId, tag, arch, modelVersion}`; round-trip guard so SÂU từng số qua đúng đường `parseMlTuningValue` (giá trị bị kẹp → từ chối đồng bộ); audit `ML_SWEEP_SYNC_TUNING` before/after | `sweep.ts` |
+| 3 · Train kế tiếp đúng champion | `trainDlMlp` đường không-prebuilt + engine Chủ nhật build tập theo `ml-tuning.featureSet` → arch 24-24-12-3 tái hiện đúng (đã vá kèm: field `seed` mở rộng 0–999.999.999 khớp seed sweep — trước đây kẹp 999.999 làm mất tái hiện) | `train-mlp.ts` · `api/ml/train` |
+| 4 · Đợt sweep sau tìm tiếp đúng không gian | featureSet mặc định của đợt = ml-tuning đang hiệu lực (NAS đã promote v3-macro → Chủ nhật sau sweep tiếp trong không gian 24 chiều, không tự quay về 16) | `sweep.ts` |
+| 5 · UI trung thực nguồn gốc | `/api/ml/architecture` draft trả `featureSet` + `source` (nasSync) → banner tab Mạng thần kinh "Thiết lập này do NAS cập nhật tự động — …"; trader LƯU TAY section mlp → tuning route XOÁ marker (người đè NAS); board sweep hiển thị arch ĐẦY ĐỦ "24-24-12-3" + dòng giải nghĩa "24 đặc trưng vào → 2 lớp ẩn (24 → 12) → 3 đầu ra" | `api/ml/architecture` · `nn-tab` · `sweep-tab` |
+
+**Kill-switch:** `AppSetting "ml-sweep".autoPromoteTuning` (mặc định **bật** — Switch "Champion tự cập nhật tab Mạng thần kinh" trên tab Tự động tìm kiếm). Tắt → champion qua cổng vẫn swap serving weights nhưng KHÔNG đụng ml-tuning (giữ nguyên ý đồ tách "trọng số mạng" khỏi "thiết lập trader"). Đồng bộ fail-soft tuyệt đối: lỗi DB/round-trip → `tuningSync {synced:false, note}` trong championJson — **không rollback swap đã commit**.
+
+**Gate nghiệm thu:** script `scripts/p131-nas-sync-verify.ts` 15/15 PASS (T1–T2 hermetic parse/effective/sanitize · T3 DB sync reversibel: arch+hyper+featureSet+nasSync+rag-giữ-nguyên+audit+round-trip · T4 restore nguyên vẹn từng ký tự) + no-regression sweep thật budget=1 (champion C1 thua cổng → `swapped:false`, tuning không đổi — đúng deterministic). E2E browser: board arch đầy đủ · toggle · banner NAS hiện khi sync, biến mất khi restore.
+
+**Phụ thuộc:** F-01 (featureSet v3-macro) · #99 sweep gate. **Không đụng:** cổng 4 điều kiện, serving-swap transaction, D-LEDGER, bandit.
+
+---
+
 ## 4. Đối chiếu kỳ vọng chủ sở hữu — đã đáp ứng chưa? (bổ sung v3)
 
 Kỳ vọng nguyên văn (đầu tài liệu): *"bộ não cực mạnh trong phân tích dữ liệu thị trường — dùng dữ liệu cũ phán đoán nền kinh tế, biến động tài chính, cổ phiếu, trái phiếu"*.
@@ -549,6 +571,7 @@ Phân tích kinh tế học trả lời *"bộ não cần nhìn gì"*; review #1
 
 | Ngày | Thay đổi |
 |---|---|
+| 18/10/2026 | **v4 — bổ sung F-18 (NAS auto-promote, #131):** từ câu hỏi chủ sở hữu "vì sao tab Mạng thần kinh không cập nhật thiết lập khi Champion board cho thấy 24-12 tốt nhất" — (1) hiệu đính: đợt sweep 17/10 champion C1 24-24-12-3 thua cổng 4 điều kiện (3 điều kiện fail) nên giữ serving v8; (2) chức năng mới **F-18**: champion qua cổng → tự động đồng bộ arch + activations + lossWeights + full hyper + featureSet xuống AppSetting ml-tuning (marker nasSync + audit ML_SWEEP_SYNC_TUNING + kill-switch autoPromoteTuning mặc định bật) — vòng NAS khép kín: train kế tiếp tái hiện đúng champion (đã vá field seed 0–999.999.999), đợt sweep sau tìm tiếp đúng không gian 24 chiều, UI banner nguồn gốc + board arch đầy đủ "24-24-12-3" kèm giải nghĩa "2 lớp ẩn (24 → 12)"; nghiệm thu 15/15 PASS + no-regression sweep thật + E2E browser |
 | 17/10/2026 | **v3 — tự-review theo yêu cầu chủ sở hữu:** (1) **hiệu đính 11 lỗi E1–E11** bằng đo trực tiếp DB/code (§1.5) — quan trọng nhất: serving v8 thực tế đọc **10 chiều** (không phải v2-lag16) · SweepRun 0 dòng → vòng Chủ nhật chưa vận hành · BanditEvent không có cột meta · F-14 nêu đích MC có sẵn trong RiskQuantSnapshot; (2) bổ sung **F-00** (điều kiện tiên quyết P0: audit ML_TRAIN_AUTO/ML_SWEEP_AUTO + boot catch-up + alert ML_CYCLE_STALLED + kích hoạt GRU shadow) và **F-17** (macro-mlp multi-asset 8 tài sản — đóng kỳ vọng "trái phiếu" bị bỏ sót); (3) thêm **§4 đối chiếu 6 kỳ vọng chủ sở hữu** (verdict trung thực: hiện 1/6 trọn vẹn) và **§5 đánh giá kiến trúc Mạng thần kinh** (phán quyết: không đổi paradigm — 6 cập nhật cụ thể + danh mục "không làm" kèm lý do regime dữ liệu); (4) cập nhật baseline §1 bằng số đo trực tiếp 17/10 (225.644 bar · 908 tin · ForeignFlow 768 · 8 arm với 1 mồ côi · ml-forecast 0,647 · macro-economist 0 pulls); (5) ma trận §2 → 18 dòng; lộ trình thêm GĐ0 |
 | 17/10/2026 | v2 — chuyển đổi full: đặc tả 16 chức năng F-01→F-16 theo 4 nhóm, ma trận chuyển đổi, lộ trình 3 giai đoạn, 6 nguyên tắc N1–N6 |
 | 17/10/2026 | v1 — review kiến trúc & vận hành bộ não: phán quyết 5 khía cạnh, findings P0/P1/P2, lộ trình khái quát |

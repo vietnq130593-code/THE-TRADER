@@ -34,6 +34,31 @@ export const ML_TUNING_KEY = "ml-tuning";
 
 /* ─────────────────── Types ─────────────────── */
 
+/** F-18 (#131 — NAS auto-promote): featureSet của cấu hình MLP đang chỉnh.
+ *  Mặc định "v2-lag16" (16 chiều giá); "v3-macro" = 16 chiều giá + 8 chiều
+ *  vĩ mô (24 chiều — F-01 #129). Quyết định chiều vào arch của lần train
+ *  KẾ TIẾP (đường tay + đường engine Chủ nhật) và arch.in của draft trình
+ *  chỉnh sửa ở tab Mạng thần kinh. */
+export type MlpFeatureSet = "v2-lag16" | "v3-macro";
+
+/** F-18 (#131): dấu vết "thiết lập này do NAS sweep đồng bộ tự động" — ghi
+ *  vào AppSetting ml-tuning mỗi lần champion qua cổng 4 điều kiện và swap
+ *  serving; bị XOÁ khi trader lưu tay section mlp (người đè NAS). UI tab
+ *  Mạng thần kinh đọc qua /api/ml/architecture draft.source để hiển thị
+ *  banner nguồn gốc thiết lập. */
+export interface NasSyncInfo {
+  /** Mốc đồng bộ (ISO) — hiển thị "lúc mấy giờ". */
+  at: string;
+  /** Đợt SweepRun sinh ra champion. */
+  runId: string;
+  /** Nhãn champion (C1..C12 · R1..R4). */
+  tag: string;
+  /** Arch đầy đủ "in-hidden…-out" của champion. */
+  arch: string;
+  /** Version MlModel champion đang serving sau swap. */
+  modelVersion?: number;
+}
+
 /** Hyperparameters + kiến trúc MLP v2 (#94) — thiếu trường nào dùng mặc định. */
 export interface MlpTuning {
   /** Số nơ-rôn TỪNG lớp ẩn (1..5 lớp, mỗi lớp 2..96). Mặc định [24, 12]. */
@@ -56,6 +81,8 @@ export interface MlpTuning {
   valFraction: number;
   /** Seed RNG (init + shuffle) — deterministic. Mặc định 42. */
   seed: number;
+  /** F-18 (#131): bộ đặc trưng của lần train kế tiếp — mặc định v2-lag16. */
+  featureSet?: MlpFeatureSet;
 }
 
 /** Tham số RAG BM25 — thiếu trường nào dùng mặc định trường đó. */
@@ -73,6 +100,8 @@ export interface RagTuning {
 export interface MlTuning {
   mlp?: MlpTuning;
   rag?: RagTuning;
+  /** F-18 (#131): lần NAS đồng bộ gần nhất (null/undefined = trader tự chỉnh). */
+  nasSync?: NasSyncInfo;
   updatedAt?: string;
 }
 
@@ -151,7 +180,7 @@ export const MLP_TUNING_FIELDS: TuningFieldSpec[] = [
   { key: "lr", label: "Tốc độ học (lr)", min: 0.0005, max: 0.1, step: 0.0005, integer: false, hint: "Learning-rate Adam — mặc định 0,01." },
   { key: "l2", label: "L2 weight decay", min: 0, max: 0.01, step: 0.0005, integer: false, hint: "Phạt trọng số chống quá khớp — áp CHỈ lên W, không áp bias. Mặc định 0." },
   { key: "valFraction", label: "Tỷ lệ tập xác thực", min: 0.1, max: 0.4, step: 0.05, integer: false, hint: "Phần dữ liệu CUỐI (theo thời gian) làm val để early-stop — mặc định 0,2." },
-  { key: "seed", label: "Seed ngẫu nhiên", min: 0, max: 999999, step: 1, integer: true, hint: "Khởi tạo + xáo trộn deterministic (mulberry32) — cùng seed ra cùng mô hình." },
+  { key: "seed", label: "Seed ngẫu nhiên", min: 0, max: 999999999, step: 1, integer: true, hint: "Khởi tạo + xáo trộn deterministic (mulberry32) — cùng seed ra cùng mô hình. Phạm vi khớp seed sweep (F-18: NAS đồng bộ seed champion ≈ 20 triệu — trước đây kẹp ở 999.999 làm mất tái hiện)." },
 ];
 
 export const RAG_TUNING_FIELDS: TuningFieldSpec[] = [
@@ -275,6 +304,10 @@ export function parseMlTuningValue(parsed: unknown): MlTuning {
     }
   }
   const reconciled = reconcileMlpPartial(mlp);
+  // F-18 (#131): featureSet — chỉ 2 giá trị hợp lệ, khác → bỏ (mặc định v2).
+  if (m.featureSet === "v3-macro" || m.featureSet === "v2-lag16") {
+    (reconciled as MlpTuning).featureSet = m.featureSet;
+  }
   if (Object.keys(reconciled).length > 0) out.mlp = reconciled as MlpTuning;
   const r = (p.rag ?? {}) as Partial<RagTuning>;
   const rag: Partial<RagTuning> = {};
@@ -285,6 +318,31 @@ export function parseMlTuningValue(parsed: unknown): MlTuning {
     }
   }
   if (Object.keys(rag).length > 0) out.rag = rag as RagTuning;
+  // F-18 (#131): nasSync — validate hình dạng, thiếu/hỏng → bỏ (banner UI
+  // chỉ hiện khi marker nguyên vẹn — trung thực nguồn gốc thiết lập).
+  if (
+    p.nasSync != null &&
+    typeof p.nasSync === "object" &&
+    !Array.isArray(p.nasSync)
+  ) {
+    const ns = p.nasSync as Partial<NasSyncInfo>;
+    if (
+      typeof ns.at === "string" &&
+      typeof ns.runId === "string" &&
+      typeof ns.tag === "string" &&
+      typeof ns.arch === "string"
+    ) {
+      out.nasSync = {
+        at: ns.at,
+        runId: ns.runId,
+        tag: ns.tag,
+        arch: ns.arch,
+        ...(typeof ns.modelVersion === "number" && Number.isFinite(ns.modelVersion)
+          ? { modelVersion: ns.modelVersion }
+          : {}),
+      };
+    }
+  }
   if (typeof p.updatedAt === "string") out.updatedAt = p.updatedAt;
   return out;
 }
@@ -292,6 +350,8 @@ export function parseMlTuningValue(parsed: unknown): MlTuning {
 /** Merge đã lưu + mặc định — giá trị HIỆU LỰC mà train/rag sẽ dùng. */
 export function effectiveMlTuning(saved: MlTuning): { mlp: MlpTuning; rag: RagTuning } {
   const merged = { ...MLP_TUNING_DEFAULT, ...saved.mlp };
+  // F-18 (#131): featureSet hiệu lực — chuẩn hoá 2 giá trị (mặc định v2-lag16).
+  merged.featureSet = saved.mlp?.featureSet === "v3-macro" ? "v3-macro" : "v2-lag16";
   // Hoà giải activations đúng độ dài hidden cuối cùng (pad relu / cắt).
   const acts: MlpActivation[] = [];
   const src = merged.activations ?? [];
@@ -368,7 +428,15 @@ export function sanitizeTuningInput(input: unknown): TuningSanitizeResult {
       const raw = body.mlp as Record<string, unknown>;
       const clean: Partial<MlpTuning> = {};
       for (const [key, value] of Object.entries(raw)) {
-        if (key === "hidden" || key === "activations" || key === "lossWeights") continue;
+        // F-18 (#131): featureSet là string — validate riêng bên dưới.
+        if (
+          key === "hidden" ||
+          key === "activations" ||
+          key === "lossWeights" ||
+          key === "featureSet"
+        ) {
+          continue;
+        }
         const spec = FIELD_INDEX[key];
         if (spec == null || !MLP_TUNING_FIELDS.some((f) => f.key === key)) {
           errors.push(`mlp.${key}: khoá không hỗ trợ${key === "h1" || key === "h2" ? " (đã chuyển sang trình chỉnh sửa kiến trúc — tab Mạng thần kinh)" : ""}`);
@@ -444,6 +512,16 @@ export function sanitizeTuningInput(input: unknown): TuningSanitizeResult {
         errors.push(
           `mlp.activations: phải cùng độ dài với mlp.hidden (${clean.hidden.length} lớp — nhận ${clean.activations.length} activation)`
         );
+      }
+      // F-18 (#131): featureSet — chỉ "v2-lag16" | "v3-macro" (NAS sweep ghi,
+      // FE cũng gửi được khi thêm bộ chọn — một hợp đồng validate).
+      if ("featureSet" in raw) {
+        const fs = raw.featureSet;
+        if (fs !== "v2-lag16" && fs !== "v3-macro") {
+          errors.push("mlp.featureSet: chỉ nhận v2-lag16 | v3-macro");
+        } else {
+          clean.featureSet = fs;
+        }
       }
       if (Object.keys(clean).length > 0) out.mlp = clean;
     }

@@ -40,6 +40,10 @@ import {
   MLP_TUNING_DEFAULT,
   MLP_TUNING_FIELDS,
   readEffectiveMlTuning,
+  readMlTuning,
+  writeMlTuning,
+  parseMlTuningValue,
+  type MlTuning,
   type MlpTuning,
 } from "@/lib/ml/tuning";
 import {
@@ -57,6 +61,11 @@ export const SWEEP_SETTING_KEY = "ml-sweep";
 export interface SweepConfig {
   /** Kill-switch đường ENGINE (§1.6) — nút tay vẫn chạy. */
   enabled: boolean;
+  /** F-18 (#131): champion qua cổng 4 điều kiện & swap serving → TỰ ĐỒNG GHI
+   *  kiến trúc + hyper của champion xuống AppSetting ml-tuning (tab Mạng
+   *  thần kinh phản ánh ngay; lần train kế tiếp dùng đúng cấu hình).
+   *  Kill-switch tắt → chỉ swap serving weights, giữ thiết lập trader. */
+  autoPromoteTuning: boolean;
   /** Số ứng viên/đợt (coarse 12 trước, refine 4 sau) — clamp 1..64. */
   budgetCandidates: number;
   /** Seed dãy ứng viên — deterministic (hiện dãy cố định, seed lưu cho mở rộng). */
@@ -72,6 +81,7 @@ export interface SweepConfig {
 
 export const SWEEP_CONFIG_DEFAULT: SweepConfig = {
   enabled: true,
+  autoPromoteTuning: true,
   budgetCandidates: 16,
   seed: 20261012,
   deltaSwap: 0.01,
@@ -119,6 +129,10 @@ export async function readSweepConfig(): Promise<SweepConfig> {
     const parsed = JSON.parse(row.value) as Partial<SweepConfig>;
     return {
       enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : SWEEP_CONFIG_DEFAULT.enabled,
+      autoPromoteTuning:
+        typeof parsed.autoPromoteTuning === "boolean"
+          ? parsed.autoPromoteTuning
+          : SWEEP_CONFIG_DEFAULT.autoPromoteTuning,
       budgetCandidates:
         typeof parsed.budgetCandidates === "number" && Number.isFinite(parsed.budgetCandidates)
           ? clampSweepInt(parsed.budgetCandidates, 1, 64)
@@ -204,8 +218,25 @@ export function sanitizeSweepConfigInput(input: unknown): SweepConfigSanitizeRes
       clean.enabled = raw.enabled;
     }
   }
+  // F-18 (#131): kill-switch đồng bộ champion → ml-tuning (boolean).
+  if ("autoPromoteTuning" in raw) {
+    if (typeof raw.autoPromoteTuning !== "boolean") {
+      errors.push("config.autoPromoteTuning: phải là boolean (true | false)");
+    } else {
+      clean.autoPromoteTuning = raw.autoPromoteTuning;
+    }
+  }
   for (const key of Object.keys(raw)) {
-    if (!["enabled", "budgetCandidates", "seed", "deltaSwap", "maxParamFactor"].includes(key)) {
+    if (
+      ![
+        "enabled",
+        "autoPromoteTuning",
+        "budgetCandidates",
+        "seed",
+        "deltaSwap",
+        "maxParamFactor",
+      ].includes(key)
+    ) {
       errors.push(`config.${key}: khoá không hỗ trợ`);
     }
   }
@@ -586,6 +617,141 @@ export function championGateCheck(p: ChampionGateParams): ChampionGateResult {
   return { pass: reasons.length === 0, reasons };
 }
 
+/* ─────────────────── F-18 (#131): Champion → ml-tuning auto-promote ─────────────────── */
+
+/** Kết quả đồng bộ champion → AppSetting ml-tuning. */
+export interface ChampionTuningSyncResult {
+  synced: boolean;
+  note: string;
+}
+
+/**
+ * F-18 (#131) — GHI kiến trúc + hyper của champion (đã qua cổng 4 điều kiện
+ * & swap serving) xuống AppSetting "ml-tuning":
+ *   - mlp: hidden + activations + lossWeights + FULL hyper (epochs ·
+ *     patience · batchSize · lr · l2 · valFraction · seed) + featureSet
+ *     (v3-macro nếu champion 24 chiều) — lần train KẾ TIẾP (nút tay tab
+ *     Mạng thần kinh + đường engine Chủ nhật) dựng ĐÚNG arch champion thay
+ *     vì quay về cấu hình cũ.
+ *   - nasSync marker {at, runId, tag, arch, modelVersion} — /api/ml/
+ *     architecture đọc ra draft.source để tab Mạng thần kinh hiển thị banner
+ *     "thiết lập này do NAS đồng bộ lúc…"; trader LƯU TAY section mlp →
+ *     tuning route XOÁ marker (người đè NAS, nguồn gốc trung thực).
+ *   - GIỮ NGUYÊN section rag (đồng bộ chỉ đụng phần mlp — "một việc một việc").
+ *
+ * Kỷ luật: giá trị viết xuống đi qua ROUND-TRIP parseMlTuningValue — giá trị
+ * phải sống sót đúng đường đọc (kẹp phạm vi, lọc rác) y như mọi lần lưu tay;
+ * audit ML_SWEEP_SYNC_TUNING before/after (fail-soft — lỗi audit không chặn
+ * chính). Fail-soft tuyệt đối: lỗi DB → {synced:false, note} — swap serving
+ * weights (đã commit) KHÔNG bị rollback.
+ */
+export async function syncChampionTuningToSetting(params: {
+  runId: string;
+  /** hidden[] của champion (SweepCandidate.hidden — đã trong giới hạn arch). */
+  hidden: readonly number[];
+  activations: readonly MlpActivation[];
+  lossWeights: readonly [number, number, number];
+  hyper: SweepHyper;
+  tag: string;
+  arch: string;
+  modelVersion: number;
+}): Promise<ChampionTuningSyncResult> {
+  const saved = await readMlTuning();
+  const next: MlTuning = {
+    ...saved,
+    mlp: {
+      hidden: [...params.hidden],
+      activations: [...params.activations],
+      lossWeights: [...params.lossWeights] as [number, number, number],
+      epochs: params.hyper.epochs,
+      patience: params.hyper.patience,
+      batchSize: params.hyper.batchSize,
+      lr: params.hyper.lr,
+      l2: params.hyper.l2,
+      valFraction: params.hyper.valFraction,
+      seed: params.hyper.seed,
+      featureSet: params.hyper.featureSet === "v3-macro" ? "v3-macro" : "v2-lag16",
+    },
+    nasSync: {
+      at: new Date().toISOString(),
+      runId: params.runId,
+      tag: params.tag,
+      arch: params.arch,
+      modelVersion: params.modelVersion,
+    },
+  };
+  // Round-trip guard: cấu hình champion phải sống sót qua đúng đường parse
+  // của mọi lần đọc sau này (một cửa — không ghi giá trị sẽ bị kẹp/đổi ý
+  // nghĩa). So SÂU toàn bộ mlp (arch + hyper + featureSet) từng số —
+  // fixbug T3c p131-verify: trước đây chỉ so hidden/activations, seed sweep
+  // 20 triệu bị kẹp im lặng về 999.999 → lần train kế tiếp KHÔNG tái hiện
+  // được champion (khác seed = khác khởi tạo).
+  try {
+    const reparsed = parseMlTuningValue(JSON.parse(JSON.stringify(next)));
+    const m = reparsed.mlp;
+    const hyperMatch =
+      m != null &&
+      m.epochs === params.hyper.epochs &&
+      m.patience === params.hyper.patience &&
+      m.batchSize === params.hyper.batchSize &&
+      m.lr === params.hyper.lr &&
+      m.l2 === params.hyper.l2 &&
+      m.valFraction === params.hyper.valFraction &&
+      m.seed === params.hyper.seed &&
+      m.featureSet === (params.hyper.featureSet === "v3-macro" ? "v3-macro" : "v2-lag16");
+    const archMatch =
+      m != null &&
+      m.hidden != null &&
+      m.hidden.length === params.hidden.length &&
+      m.hidden.every((h, i) => h === params.hidden[i]) &&
+      m.activations != null &&
+      m.activations.length === params.activations.length &&
+      m.activations.every((a, i) => a === params.activations[i]) &&
+      m.lossWeights != null &&
+      m.lossWeights.every((w, i) => w === params.lossWeights[i]);
+    if (!hyperMatch || !archMatch || reparsed.nasSync == null) {
+      return {
+        synced: false,
+        note: "round-trip parse không giữ nguyên cấu hình champion (giá trị bị kẹp phạm vi?) — bỏ đồng bộ (an toàn)",
+      };
+    }
+  } catch (err) {
+    return {
+      synced: false,
+      note: `round-trip parse lỗi: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const ok = await writeMlTuning(next);
+  if (!ok) {
+    return { synced: false, note: "Không ghi được AppSetting ml-tuning (lỗi DB)" };
+  }
+  try {
+    await db.auditLog.create({
+      data: {
+        action: "ML_SWEEP_SYNC_TUNING",
+        entity: "AppSetting",
+        entityId: null,
+        before: JSON.stringify({
+          mlp: saved.mlp ?? null,
+          ragPreserved: saved.rag != null,
+          nasSyncBefore: saved.nasSync ?? null,
+        }),
+        after: JSON.stringify({
+          mlp: next.mlp,
+          nasSync: next.nasSync,
+          note: "F-18 — champion qua cổng 4 điều kiện & swap serving → đồng bộ thiết lập tab Mạng thần kinh",
+        }),
+      },
+    });
+  } catch (auditErr) {
+    console.error("l/sweep] audit ML_SWEEP_SYNC_TUNING lỗi (bỏ qua):", auditErr);
+  }
+  return {
+    synced: true,
+    note: `đã ghi arch ${params.arch} + hyper (lr ${params.hyper.lr}, ${params.hyper.epochs} epoch, batch ${params.hyper.batchSize}, seed ${params.hyper.seed}, bộ ${params.hyper.featureSet}) xuống tab Mạng thần kinh`,
+  };
+}
+
 /* ─────────────────── Runner (§4.3 → §4.6) ─────────────────── */
 
 /** Số draw bootstrap mặc định của cổng (cùng B2). */
@@ -631,6 +797,9 @@ export interface SweepChampionInfo {
   deltaBrier?: { mean: number; ciLow: number; ciHigh: number };
   /** Trạng thái serving TRƯỚC đợt (null object = DB sạch). */
   serving?: { valAcc: number | null; paramCount: number | null; version: number | null } | null;
+  /** F-18 (#131): kết quả đồng bộ champion → AppSetting ml-tuning (chỉ khi
+   *  swap thành công; null khi không swap). */
+  tuningSync?: { synced: boolean; note: string } | null;
 }
 
 /** Kết quả 1 đợt sweep (route trả FE + engine broadcast "ml-sweep"). */
@@ -690,7 +859,19 @@ export async function runSweepOnce(opts: {
 }): Promise<SweepRunSummary> {
   const config = await readSweepConfig();
   const budget = clampSweepInt(opts.budgetOverride ?? config.budgetCandidates, 1, 64);
-  const featureSet = opts.featureSet === "v3-macro" ? "v3-macro" : "v2-lag16";
+  // F-18 (#131): featureSet của đợt — ưu tiên giá trị opts tường minh (nút
+  // tay / route body); MẶC ĐỊNH theo ml-tuning đang hiệu lực: NAS đã đồng bộ
+  // v3-macro → các đợt sau (kể cả engine Chủ nhật 04:15) tìm tiếp trong
+  // không gian 24 chiều — vòng lặp NAS khép kín, không tự quay về 16 chiều.
+  // Tuning đọc 1 LẦN đầu đợt (lossWeights coarse + featureSet dùng chung —
+  // snapshot thống nhất toàn đợt như §2.9 deterministic).
+  const tuning = await readEffectiveMlTuning();
+  const featureSet =
+    opts.featureSet === "v3-macro" || opts.featureSet === "v2-lag16"
+      ? opts.featureSet
+      : tuning.mlp.featureSet === "v3-macro"
+        ? "v3-macro"
+        : "v2-lag16";
   const inDims = featureSet === "v3-macro" ? 24 : 16;
 
   // (1) Mutex dùng chung với train route (F2) — busy → route trả 429.
@@ -794,7 +975,8 @@ export async function runSweepOnce(opts: {
     // (5) Sinh + train tuần tự từng ứng viên (coarse trước — top-2 THẬT mới
     //     sinh refine). Wall-clock: quá trần → phần còn lại log "budget thời
     //     gian" (không train tiếp), đợt ghi status "failed" (§4.6).
-    const tuning = await readEffectiveMlTuning();
+    //     F-18 (#131): tuning đọc MỘT LẦN đầu đợt (featureSet + lossWeights
+    //     coarse dùng chung — thấy ở phần khai báo trên mutex).
     const traderLossWeights = tuning.mlp.lossWeights;
     const coarse = buildCoarseCandidates(traderLossWeights, config.seed, featureSet);
     const coarseCount = Math.min(budget, coarse.length);
@@ -952,6 +1134,8 @@ export async function runSweepOnce(opts: {
 
     let champion: SweepChampionInfo | null = null;
     let swapped = false;
+    /** F-18 (#131): kết quả đồng bộ champion → ml-tuning (chỉ set khi swap). */
+    let tuningSync: { synced: boolean; note: string } | null = null;
 
     if (championEval) {
       const ce = championEval;
@@ -1027,6 +1211,37 @@ export async function runSweepOnce(opts: {
           } catch (auditErr) {
             console.error("[ml/sweep] audit ML_SWEEP_SWAP lỗi (bỏ qua):", auditErr);
           }
+          // F-18 (#131): swap serving xong → ĐỒNG BỘ thiết lập champion xuống
+          // AppSetting ml-tuning (tab Mạng thần kinh + lần train kế tiếp dùng
+          // đúng arch champion). Kill-switch autoPromoteTuning đọc FRESH —
+          // trader có thể vừa đổi giữa chừng đợt. Fail-soft: đồng bộ lỗi
+          // KHÔNG rollback swap (serving weights vẫn đúng champion).
+          try {
+            const freshCfg = await readSweepConfig();
+            if (freshCfg.autoPromoteTuning) {
+              tuningSync = await syncChampionTuningToSetting({
+                runId: run.id,
+                hidden: ce.cand.hidden,
+                activations: ce.cand.activations,
+                lossWeights: ce.entry.lossWeights as [number, number, number],
+                hyper: ce.cand.hyper,
+                tag: ce.cand.tag,
+                arch: ce.entry.arch,
+                modelVersion: championRow.version,
+              });
+            } else {
+              tuningSync = {
+                synced: false,
+                note: "autoPromoteTuning đang TẮT (kill-switch ml-sweep) — chỉ hoán đổi serving, giữ thiết lập tab Mạng thần kinh",
+              };
+            }
+          } catch (syncErr) {
+            console.error("[ml/sweep] đồng bộ champion → ml-tuning lỗi (fail-soft):", syncErr);
+            tuningSync = {
+              synced: false,
+              note: `đồng bộ lỗi: ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`,
+            };
+          }
         } else {
           swapReason =
             "qua cổng 4 điều kiện nhưng không tìm thấy hàng MlModel champion (dữ liệu đổi giữa chừng?) — không swap";
@@ -1061,6 +1276,7 @@ export async function runSweepOnce(opts: {
           paramCount: servingParamCount,
           version: servingRow?.version ?? null,
         },
+        ...(tuningSync != null ? { tuningSync } : {}),
       };
     }
 
@@ -1087,7 +1303,9 @@ export async function runSweepOnce(opts: {
     console.log(
       `[ml/sweep] đợt ${run.id} xong: ${evaluated}/${budget} ứng viên · champion ${
         champion ? `${champion.tag} ${champion.arch} (score ${champion.score})` : "—"
-      } · ${swapped ? "SWAP serving" : "giữ serving"} · ${Date.now() - started}ms`
+      } · ${swapped ? "SWAP serving" : "giữ serving"}${
+        tuningSync ? ` · đồng bộ ml-tuning: ${tuningSync.synced ? "OK" : "KHÔNG"}` : ""
+      } · ${Date.now() - started}ms`
     );
 
     return {

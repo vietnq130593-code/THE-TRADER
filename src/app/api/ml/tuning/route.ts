@@ -100,6 +100,8 @@ export async function POST(req: Request) {
     delete next.mlp;
     changed = true;
     applied.push("đặt lại MLP về mặc định");
+    // F-18 (#131): đặt lại về mặc định cũng là thao tác tay — xoá marker NAS.
+    if (next.nasSync != null) delete next.nasSync;
   }
   if (resetRag && next.rag != null) {
     delete next.rag;
@@ -137,6 +139,13 @@ export async function POST(req: Request) {
     next.mlp = reconcileMlpSection(merged) as MlTuning["mlp"];
     changed = true;
     applied.push("MLP");
+    // F-18 (#131): trader LƯU TAY section mlp → người đè NAS — xoá marker
+    // nasSync để banner tab Mạng thần kinh không còn nhận thiết lập là của
+    // NAS (nguồn gốc trung thực; NAS ghi lại ở lần sync kế tiếp).
+    if (next.nasSync != null) {
+      delete next.nasSync;
+      applied.push("ghi đè thiết lập NAS (nguồn: trader)");
+    }
   }
   if (sanitized.rag != null) {
     next.rag = { ...next.rag, ...sanitized.rag } as MlTuning["rag"];

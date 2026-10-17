@@ -40,6 +40,9 @@ export const ML_SWEEP_QUERY_KEY = ["ml-sweep"] as const;
 export interface MlSweepConfig {
   /** Kill-switch đường ENGINE Chủ nhật 04:15 ICT (nút tay vẫn chạy). */
   enabled: boolean;
+  /** F-18 (#131): champion qua cổng & swap serving → tự động ghi kiến trúc
+   *  + hyper xuống tab Mạng thần kinh (ml-tuning). Tắt → chỉ swap weights. */
+  autoPromoteTuning: boolean;
   /** Số ứng viên/đợt (coarse 12 trước, refine 4 sau) — 1..64. */
   budgetCandidates: number;
   /** Seed dãy ứng viên — deterministic. */
@@ -67,6 +70,8 @@ export interface MlSweepHyper {
   l2: number;
   valFraction: number;
   seed: number;
+  /** F-18 (#131): bộ đặc trưng của champion ("v2-lag16" | "v3-macro"). */
+  featureSet?: string;
 }
 
 /** championJson của một đợt — null khi đợt không có ứng viên sống nào. */
@@ -87,6 +92,8 @@ export interface MlSweepChampion {
   modelVersion: number;
   deltaBrier?: { mean: number; ciLow: number; ciHigh: number } | null;
   serving?: { valAcc: number | null; paramCount: number | null; version: number | null } | null;
+  /** F-18 (#131): đồng bộ champion → ml-tuning (chỉ có khi swap thành công). */
+  tuningSync?: { synced: boolean; note: string } | null;
 }
 
 /** 1 dòng champion board (logJson) — mọi ứng viên kể cả thua (§2.10). */
@@ -253,7 +260,9 @@ export function useRunSweepNow() {
           champion == null
             ? "Không có ứng viên nào train thành công — xem logJson chi tiết trên bảng champion."
             : res.swapped === true
-              ? "Champion qua CỔNG 4 ĐIỀU KIỆN — đã hoán đổi sang serving (audit ML_SWEEP_SWAP)."
+              ? champion.tuningSync?.synced === true
+                ? "Champion qua CỔNG 4 ĐIỀU KIỆN — đã hoán đổi sang serving (audit ML_SWEEP_SWAP) VÀ đồng bộ kiến trúc + tinh chỉnh xuống tab Mạng thần kinh."
+                : "Champion qua CỔNG 4 ĐIỀU KIỆN — đã hoán đổi sang serving (audit ML_SWEEP_SWAP)."
               : `Champion KHÔNG đổi serving — ${champion.swapReason || "chưa đủ vượt cổng 4 điều kiện"}.`,
       });
     },
@@ -268,7 +277,12 @@ export function useSaveSweepConfig() {
 
   return useMutation({
     mutationFn: async (
-      config: Partial<Pick<MlSweepConfig, "enabled" | "budgetCandidates" | "seed" | "deltaSwap" | "maxParamFactor">>
+      config: Partial<
+        Pick<
+          MlSweepConfig,
+          "enabled" | "autoPromoteTuning" | "budgetCandidates" | "seed" | "deltaSwap" | "maxParamFactor"
+        >
+      >
     ): Promise<MlSweepConfigSaveResponse> => {
       const res = await fetch("/api/ml/sweep", {
         method: "POST",

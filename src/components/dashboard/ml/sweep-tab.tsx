@@ -46,17 +46,28 @@ import { EmptyNote, accTone, nf0, nf2, nf4, pct1 } from "./shared";
 
 /* ─────────────────── Helpers ─────────────────── */
 
-/** "16-24-12-3" → hiển thị gọn "24-12" (bỏ in/out cố định cho ngắn). */
-function archShort(arch: string): string {
-  const parts = arch.split("-");
-  if (parts.length < 3) return arch;
-  return parts.slice(1, -1).join("-");
-}
-
 /** lossWeights compact: [1, 0,5, 2,5] → "1/0,5/2,5". */
 function lossWeightsCompact(lw: [number, number, number] | undefined): string {
   if (!lw || lw.length !== 3) return "—";
   return lw.map((v) => nf2.format(v)).join("/");
+}
+
+/** F-18 (#131): arch ĐẦY ĐỦ "in-hidden…-out" (vd 24-24-12-3) — trước đây
+ *  bảng rút gọn còn "24-12" làm người đọc tưởng kiến trúc chỉ có 2 con số
+ *  mà không biết chiều vào (16 hay 24) — nguyên nhân câu hỏi "24-12 là gì".
+ *  Giữ nguyên chuỗi đầy đủ + tooltip diễn giải từng đoạn. */
+function archFull(arch: string): string {
+  return arch;
+}
+
+/** Tooltip diễn giải arch "24-24-12-3" → "24 đặc trưng vào → ẩn 24 → ẩn 12 → 3 đầu ra". */
+function archTooltip(arch: string): string {
+  const parts = arch.split("-");
+  if (parts.length < 3) return arch;
+  const inDim = parts[0];
+  const outDim = parts[parts.length - 1];
+  const hidden = parts.slice(1, -1);
+  return `${inDim} đặc trưng vào → ${hidden.length} lớp ẩn (${hidden.join(" → ")}) → ${outDim} đầu ra (Giảm/Đi ngang/Tăng)`;
 }
 
 /** Chuỗi activation compact: "relu,tanh" → "r,t". */
@@ -193,7 +204,7 @@ function ChampionBoard({ run }: { run: MlSweepRun }) {
         <thead className="sticky top-0 bg-muted/95 backdrop-blur">
           <tr className="text-left">
             <th className="px-2 py-2 font-medium">STT</th>
-            <th className="px-2 py-2 font-medium">Kiến trúc</th>
+            <th className="px-2 py-2 font-medium" title="Đầy đủ: vào → các lớp ẩn → ra (vd 24-24-12-3 = 24 đặc trưng vào, ẩn 24, ẩn 12, 3 đầu ra)">Kiến trúc</th>
             <th className="px-2 py-2 font-medium">Kích hoạt</th>
             <th className="px-2 py-2 font-medium">Trọng số loss</th>
             <th className="px-2 py-2 text-right font-medium">valAcc</th>
@@ -224,8 +235,11 @@ function ChampionBoard({ run }: { run: MlSweepRun }) {
                     </Badge>
                   )}
                 </td>
-                <td className="whitespace-nowrap px-2 py-2 font-mono text-[10px]">
-                  {row.error != null ? "—" : archShort(row.arch)}
+                <td
+                  className="whitespace-nowrap px-2 py-2 font-mono text-[10px]"
+                  title={row.error != null ? undefined : archTooltip(row.arch)}
+                >
+                  {row.error != null ? "—" : archFull(row.arch)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-2 font-mono text-[10px] text-muted-foreground">
                   {activationsCompact(row.activations)}
@@ -279,6 +293,8 @@ export function SweepTab() {
 
   const [values, setValues] = React.useState<Record<string, string>>({});
   const [enabled, setEnabled] = React.useState(true);
+  // F-18 (#131): kill-switch đồng bộ champion → tab Mạng thần kinh (ml-tuning).
+  const [autoPromote, setAutoPromote] = React.useState(true);
   const lastHydratedAt = React.useRef<string | null>(null);
   /** F-100A-2 (#100-A Fixbug): trader có chỉnh chưa lưu — hydrate không đè. */
   const hasUnsavedEdits = React.useRef(false);
@@ -301,6 +317,7 @@ export function SweepTab() {
       maxParamFactor: String(data.config.maxParamFactor),
     });
     setEnabled(data.config.enabled);
+    setAutoPromote(data.config.autoPromoteTuning !== false); // cũ thiếu trường → ON (mặc định F-18)
   }, [sweep.data]);
 
   // Lưu xong → cho phép hydrate lại từ config vừa lưu (đồng bộ định dạng chuẩn).
@@ -318,7 +335,10 @@ export function SweepTab() {
   const payloadInfo = React.useMemo(() => {
     const errors: string[] = [];
     const payload: Partial<
-      Pick<MlSweepConfig, "enabled" | "budgetCandidates" | "seed" | "deltaSwap" | "maxParamFactor">
+      Pick<
+        MlSweepConfig,
+        "enabled" | "autoPromoteTuning" | "budgetCandidates" | "seed" | "deltaSwap" | "maxParamFactor"
+      >
     > = {};
     const current: Record<string, number> = {
       budgetCandidates: sweep.data?.config.budgetCandidates ?? 16,
@@ -346,8 +366,12 @@ export function SweepTab() {
       if (parsed !== current[spec.key]) payload[spec.key] = parsed;
     }
     if (enabled !== (sweep.data?.config.enabled ?? true)) payload.enabled = enabled;
+    // F-18 (#131): so với config thật (cũ thiếu trường → coi ON như hydrate).
+    if (autoPromote !== (sweep.data?.config.autoPromoteTuning !== false)) {
+      payload.autoPromoteTuning = autoPromote;
+    }
     return { payload, errors, hasChange: Object.keys(payload).length > 0 };
-  }, [values, enabled, sweep.data?.config]);
+  }, [values, enabled, autoPromote, sweep.data?.config]);
 
   const dirty = payloadInfo.hasChange && payloadInfo.errors.length === 0;
 
@@ -491,6 +515,30 @@ export function SweepTab() {
                 aria-label="Bật/tắt sweep tự động Chủ nhật 04:15 ICT"
               />
             </div>
+            {/* F-18 (#131): kill-switch đồng bộ thiết lập champion → tab Mạng thần kinh */}
+            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2.5">
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="sweep-auto-promote" className="text-xs font-medium">
+                  Champion tự cập nhật tab Mạng thần kinh
+                </Label>
+                <span className="text-[10px] leading-relaxed text-muted-foreground">
+                  BẬT: champion qua cổng 4 điều kiện &amp; hoán đổi serving → kiến
+                  trúc + tinh chỉnh (lr, epoch, batch, seed, bộ đặc trưng) được
+                  ghi tự động xuống AppSetting ml-tuning — tab Mạng thần kinh
+                  phản ánh ngay, lần train kế tiếp dùng đúng cấu hình champion.
+                  TẮT: chỉ hoán đổi trọng số serving, giữ thiết lập trader.
+                </span>
+              </div>
+              <Switch
+                id="sweep-auto-promote"
+                checked={autoPromote}
+                onCheckedChange={(v) => {
+                  markEdited();
+                  setAutoPromote(v);
+                }}
+                aria-label="Bật/tắt champion tự động cập nhật thiết lập tab Mạng thần kinh"
+              />
+            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {CONFIG_FIELDS.map((spec) => (
                 <ConfigField
@@ -613,6 +661,19 @@ export function SweepTab() {
                       ? "ĐÃ HOÁN ĐỔI sang serving — champion qua đủ cổng 4 điều kiện (audit ML_SWEEP_SWAP)."
                       : `Không đổi serving — ${latest.champion.swapReason}`}
                   </p>
+                  {/* F-18 (#131): trạng thái đồng bộ thiết lập champion → ml-tuning */}
+                  {latest.champion.swapProposed && latest.champion.tuningSync != null && (
+                    <p className={latest.champion.tuningSync.synced ? "" : "opacity-80"}>
+                      {latest.champion.tuningSync.synced
+                        ? "ĐÃ ĐỒNG BỘ thiết lập xuống tab Mạng thần kinh — kiến trúc + thuật toán kích hoạt + tinh chỉnh của champion được ghi tự động (audit ML_SWEEP_SYNC_TUNING); trader lưu tay sẽ ghi đè."
+                        : `Chưa đồng bộ thiết lập — ${latest.champion.tuningSync.note}`}
+                    </p>
+                  )}
+                  {/* Giải nghĩa arch đầy đủ cho người đọc (F-18 #131 — câu
+                      hỏi "24-12 là 2 lớp ẩn chứ?") */}
+                  <p className="text-[10px] opacity-80" title={archTooltip(latest.champion.arch)}>
+                    Arch {latest.champion.arch}: {archTooltip(latest.champion.arch)}.
+                  </p>
                 </div>
               ) : (
                 <EmptyNote>
@@ -657,7 +718,7 @@ export function SweepTab() {
                       <span className="ml-auto flex flex-wrap items-center gap-2">
                         {r.champion ? (
                           <>
-                            <span className="font-mono text-[10px]">
+                            <span className="font-mono text-[10px]" title={archTooltip(r.champion.arch)}>
                               {r.champion.tag} · {r.champion.arch}
                             </span>
                             <Badge
@@ -671,6 +732,15 @@ export function SweepTab() {
                             >
                               {r.champion.swapProposed ? "đã swap" : "không qua cổng"}
                             </Badge>
+                            {/* F-18 (#131): đợt đã đồng bộ thiết lập champion xuống tab NN */}
+                            {r.champion.tuningSync?.synced === true && (
+                              <Badge
+                                className="bg-primary/15 font-mono text-[9px] text-primary"
+                                title={r.champion.tuningSync.note}
+                              >
+                                → tab NN
+                              </Badge>
+                            )}
                           </>
                         ) : (
                           <span className="text-[10px] text-muted-foreground">—</span>

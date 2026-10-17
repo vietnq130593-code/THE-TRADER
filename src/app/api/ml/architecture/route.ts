@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { mlpArchString, normalizeActivations, parseMlpArch, type MlpActivation } from "@/lib/ml/nn";
-import { readEffectiveMlTuning } from "@/lib/ml/tuning";
+import { effectiveMlTuning, readMlTuning } from "@/lib/ml/tuning";
 import { GRU_ARCH } from "@/lib/ml/gru";
 import { ENSEMBLE_WEIGHTS, ML_ENSEMBLE_DEADBAND } from "@/lib/ml/ensemble";
 // F-07/F-08 (#129): nguồn trọng số học từ D-LEDGER + trạng thái calibration.
@@ -644,6 +644,10 @@ async function buildArchitecture(): Promise<Record<string, unknown>> {
  * Arch + activations + lossWeights + hyper HIỆU LỰC từ readEffectiveMlTuning
  * (AppSetting ml-tuning) — trình chỉnh sửa kiến trúc ANN ở tab Mạng thần kinh
  * khởi tạo draft local từ đây. ĐÂY LÀ CẤU HÌNH ĐANG CHỈNH, không phải serving.
+ * F-18 (#131): (a) arch.in theo featureSet của tuning (v3-macro → 24 chiều —
+ * archString hiển thị đúng "24-24-12-3" của champion NAS đã đồng bộ);
+ * (b) source = nasSync marker — UI hiển thị banner "thiết lập này do NAS
+ * đồng bộ lúc…" (null = trader tự chỉnh / chưa từng sync).
  */
 async function buildArchDraft(): Promise<{
   arch: { in: number; hidden: number[]; out: number };
@@ -659,9 +663,22 @@ async function buildArchDraft(): Promise<{
     valFraction: number;
     seed: number;
   };
+  /** F-18 (#131): nhãn bộ đặc trưng của draft ("v2-lag16" | "v3-macro"). */
+  featureSet: string;
+  /** F-18 (#131): nguồn gốc thiết lập — null khi trader tự chỉnh. */
+  source: {
+    at: string;
+    runId: string;
+    tag: string;
+    arch: string;
+    modelVersion?: number;
+  } | null;
 }> {
-  const tuning = await readEffectiveMlTuning(); // fail-soft → mặc định module
-  const arch = { in: ML_FEATURE_COUNT, hidden: tuning.mlp.hidden, out: 3 };
+  // Đọc THÔ để lấy nasSync (effective chỉ gộp mlp/rag — marker không qua merge).
+  const saved = await readMlTuning();
+  const tuning = effectiveMlTuning(saved);
+  const featureSet = tuning.mlp.featureSet ?? "v2-lag16";
+  const arch = { in: featureSet === "v3-macro" ? 24 : ML_FEATURE_COUNT, hidden: tuning.mlp.hidden, out: 3 };
   return {
     arch,
     archString: mlpArchString(arch),
@@ -676,6 +693,8 @@ async function buildArchDraft(): Promise<{
       valFraction: tuning.mlp.valFraction,
       seed: tuning.mlp.seed,
     },
+    featureSet,
+    source: saved.nasSync ?? null,
   };
 }
 

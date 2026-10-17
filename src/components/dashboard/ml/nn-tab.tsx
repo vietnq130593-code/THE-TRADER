@@ -39,6 +39,7 @@ import {
   Plus,
   RotateCcw,
   Save,
+  Sparkles,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -1005,7 +1006,8 @@ function ArchEditor({
           Hyper huấn luyện hiện hành: {nf0.format(draft.hyper.epochs)} epoch · patience{" "}
           {nf0.format(draft.hyper.patience)} · batch {nf0.format(draft.hyper.batchSize)} · lr{" "}
           {draft.hyper.lr.toString().replace(".", ",")} · L2 {draft.hyper.l2.toString().replace(".", ",")} ·
-          val {draft.hyper.valFraction.toString().replace(".", ",")} · seed {nf0.format(draft.hyper.seed)} —
+          val {draft.hyper.valFraction.toString().replace(".", ",")} · seed {nf0.format(draft.hyper.seed)}
+          {draft.featureSet != null ? ` · bộ đặc trưng ${draft.featureSet}` : ""} —
           chỉnh ở tab <strong>Tinh chỉnh</strong>.
         </p>
       )}
@@ -1080,7 +1082,12 @@ export function NnTab() {
   const ensemble = arch.data?.ensemble;
   const mlp = arch.data?.mlp ?? null;
   const draft = arch.data?.draft ?? null;
-  const featureCount = arch.data?.features.count ?? 16;
+  // F-18 (#131): trình chỉnh sửa dùng chiều vào của DRAFT (theo featureSet
+  // ml-tuning — NAS đồng bộ v3-macro → 24) thay vì features.count tĩnh của
+  // code (luôn 16) — sơ đồ nháp + bảng tham số khớp đúng cấu hình champion.
+  const featureCount = draft?.arch.in ?? arch.data?.features.count ?? 16;
+  /** F-18 (#131): banner nguồn gốc thiết lập (NAS sweep đồng bộ tự động). */
+  const nasSource = draft?.source ?? null;
 
   if (arch.isLoading) {
     return (
@@ -1183,6 +1190,33 @@ export function NnTab() {
           </EmptyNote>
         )}
       </section>
+
+      {/* F-18 (#131): banner nguồn gốc thiết lập — NAS đồng bộ tự động */}
+      {nasSource != null && (
+        <div
+          className="flex items-start gap-2.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5"
+          role="status"
+          aria-label="Nguồn gốc thiết lập: NAS tự động tìm kiếm"
+        >
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+          <div className="flex flex-col gap-0.5 text-xs leading-relaxed">
+            <p className="font-semibold">
+              Thiết lập này do NAS (tab Tự động tìm kiếm) cập nhật tự động —{" "}
+              {formatDateTime(nasSource.at)}
+            </p>
+            <p className="text-muted-foreground">
+              Champion {nasSource.tag} (arch {nasSource.arch})
+              {typeof nasSource.modelVersion === "number"
+                ? ` — bản v${nasSource.modelVersion} đang serving sau khi qua cổng 4 điều kiện`
+                : ""}{" "}
+              (đợt sweep {nasSource.runId.slice(0, 10)}…). Kiến trúc, thuật toán
+              kích hoạt và tinh chỉnh trong trình chỉnh sửa bên dưới là của
+              champion — lần train kế tiếp dùng đúng cấu hình này; chỉnh tay
+              rồi Lưu sẽ ghi đè (NAS ghi lại ở đợt đồng bộ kế tiếp).
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Trình chỉnh sửa kiến trúc ANN — trái tim #94 */}
       <ArchEditor draft={draft} featureCount={featureCount} />

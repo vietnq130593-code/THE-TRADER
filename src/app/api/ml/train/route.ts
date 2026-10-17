@@ -36,6 +36,8 @@ import {
   type DlMlpPromotion,
   type TrainedDlMlpMetrics,
 } from "@/lib/ml/train-mlp";
+// F-18 (#131): featureSet của tập train engine theo ml-tuning (NAS auto-promote).
+import { readEffectiveMlTuning } from "@/lib/ml/tuning";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -394,7 +396,13 @@ export async function POST(req: Request) {
     // trùng → skip như cũ).
     let prebuilt: TrainingSetWithSeries | null = null;
     if (force === false) {
-      const set = await buildTrainingSet(20);
+      // F-18 (#131): featureSet của tập build theo ml-tuning đang hiệu lực —
+      // NAS đã đồng bộ champion v3-macro → đợt train Chủ nhật dựng arch 24
+      // chiều đúng champion (hash skip-guard vẫn so trên cùng cửa sổ bar).
+      const effective = await readEffectiveMlTuning();
+      const set = await buildTrainingSet(20, {
+        featureSet: effective.mlp.featureSet === "v3-macro" ? "v3-macro" : undefined,
+      });
       const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
       const { serving: servingHash, latest: latestHash, latestFeatureSet } =
         await recentWindowHashesOf("dl-mlp");

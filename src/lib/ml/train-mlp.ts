@@ -425,7 +425,17 @@ export async function trainDlMlp(
   prebuilt?: TrainingSetWithSeries,
   opts?: TrainDlMlpOpts
 ): Promise<TrainDlMlpResult> {
-  const set = prebuilt ?? (await buildTrainingSet(20));
+  // F-18 (#131): đường KHÔNG prebuilt (nút tay tab Mạng thần kinh + engine
+  // Chủ nhật khi route không truyền tập) — featureSet của tập train theo
+  // ml-tuning đang hiệu lực: NAS đã đồng bộ champion v3-macro → dựng arch
+  // 24 chiều ĐÚNG champion thay vì quay về 16 chiều. Sweep luôn truyền cả
+  // prebuilt + opts.tuning (từng ứng viên) nên không đi nhánh này.
+  const effectiveMlp = opts?.tuning ?? (await readEffectiveMlTuning()).mlp;
+  const set =
+    prebuilt ??
+    (await buildTrainingSet(20, {
+      featureSet: effectiveMlp.featureSet === "v3-macro" ? "v3-macro" : undefined,
+    }));
   if (set.X.length < 600) {
     throw new Error(`chỉ có ${set.X.length} mẫu huấn luyện (cần ≥ 600) — kiểm tra dữ liệu EOD`);
   }
@@ -452,9 +462,8 @@ export async function trainDlMlp(
   // không có key → đúng MLP_ARCH_V2 16-24-12-3 relu×2 + lr 0,01/batch 32/60
   // epoch/patience 12/lossWeights [1,1,1]/l2 0/val 0,2/seed 42 — hành vi
   // trước #94 giữ nguyên từng số). C1 (#99): sweep ghi đè bằng opts.tuning
-  // (từng ứng viên) — meta vẫn ghi đúng cấu hình ĐÃ DÙNG. Chiều in LUÔN =
-  // ML_FEATURE_COUNT (tuyến đặc trưng cố định).
-  const effectiveMlp = opts?.tuning ?? (await readEffectiveMlTuning()).mlp;
+  // (từng ứng viên) — meta vẫn ghi đúng cấu hình ĐÃ DÙNG. F-18 (#131):
+  // effectiveMlp đọc MỘT LẦN đầu hàm (đã gồm featureSet cho đường build set).
   const candidate = normalizeCandidateTuning(effectiveMlp);
   const arch: MlpArch = {
     // F-01 (#129): chiều vào do featureSet quyết định (24 cho v3-macro).
