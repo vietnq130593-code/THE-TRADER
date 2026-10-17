@@ -4130,3 +4130,23 @@ Stage Summary:
 - Playbook reset chuẩn hoá: git fetch → backup branch commit local → reset --hard origin/main → bun install → db:generate → db:push → pm2 -g → start --only the-trader → pm2 save → health check 2 cổng → browser E2E → worklog + commit + push
 - Bẫy mới ghi nhận: sidebar workspace mặc định thu gọn sau reset trình duyệt — phải mở nav module trước khi find role tab; accessible name tab = "tên + mô tả" dài
 - Kế tiếp: Task 122
+
+---
+
+Task ID: 122
+Agent: main (Z.ai Code)
+Task: Vẽ sơ đồ kiến trúc The Trader thành ảnh kèm chú giải dễ hiểu cho người bình thường
+
+Work Log:
+- Load skill charts → routing: architecture diagram có 5 tầng + vòng phản hồi (loop-back) → Playwright + CSS Layout C (Phased Vertical), đọc references/playwright-css.md (Scheme B neutral-gray + blue accent progression cho 5 phase, cấm rainbow)
+- Dựng docs/diagrams/the-trader-architecture-vi.html: 5 tầng dọc (T1 Thu dữ liệu jobs → T2 Bộ não 3 lớp MLP/Bandit/RAG → T3 23 agents → T4 Cổng 80% + lệnh paper → T5 D-LEDGER & học lại) + KPI strip 4 số (23 agents · 219.388 nến · 80% · ±0,5%) + mỗi tầng 1 dòng ẩn dụ "Dễ hiểu: ..." (đội thu hồ sơ / 3 phần não / 23 chuyên gia / họp hội đồng bỏ phiếu / học sinh tự chấm bài) + bảng CHÚ GIẢI 6 mục + closing line vòng lặp
+- Vòng phản hồi: SVG overlay vẽ bằng JS getBoundingClientRect — xuất phát chấm tròn từ node "Phân tích mới → RAG" (T5) → rail ngoài phải → mũi tên vào mép card T2, dashed #4B6A87 3px + nhãn dọc xoay -90 "BÀI HỌC QUAY LẠI — 16:45 HẰNG NGÀY"; root padding đủ cho rail không crop
+- Render 2 lượt: lượt 1 agent-browser --full (DPR 1, 1460×2360) → VLM glm-5v-turbo verify: chữ Việt đẹp, 0 chồng lấn, nhưng nghi vòng feedback "cắt đuôi" → đo path bbox thực: pathInRoot=true (VLM nhầm do đoạn ngang ngắn) → vẫn cải thiện: path nối node cụ thể + chấm xuất phát + stroke 3px + marker to hơn
+- Lượt 2 Python Playwright device_scale_factor=2 → PNG 2480×4444 (1.027KB) → VLM verify final PASS 5/5: (1) tiếng Việt dấu đúng (2) 0 chồng lấn (3) feedback đầy đủ chấm+mũi tên+nhãn dọc (4) 5 tầng+mũi tên+chú giải đủ (5) dòng "Dễ hiểu" giúp người thường hình dung
+- Trung thực hóa số liệu (khối bài học #120): closing line đổi "1.226 chu kỳ liên tục" → "1.226 chu kỳ agent (98,3% hoàn thành trọn vẹn)" vì có 21 run FAILED lịch sử; mọi trị số khác lấy từ audit thật: 219.388 bar · 832 tin · 700 docs · 26 log RAG · 48 tín hiệu (5 duyệt/7 từ chối) · 16:45 D-LEDGER · 200 triệu paper · MLP 10-16-8-3 v8 · train CN 04:00
+
+Stage Summary:
+- Sản phẩm: docs/diagrams/the-trader-architecture-vi.png (2480×4444 @2x) + nguồn HTML tái xuất được (docs/diagrams/the-trader-architecture-vi.html)
+- Thiết kế theo chuẩn skill charts: Layout C phased vertical, palette blue-gray progression + amber accent duy nhất ở cổng 80% (điểm ra quyết định), mỗi tầng có ẩn dụ đời thường — đạt yêu cầu "người bình thường hiểu được"
+- Vòng phản hồi hai chiều được thể hiện bằng đường đứt dọc bên phải — đúng bản chất kiến trúc (RAG + Bandit là 2 kênh agents dạy lại não; MLP KHÔNG học từ agents — học từ giá)
+- Kế tiếp: Task 123

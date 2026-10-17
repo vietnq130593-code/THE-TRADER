@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --text: #111827;
+    --text-sub: #6B7280;
+    --text-muted: #9CA3AF;
+    --bg: #FFFFFF;
+    --border: #E5E7EB;
+    --connector: #94A3B8;
+  }
+
+  body {
+    font-family: 'DejaVu Sans', 'Noto Sans', 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root {
+    width: fit-content;
+    min-width: 1240px;
+    margin: 0 auto;
+    padding: 48px 44px 44px 44px;
+    background: #FFFFFF;
+  }
+
+  .content-col { width: 1040px; position: relative; }
+
+  /* ── Title ── */
+  .flow-title {
+    font-size: 25px; font-weight: 700; color: #1E293B;
+    text-align: center; letter-spacing: 0.2px;
+  }
+  .flow-subtitle {
+    font-size: 14px; color: var(--text-sub);
+    text-align: center; margin-top: 8px; margin-bottom: 26px;
+  }
+  .flow-subtitle b { color: #334155; }
+
+  /* ── KPI strip ── */
+  .kpi-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; margin-bottom: 30px;
+  }
+  .kpi-card {
+    background: #F8FAFC; border: 1px solid #E2E8F0;
+    border-radius: 10px; padding: 13px 10px; text-align: center;
+  }
+  .kpi-value { font-size: 21px; font-weight: 700; color: #1E3A5F; font-variant-numeric: tabular-nums; }
+  .kpi-label { font-size: 11.5px; color: var(--text-sub); margin-top: 3px; }
+
+  /* ── Phase cards (Layout C · Scheme B neutral-gray + blue accent) ── */
+  .phase-group {
+    border-radius: 12px; padding: 18px 20px 18px;
+    margin: 0;
+  }
+  .phase-1 { background: #F8FAFC; }
+  .phase-2 { background: #F1F5F9; }
+  .phase-3 { background: #E8EDF3; }
+  .phase-4 { background: #E2E8F0; }
+  .phase-5 { background: #DAE1EB; }
+
+  .phase-title {
+    font-size: 16.5px; font-weight: 700; padding: 9px 16px;
+    border-radius: 8px; margin-bottom: 6px;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .phase-title .phase-no { font-size: 12px; font-weight: 700; opacity: 0.75; letter-spacing: 0.6px; }
+  .phase-1 .phase-title { background: #FFFFFF; color: #334155; border-left: 4px solid #94A3B8; }
+  .phase-2 .phase-title { background: #FFFFFF; color: #2D4156; border-left: 4px solid #7B8FA3; }
+  .phase-3 .phase-title { background: #FFFFFF; color: #2D4156; border-left: 4px solid #6B809A; }
+  .phase-4 .phase-title { background: #FFFFFF; color: #283C52; border-left: 4px solid #5B7590; }
+  .phase-5 .phase-title { background: #FFFFFF; color: #23364D; border-left: 4px solid #4B6A87; }
+
+  .phase-plain {
+    font-size: 12.5px; color: #64748B; font-style: italic;
+    padding: 0 4px 12px 8px; line-height: 1.5;
+  }
+  .phase-plain b { color: #475569; font-style: normal; }
+
+  .node-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .node-row + .node-row { margin-top: 12px; }
+
+  .d-node {
+    background: #FFFFFF; border: 1.5px solid #CBD5E1;
+    border-radius: 9px; padding: 12px 15px;
+    flex: 1 1 0; min-width: 240px; max-width: 340px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    word-break: normal; overflow-wrap: break-word; white-space: normal;
+  }
+  .d-node.wide { flex: 1 1 100%; max-width: none; }
+
+  .d-node .n-title { font-size: 14.5px; font-weight: 700; color: #1F2937; line-height: 1.35; }
+  .d-node .n-desc { font-size: 12px; color: #6B7280; margin-top: 5px; line-height: 1.5; }
+  .d-node .n-desc b { color: #334155; }
+
+  .d-node .n-chip {
+    display: inline-block; margin-top: 7px; padding: 2px 9px;
+    font-size: 11px; font-weight: 700; border-radius: 20px;
+    background: #F1F5F9; color: #475569; border: 1px solid #E2E8F0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Node store (dữ liệu lâu dài) — accent xanh */
+  .d-node.store { background: #EFF6FF; border: 2px solid #3B82F6; }
+  .d-node.store .n-title { color: #1E40AF; }
+  .d-node.store .n-chip { background: #DBEAFE; color: #1E40AF; border-color: #BFDBFE; }
+
+  /* Node não — đậm hơn */
+  .d-node.brain { border: 1.5px solid #5B7590; background: #FDFEFF; }
+  .d-node.brain .n-title { color: #1E3050; }
+
+  /* Node agents */
+  .d-node.agents { border: 1.5px solid #64748B; }
+
+  /* Node cổng quyết định — amber accent (điểm nhấn duy nhất) */
+  .d-node.gate { background: #FFF7ED; border: 2px solid #F59E0B; }
+  .d-node.gate .n-title { color: #92400E; }
+  .d-node.gate .n-desc { color: #A16207; }
+  .d-node.gate .n-desc b { color: #92400E; }
+
+  /* Node phản hồi */
+  .d-node.loop { border: 1.5px dashed #4B6A87; background: #FDFEFF; }
+  .d-node.loop .n-title { color: #23364D; }
+
+  /* ── Mũi tên giữa các phase ── */
+  .arrow-gap {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; padding: 9px 0; margin: 0;
+  }
+  .arrow-gap .a-mark { font-size: 21px; color: #64748B; line-height: 1; }
+  .arrow-gap .a-label {
+    font-size: 11.5px; color: #64748B; font-weight: 600;
+    background: #F8FAFC; border: 1px solid #E2E8F0;
+    padding: 3px 12px; border-radius: 20px;
+  }
+
+  /* ── SVG overlay (vòng phản hồi) ── */
+  #overlaySvg { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5; overflow: visible; }
+
+  /* ── Legend ── */
+  .flow-legend {
+    margin-top: 28px; padding: 16px 22px 14px;
+    background: #F9FAFB; border-radius: 10px; border: 1px solid #E5E7EB;
+  }
+  .legend-title { font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 10px; }
+  .legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 26px; }
+  .legend-item { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; color: #4B5563; line-height: 1.5; }
+  .legend-dot {
+    width: 13px; height: 13px; border-radius: 3px; border: 2px solid;
+    flex-shrink: 0; margin-top: 2px;
+  }
+  .legend-item b { color: #1F2937; }
+
+  .closing-line {
+    margin-top: 16px; padding: 11px 18px;
+    background: #1E293B; color: #F1F5F9;
+    border-radius: 9px; font-size: 13px; text-align: center; line-height: 1.6;
+  }
+  .closing-line b { color: #FFFFFF; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="content-col" id="contentCol">
+
+    <div class="flow-title">The Trader — Kiến trúc hệ thống giao dịch AI đa tác tử</div>
+    <div class="flow-subtitle">Dữ liệu chảy <b>từ trên xuống</b> · bài học chảy <b>ngược trở lên</b> (đường đứt nét bên phải) — lặp lại tự động 24/7</div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-value">23</div><div class="kpi-label">agents AI · 5 hội đồng</div></div>
+      <div class="kpi-card"><div class="kpi-value">219.388</div><div class="kpi-label">nến giá thật · 13,8 năm</div></div>
+      <div class="kpi-card"><div class="kpi-value">80%</div><div class="kpi-label">cổng đồng thuận duyệt lệnh</div></div>
+      <div class="kpi-card"><div class="kpi-value">±0,5%</div><div class="kpi-label">sổ điểm mỗi quyết định</div></div>
+    </div>
+
+    <!-- ═══════════ PHASE 1 — THU DỮ LIỆU ═══════════ -->
+    <div class="phase-group phase-1" data-phase="1">
+      <div class="phase-title"><span class="phase-no">TẦNG 1</span> THU DỮ LIỆU — chạy tự động 24/7, không dùng AI</div>
+      <div class="phase-plain">Dễ hiểu: <b>như một đội nhân viên thu hồ sơ ngày đêm</b> — việc này máy tính làm gần như miễn phí, AI chỉ bước vào từ tầng 2 trở xuống.</div>
+      <div class="node-row">
+        <div class="d-node">
+          <div class="n-title">Giá cổ phiếu trực tiếp</div>
+          <div class="n-desc">Bảng giá VN30 quét <b>mỗi 10 giây</b>, cả lúc Anh mở app lẫn lúc ngủ.</div>
+          <div class="n-chip">mỗi 10 giây</div>
+        </div>
+        <div class="d-node">
+          <div class="n-title">Tin tức thị trường</div>
+          <div class="n-desc">Đọc tin từ báo Tuổi Trẻ, VnEconomy… <b>mỗi 15 phút</b> một lượt.</div>
+          <div class="n-chip">832 tin đã thu</div>
+        </div>
+        <div class="d-node">
+          <div class="n-title">Nến ngày &amp; thị trường thế giới</div>
+          <div class="n-desc">Chốt nến ngày lúc <b>15:45</b>; chứng khoán quốc tế lúc <b>06:15</b> sáng.</div>
+          <div class="n-chip">2 lần/ngày</div>
+        </div>
+      </div>
+      <div class="node-row">
+        <div class="d-node store wide">
+          <div class="n-title">KHO DỮ LIỆU (Supabase — đám mây)</div>
+          <div class="n-desc">Mọi thứ thu được lưu vào một kho duy nhất: <b>219.388 nến giá trải 13,8 năm</b> · 832 tin tức · dòng tiền · bảng giá. Kho này nằm trên mây nên <b>sandbox có bị xoá, dữ liệu vẫn còn nguyên</b>.</div>
+          <div class="n-chip">13,8 năm dữ liệu thật VNDIRECT</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-gap"><span class="a-mark">↓</span><span class="a-label">dữ liệu thô từ kho</span><span class="a-mark">↓</span></div>
+
+    <!-- ═══════════ PHASE 2 — BỘ NÃO ═══════════ -->
+    <div class="phase-group phase-2" data-phase="2">
+      <div class="phase-title"><span class="phase-no">TẦNG 2</span> BỘ NÃO — 3 lớp học, mỗi lớp học một thứ khác nhau</div>
+      <div class="phase-plain">Dễ hiểu: <b>như 3 phần não riêng biệt</b> — một phần nhìn giá, một phần nhớ ai từng nói đúng, một phần nhớ từng buổi họp. Ba phần KHÔNG học lẫn bài của nhau.</div>
+      <div class="node-row">
+        <div class="d-node brain">
+          <div class="n-title">MLP — học từ GIÁ</div>
+          <div class="n-desc">Mạng thần kinh nhìn <b>16 chỉ báo kỹ thuật</b> (RSI, MACD, xu hướng…) để đoán thị trường <b>5 phiên tới tăng hay giảm</b>. Học lại từ đầu mỗi Chủ nhật 04:00.</div>
+          <div class="n-chip">mạng 10-16-8-3 · phiên bản v8</div>
+        </div>
+        <div class="d-node brain">
+          <div class="n-title">Bandit — chấm điểm AI NÀO ĐÁNG TIN</div>
+          <div class="n-desc">Ghi sổ: mỗi người đưa ra nhận định, <b>đoán đúng được cộng điểm, đoán sai bị trừ</b>. Ai điểm cao thì ý kiến nặng ký hơn trong lần bầu kế tiếp.</div>
+          <div class="n-chip">6 cử tri · chấm sau 5 phiên</div>
+        </div>
+        <div class="d-node brain">
+          <div class="n-title">RAG — GHI NHỚ BUỔI HỌP</div>
+          <div class="n-desc">Lưu <b>700 phân tích gần nhất</b> của cả đội. Mỗi chu kỳ mới, tìm lại đúng <b>8 dòng liên quan nhất</b> đưa vào lời nhắc của agents — để họ nhớ mình từng nói gì.</div>
+          <div class="n-chip">26 lần truy hồi đã log</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-gap"><span class="a-mark">↓</span><span class="a-label">tri thức đã xử lý tiêm vào lời nhắc</span><span class="a-mark">↓</span></div>
+
+    <!-- ═══════════ PHASE 3 — AGENTS ═══════════ -->
+    <div class="phase-group phase-3" data-phase="3">
+      <div class="phase-title"><span class="phase-no">TẦNG 3</span> 23 AGENTS AI — phân tích &amp; tranh luận</div>
+      <div class="phase-plain">Dễ hiểu: <b>như 23 chuyên gia mỗi người một vai</b> — chuyên giá, chuyên tin tức, chuyên rủi ro, chuyên thanh khoản… Mỗi người nhận "hồ sơ" đã được bộ não xử lý sẵn rồi đưa ý kiến.</div>
+      <div class="node-row">
+        <div class="d-node agents">
+          <div class="n-title">Hội đồng Nghiên cứu (5 agent + 1 máy)</div>
+          <div class="n-desc">Phân tích giá · định giá · tin tức · thanh khoản · rủi ro — mỗi người một góc nhìn rồi <b>đưa phiếu bầu tăng/giảm/đi ngang</b>.</div>
+          <div class="n-chip">6 phiếu/tuần</div>
+        </div>
+        <div class="d-node agents">
+          <div class="n-title">Hội đồng Rủi ro &amp; Giao dịch</div>
+          <div class="n-desc">Kiểm tra hạn mức ngành, phạt phơi nhiễm, đối chiếu khớp lệnh, tính phí — <b>giữ quyền phủ quyết (veto)</b> khi danh mục quá nguy hiểm.</div>
+          <div class="n-chip">veto · kiểm tra mỗi chu kỳ</div>
+        </div>
+        <div class="d-node agents">
+          <div class="n-title">Dịch vụ &amp; Hội đồng trưởng</div>
+          <div class="n-desc">Chủ tịch tổng hợp mọi ý kiến thành nhận định cuối; các dịch vụ chạy nền: dự báo, học RAG, backtest, giám định dữ liệu.</div>
+          <div class="n-chip">1.226 chu kỳ đã chạy</div>
+        </div>
+      </div>
+      <div class="node-row">
+        <div class="d-node wide">
+          <div class="n-title">LỜI NHẮC (prompt) mỗi agent nhận được gồm:</div>
+          <div class="n-desc">Dữ liệu thị trường mới nhất <b>+</b> dòng nhận định xác suất của não Bayes <b>+</b> 8 dòng ký ức liên quan từ RAG <b>+</b> dự báo MLP — nên agents "biết" cả quá khứ lẫn dự phóng, chứ không nhìn giá mỗi ngày một cách trơ trọi.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-gap"><span class="a-mark">↓</span><span class="a-label">phiếu bầu của 6 cử tri</span><span class="a-mark">↓</span></div>
+
+    <!-- ═══════════ PHASE 4 — QUYẾT ĐỊNH ═══════════ -->
+    <div class="phase-group phase-4" data-phase="4">
+      <div class="phase-title"><span class="phase-no">TẦNG 4</span> QUYẾT ĐỊNH — cổng đồng thuận 80%</div>
+      <div class="phase-plain">Dễ hiểu: <b>như họp hội đồng bỏ phiếu</b> — không ai nói riêng một mình, hết 80% ủng hộ mới thông qua, thiếu là bị bác ngay lập tức.</div>
+      <div class="node-row">
+        <div class="d-node gate">
+          <div class="n-title">CỔNG ĐỒNG THUẬN 80%</div>
+          <div class="n-desc">6 phiếu được cộng lại theo trọng số uy tín (từ Bandit). <b>≥ 80% cùng hướng → DUYỆT lệnh ngay</b> · <b>&lt; 80% → TỪ CHỐI ngay</b> — quyết định tách khỏi cảm tính, kể cả khi tài khoản trống rỗng.</div>
+          <div class="n-chip">48 tín hiệu · 5 duyệt · 7 từ chối</div>
+        </div>
+        <div class="d-node">
+          <div class="n-title">Lệnh giấy (paper trading)</div>
+          <div class="n-desc">Lệnh được duyệt đặt bằng <b>200 triệu tiền giả lập</b> theo đúng giá, phí, thuế thật — đo tài năng đầu tư mà không rủi ro đồng nào.</div>
+          <div class="n-chip">chờ mở phiên T2 09:15</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-gap"><span class="a-mark">↓</span><span class="a-label">kết quả thật trên thị trường</span><span class="a-mark">↓</span></div>
+
+    <!-- ═══════════ PHASE 5 — ĐÁNH GIÁ & HỌC LẠI ═══════════ -->
+    <div class="phase-group phase-5" data-phase="5">
+      <div class="phase-title"><span class="phase-no">TẦNG 5</span> ĐÁNH GIÁ &amp; HỌC LẠI — mỗi ngày 16:45</div>
+      <div class="phase-plain">Dễ hiểu: <b>như học sinh tự chấm bài rồi sửa cách học</b> — mọi lời nói hôm trước đều được đối chiếu với thị trường hôm sau, không ai thoát trách nhiệm.</div>
+      <div class="node-row">
+        <div class="d-node loop">
+          <div class="n-title">D-LEDGER — sổ điểm quyết định</div>
+          <div class="n-desc">Mỗi tín hiệu (kể cả bị từ chối!) được chấm lại hàng ngày: <b>đúng hướng WIN / sai LOSS, ngưỡng ±0,5%</b>. Có 48 dòng trong sổ.</div>
+          <div class="n-chip">16:45 hằng ngày · 48 đánh giá</div>
+        </div>
+        <div class="d-node loop">
+          <div class="n-title">Điểm số → Bandit</div>
+          <div class="n-desc">Cử tri đoán đúng nhiều <b>được nâng trọng số phiếu</b>; đoán sai nhiều tự bị hạ — ý kiến của người hay sai dần dần không còn ảnh hưởng.</div>
+          <div class="n-chip">nâng/hạ tự động</div>
+        </div>
+        <div class="d-node loop">
+          <div class="n-title">Phân tích mới → RAG</div>
+          <div class="n-desc">Buổi "họp" mới nhất của 23 agents <b>lưu vào ký ức 700 dòng</b> — chu kỳ sau nào đó cần thì truy hồi ra dùng lại.</div>
+          <div class="n-chip">ký ức cuộn cửa sổ</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-legend">
+      <div class="legend-title">CHÚ GIẢI — đọc sơ đồ này như thế nào</div>
+      <div class="legend-grid">
+        <div class="legend-item"><div class="legend-dot" style="border-color:#CBD5E1;background:#FFFFFF;"></div><div><b>Ô trắng viền xám</b> — một bước máy chạy tự động (không phải AI, không tốn tiền gọi model).</div></div>
+        <div class="legend-item"><div class="legend-dot" style="border-color:#5B7590;background:#FDFEFF;"></div><div><b>Ô viền xanh xám đậm</b> — một lớp của "bộ não" (máy học, mỗi lớp học một thứ riêng).</div></div>
+        <div class="legend-item"><div class="legend-dot" style="border-color:#3B82F6;background:#EFF6FF;"></div><div><b>Ô xanh</b> — kho dữ liệu lưu lâu dài trên mây, không mất khi sandbox reset.</div></div>
+        <div class="legend-item"><div class="legend-dot" style="border-color:#F59E0B;background:#FFF7ED;"></div><div><b>Ô vàng</b> — điểm RA QUYẾT ĐỊNH (cổng 80%) — nơi duy nhất cảm tính bị loại khỏi hệ thống.</div></div>
+        <div class="legend-item"><div class="legend-dot" style="border-color:#4B6A87;background:#FDFEFF;border-style:dashed;"></div><div><b>Ô viền đứt</b> — bước thuộc vòng tự học lại (tầng 5).</div></div>
+        <div class="legend-item"><div class="legend-dot" style="border-color:#4B6A87;background:transparent;border-style:dashed;"></div><div><b>Đường đứt dọc bên phải</b> — bài học chảy NGƯỢC từ tầng 5 lên tầng 2 &amp; 3, mỗi ngày một lần.</div></div>
+      </div>
+      <div class="closing-line">VÒNG LẶP KHÔNG DỪNG: <b>thu dữ liệu → não học → agents bàn → cổng 80% quyết → chấm điểm → não học lại</b> — chạy tự động 24/7, đã 1.226 chu kỳ agent (98,3% hoàn thành trọn vẹn), <b>0 lần sập hệ thống</b>.</div>
+    </div>
+
+  </div>
+
+  <svg id="overlaySvg"></svg>
+</div>
+
+<script>
+  // Vẽ vòng phản hồi: xuất phát từ node "Phân tích mới → RAG" (tầng 5, ô phải)
+  // → ra rail ngoài phải → lên tầng 2 (nơi 3 lớp não học lại) → mũi tên vào mép card.
+  window.addEventListener('load', () => setTimeout(() => {
+    const svg = document.getElementById('overlaySvg');
+    const col = document.getElementById('contentCol');
+    const cRect = col.getBoundingClientRect();
+    const p2 = document.querySelector('[data-phase="2"]').getBoundingClientRect();
+    const p5Nodes = document.querySelectorAll('[data-phase="5"] .d-node.loop');
+    const srcNode = p5Nodes[p5Nodes.length - 1].getBoundingClientRect();
+
+    const W = cRect.width, H = cRect.height;
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const y5 = srcNode.top - cRect.top + srcNode.height / 2;
+    const y2 = p2.top - cRect.top + p2.height / 2;
+    const xOut = W + 52; // rail ngoài phải
+    const x5 = srcNode.right - cRect.left;
+    const x2 = p2.right - cRect.left;
+
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    defs.innerHTML = '<marker id="ah" markerWidth="10" markerHeight="8" refX="8.5" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#4B6A87"/></marker>';
+    svg.appendChild(defs);
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M ${x5 + 6} ${y5} L ${xOut} ${y5} L ${xOut} ${y2} L ${x2 + 10} ${y2}`);
+    path.setAttribute('stroke', '#4B6A87');
+    path.setAttribute('stroke-width', '3');
+    path.setAttribute('stroke-dasharray', '8 6');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('marker-end', 'url(#ah)');
+    svg.appendChild(path);
+
+    // Chấm xuất phát — nhấn "bài học sinh ra từ đây"
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', x5 + 6); dot.setAttribute('cy', y5);
+    dot.setAttribute('r', '5'); dot.setAttribute('fill', '#4B6A87');
+    svg.appendChild(dot);
+
+    const midY = (y5 + y2) / 2;
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('x', xOut + 24); t.setAttribute('y', midY);
+    t.setAttribute('transform', `rotate(-90 ${xOut + 24} ${midY})`);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('style', 'font-size:13px;font-weight:700;fill:#4B6A87;font-family:\'DejaVu Sans\',sans-serif;letter-spacing:0.5px;');
+    t.textContent = 'BÀI HỌC QUAY LẠI — 16:45 HẰNG NGÀY';
+    svg.appendChild(t);
+  }, 120));
+</script>
+</body>
+</html>
