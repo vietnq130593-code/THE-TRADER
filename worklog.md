@@ -4248,3 +4248,21 @@ Stage Summary:
 - Sản phẩm: docs/AI_ENGINEER_REVIEW_BRAIN.md v2 (~330 dòng) — mỗi phát hiện kinh tế học giờ có chức năng kỹ thuật tương ứng: thiết kế, file mới/sửa đúng đường dẫn hiện có, Prisma, API/Job slot scheduler, gate nghiệm thu đo được, phụ thuộc
 - 16 chức năng: F-01 v3-macro 16→24 · F-02 MacroSeries VN 3 pha · F-03 flow thật+feature · F-04 sentiment daily · F-05 fundamentals chậm · F-06 corporate events+blackout · F-07 học trọng số ensemble · F-08 calibration · F-09 multitask 3 đầu ra · F-10 XREL quốc tế · F-11 point-in-time universe · F-12 RAG từ điển đồng nghĩa+hybrid · F-13 regime+contextual bandit · F-14 Monte Carlo VaR · F-15 backlog settle+Wilson CI · F-16 Q10–Q13+ lịch công bố
 - Kế tiếp: Task 128 — triển khai GĐ1 (F-12a từ điển đồng nghĩa + F-04 + F-03a + F-01 v3-macro + F-11 + F-02 Pha A) nếu user duyệt
+
+---
+Task ID: 128
+Agent: main (Z.ai Code)
+Task: Vào vai kỹ sư AI review docs/AI_ENGINEER_REVIEW_BRAIN.md (v2) — tìm lỗi/vấn đề/thiếu sót, xử lý+bổ sung; đặc biệt đánh giá đã đáp ứng toàn bộ kỳ vọng của chủ sở hữu chưa và kiến trúc Mạng thần kinh có cần thay đổi/cập nhật không
+
+Work Log:
+- Review độc lập v2 bằng đo trực tiếp DB (3 script bun tạm qua PrismaClient + rg schema): counts (bar 225.644 · news 908 · foreignFlow 768 toàn simulated · corporateEvent 2 · decisionEvaluation 48) · MlModel serving v8 (featureCount 10 — KHÔNG phải v2-lag16 như §1 v2 viết; valAcc 0.3942 · 60.000 mẫu · trainTo 2026-10-08) · 19 version dl-mlp (v9-v19 archived, champion gate giữ v8) · SweepRun 0 DÒNG dù route có persist (sweep.ts:709) · AppSetting ml-gru/ml-sweep CHƯA TỒN TẠI (GRU giọng 3 chưa từng bật) · BanditArm 8 hàng (arm mồ côi portfolio-strategist pulls=0 ngoài BANDIT_ARM_CODES) · pulls 27-28/arm, ml-forecast 0.647, macro-economist 0 pulls
+- Đối chiếu schema: BanditEvent KHÔNG có cột meta (F-07 v2 viết như có sẵn — lỗi E4) · CorporateEventKind chỉ SPLIT/BONUS/DIVIDEND/RESTATE (E8) · RiskQuantSnapshot ĐÃ CÓ mcLoss5Pct/mcPDd (F-14 v2 viết Monte Carlo như mới hoàn toàn — lỗi E6) · GRU setting key thật = "ml-gru"
+- Phát hiện vận hành quan trọng (E2): mọi timestamp version đều thủ công (v8 thứ Năm 00:07 ICT · cụm v14-v19 đêm CN lệch lịch SUN:04:00/04:15) + SweepRun rỗng → vòng tự học Chủ nhật chưa từng chạy đủ 1 vòng qua lối chính — mọi "sweep gate" là lý thuyết cho tới khi vận hành hoá
+- Viết v3 (554 dòng): §1 baseline đo mới + cảnh báo vòng ML; §1.5 nhật ký hiệu đính E1-E11 (bảng lỗi v2→v3); ma trận 18 dòng; thêm F-00 (điều kiện tiên quyết: audit ML_TRAIN_AUTO/ML_SWEEP_AUTO + boot catch-up + RiskAlert ML_CYCLE_STALLED + khởi tạo setting + kích hoạt GRU shadow-only 0 rủi ro) và F-17 (macro-mlp multi-asset 8 tài sản VNINDEX/VN30/US10Y/US30Y/DXY/VND=X/GC/CL — ngưỡng nhãn theo lớp tài sản, đóng khoảng trống kỳ vọng "trái phiếu" bị v2 bỏ sót); §4 mới đối chiếu 6 kỳ vọng chủ sở hữu (verdict trung thực: 1/6 trọn vẹn — nền tảng dữ liệu; "nền kinh tế"/"biến động tài chính"/"trái phiếu" CHƯA); §5 mới đánh giá kiến trúc Mạng thần kinh (phán quyết: KHÔNG đổi paradigm — regime 60k mẫu/nhãn nhiễu khiến nút cổ là đặc trưng không phải dung lượng, bằng chứng 11 version v9-v19 không thắng v8; 6 cập nhật cụ thể: F-00 → input 10→24 → GRU shadow → multi-head → calibration+học trọng số → mô hình thứ 2 multi-asset; danh mục "không làm": transformer cross-sectional / LLM end-to-end forecasting / tick intraday); lộ trình thêm GĐ0 (F-00+F-12a 2-3 ngày); sửa 11 lỗi E1-E11 + 4 typo (ký tự Hoa lọt vào, previously stated, mớI, túi thông tin→hàm lượng thông tin)
+- Dọn 3 script tạm trong scripts/ + /tmp
+
+Stage Summary:
+- docs/AI_ENGINEER_REVIEW_BRAIN.md v3: tài liệu giờ tự chịu trách nhiệm kiểm chứng — mỗi trị số đều đo trực tiếp DB 17/10, mỗi claim về schema đều đối chiếu prisma/schema.prisma
+- 2 chức năng mới có giá trị lớn nhất: F-00 (trọng tài sweep phải chạy thật — điều kiện tiên quyết của mọi nâng cấp não) + F-17 (đóng đúng nguyên văn kỳ vọng "trái phiếu" của chủ sở hữu)
+- Trả lời trực tiếp 2 câu hỏi user: (1) đã đáp ứng toàn bộ kỳ vọng chưa → CHƯA, 1/6 trọn vẹn, sau GĐ2 là 6/6 có chức năng phủ; (2) kiến trúc NN có cần thay đổi không → KHÔNG đổi paradigm, 6 cập nhật bên trong paradigm kèm lý do regime dữ liệu
+- Kế tiếp: Task 129 — nếu user duyệt, triển khai GĐ0 (F-00 + GRU shadow + F-12a, 2-3 ngày, thuần vận hành 0 rủi ro serving)
