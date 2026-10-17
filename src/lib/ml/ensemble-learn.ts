@@ -68,9 +68,11 @@ function parseVoice(meta: string | null | undefined): VoiceVector | null {
   try {
     const m = JSON.parse(meta) as Record<string, unknown>;
     const voice = (m.voice ?? m) as Record<string, unknown>;
-    const pUp = Number(voice.pUp);
-    const pDown = Number(voice.pDown);
-    const pFlat = Number(voice.pFlat);
+    // FIX #130: null/undefined phải bị loại (Number(null) = 0 "hữu hạn" —
+    // phiếu fallback linreg có pUp/pDown/pFlat null sẽ lọt vào làm rác [0,0,0])
+    const pUp = voice.pUp == null ? NaN : Number(voice.pUp);
+    const pDown = voice.pDown == null ? NaN : Number(voice.pDown);
+    const pFlat = voice.pFlat == null ? NaN : Number(voice.pFlat);
     const realized = m.realizedDir ?? voice.realizedDir;
     const dir = realized === "UP" ? 2 : realized === "DOWN" ? 0 : realized === "FLAT" ? 1 : -1;
     if (!Number.isFinite(pUp) || !Number.isFinite(pDown) || !Number.isFinite(pFlat) || dir < 0) {
