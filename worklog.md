@@ -4232,3 +4232,19 @@ Stage Summary:
 - DỮ LIỆU MỚI (trả lời câu "đủ chưa"): lớp 1 (toàn cầu) ĐÃ ĐỦ định lượng thật — Treasury curve/DXY/hàng hoá 2 năm · lớp 2 (VN) VẪN THIẾU chuỗi nội địa (CPI/GDP/SBV/tín dụng/M2/PMI/TPCP VN) — macro block khai báo rõ + hướng proxy; tin RSS vĩ mô là nguồn duy nhất dạng số cho VN hiện tại
 - Công việc 06:15 engine tự sync toàn bộ adapter (đã có từ #106) — hệ tự nuôi dữ liệu vĩ mô từ nay
 - Kế tiếp: Task 127 — pipeline chuỗi vĩ mô nội địa VN (GSO/SBV/PXE) hoặc để bandit tích luỹ pulls cho A20
+
+---
+Task ID: 127
+Agent: main (Z.ai Code)
+Task: Vào vai kỹ sư AI/chuyên gia lập trình — chuyển toàn bộ phân tích kinh tế học về nguồn dữ liệu (#126) + review bộ não (#125) thành các chức năng kỹ thuật cụ thể khớp kiến trúc hiện tại, ghi vào docs/AI_ENGINEER_REVIEW_BRAIN.md
+
+Work Log:
+- Kiểm kê kiến trúc thực tế trước khi viết: đọc docs/DATA_SOURCES.md full (S1–S13 inventory + Q1–Q9 + fallback strategy) · agent-roster.ts (24 agents, A20 macro-economist đã có) · ecosystem.config.js + market-engine/index.ts (10 scheduler slots: tick 10s/news 15'/eod 15:45/intl 06:15/settle 16:15/k1 16:30/council-eval 16:45/ml-train SUN 04:00/ml-sweep SUN 04:15/reprobe SUN 04:00) · ml/features.ts (ML_FEATURE_SET v2-lag16, featureAt 16 chiều thuần kỹ thuật giá) · ml/ensemble.ts (ENSEMBLE_WEIGHTS hardcoded 0,7/0,3) · ml/bandit.ts (7 arm, SETTLE_SCAN_LIMIT 30) · multi-market-sync.ts (4 adapter Treasury/Frankfurter/er-api/Yahoo đã sync #106/#126) · agent-context.ts buildMacroBlock (đã có dữ liệu lớp 1 thật + khối "CÒN THIẾU" chuỗi VN) · prisma/schema.prisma (Instrument/ForeignFlow/CorporateEvent/FinancialFundamental) · worklog tail (Task 120–126)
+- Viết lại docs/AI_ENGINEER_REVIEW_BRAIN.md v2 — chuyển từ "review findings" thành đặc tả kỹ thuật: 6 nguyên tắc chuyển đổi N1–N6 (bám adapter pattern/no-fabrication/sweep gate/point-in-time/1 nguồn đơn vị/trung thực UI) · baseline kiến trúc đo tại #126 · ma trận chuyển đổi 16 phát hiện → 16 chức năng · đặc tả F-01→F-16 theo 4 nhóm (A đường dữ liệu vĩ mô · B chất lượng não · C phản hồi-rủi ro · D vận hành DQ) · lộ trình 3 giai đoạn có đồ thị phụ thuộc · danh mục "không đụng" 5 điểm · change log
+- Điểm đặc tả đáng chú ý: F-01 feature v3-macro 8 chiều mới với quy tắc căn chỉnh point-in-time alignMacroBefore (bar US ngày d hợp lệ cho phiên VN d+1) · F-02 model MacroSeries/MacroObservation mới + releaseAt chống look-ahead + 3 pha (trích xuất LLM có trích dẫn từ RSS → adapter GSO/SBV/TPCP → CSV tay) · F-07 meta-learner trọng số từ D-LEDGER với cold-start 60 phiếu + kill-switch · F-10 XREL quốc tế quy tắc ghép US(d)→VN(d+1) + permutation p + Bonferroni · F-11 point-in-time basket chống survivorship · mọi model mới đều qua sweep championGate + paired-bootstrap Brier CI
+- Sửa typo ký tự Hoa lọt vào (lúc几点 → lúc mấy giờ)
+
+Stage Summary:
+- Sản phẩm: docs/AI_ENGINEER_REVIEW_BRAIN.md v2 (~330 dòng) — mỗi phát hiện kinh tế học giờ có chức năng kỹ thuật tương ứng: thiết kế, file mới/sửa đúng đường dẫn hiện có, Prisma, API/Job slot scheduler, gate nghiệm thu đo được, phụ thuộc
+- 16 chức năng: F-01 v3-macro 16→24 · F-02 MacroSeries VN 3 pha · F-03 flow thật+feature · F-04 sentiment daily · F-05 fundamentals chậm · F-06 corporate events+blackout · F-07 học trọng số ensemble · F-08 calibration · F-09 multitask 3 đầu ra · F-10 XREL quốc tế · F-11 point-in-time universe · F-12 RAG từ điển đồng nghĩa+hybrid · F-13 regime+contextual bandit · F-14 Monte Carlo VaR · F-15 backlog settle+Wilson CI · F-16 Q10–Q13+ lịch công bố
+- Kế tiếp: Task 128 — triển khai GĐ1 (F-12a từ điển đồng nghĩa + F-04 + F-03a + F-01 v3-macro + F-11 + F-02 Pha A) nếu user duyệt
