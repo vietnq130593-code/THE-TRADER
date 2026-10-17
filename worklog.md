@@ -4176,3 +4176,22 @@ Stage Summary:
 - Sơ đồ giờ là văn phong ngôi thứ ba trung lập, mô tả hệ thống như công trình sản phẩm — dùng được trực tiếp trong CV/portfolio NEXGEN BROS
 - Giữ nguyên các ẩn dụ đời thường (đội thu hồ sơ / 3 phần não / hội đồng bỏ phiếu / tự chấm bài) vì chúng phục vụ người đọc mọi nền tảng, không mang giọng cá nhân
 - Kế tiếp: Task 124
+
+---
+
+Task ID: 124
+Agent: main (Z.ai Code)
+Task: Xác minh PM2 duy trì UI + trả lời câu hỏi khả năng xuất model của bộ não (kèm phục hồi sandbox reset lần 3 phát hiện giữa phiên)
+
+Work Log:
+- Trong lúc kiểm tra phát hiện platform reset lại giữa 2 tin nhắn user: code nguyên vẹn (HEAD 9c2dfab) nhưng .env bị ghi đè sqlite (M trong git status) · pm2 mất khỏi PATH · app :3000 chết · engine :3003 sống (platform-managed) · Prisma client stub bị xoá (node_modules/.prisma/client/default miss → mọi API 500 trong 4-5ms)
+- Phục hồi ~2 phút: git checkout -- .env (.env được track từ #113 — 1 lệnh hồi Supabase) · npm i -g pm2 · env -u DATABASE_URL bun run db:generate (Client v6.19.3) · pm2 start ecosystem.config.js --only the-trader + pm2 save → GET / 200 (61ms) · 5 API probe 200 (news/signals/system-status/agents/tick) · engine tick chạy lại
+- Bẫy mới ghi nhận: prisma generate PHẢI chạy lại sau reset platform (node_modules tồn tại nhưng .prisma stub bị dọn) — thêm vào playbook: checkout .env → db:generate → pm2 -g → start --only the-trader
+- Trích xuất bằng chứng model registry cho câu hỏi xuất model: MlModel serving dl-mlp v8 (weights JSON 7.294B = W1 10×16 · b1 16 · W2 16×8 · b2 8 · W3 8×3 · b3 3 + norm · meta windowHash + train 2013-01-02→2026-10-08 · 62.040 bar · 60.000 mẫu · metrics 22 epoch valAcc 39,4%) + rl-q v13 (qTable 48×3 · 300 episode · stance "giữ") + 18 archived dl-mlp + 12 archived rl-q
+- BanditArm posterior: market-analyst 0,443 · fair-value 0,507 · news-sentiment 0,481 · liquidity 0,407 · risk-manager 0,481 · ml-forecast 0,657 (28 pulls) — ml-forecast ĐANG DẪN ĐẦU hơn cả 5 cử tri LLM về độ chính xác hướng 5 phiên
+
+Stage Summary:
+- Trả lời Q1: CÓ — PM2 God Daemon duy trì UI :3000 (autorestart + dump.pm2); engine :3003 do platform quản riêng; mỗi lần platform reset phải cài lại pm2 -g + db:generate (playbook cập nhật)
+- Trả lời Q2: CÓ — bộ não đã xuất model NGAY TỪ ĐẦU dưới dạng registry versioned trong Postgres (MlModel v1→v8, mỗi Chủ nhật 04:00 tự thêm version); weights là ma trận JSON thuần 7,3KB portable sang Python/ONNX được; "1 model" thật ra là ensemble 4 artifact (MLP weights + Bandit posterior + Q-table + RAG corpus data)
+- Phát hiện interview-worthy: ml-forecast mean 0,657 cao nhất hội đồng — máy học đang thắng 5 agent LLM về đoán hướng, bandit tự học tin nó nhiều nhất
+- Kế tiếp: Task 125
