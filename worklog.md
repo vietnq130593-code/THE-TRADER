@@ -4108,3 +4108,25 @@ Work Log:
 Stage Summary:
 - Bộ dữ liệu đủ nghiên cứu/học máy: 13,8 năm giá EOD × 90 mã + 810 tin tức + telemetry 1.213 run + 44 quyết định có chấm điểm — số nói lên nền tảng chạy THẬT dài hạn, không phải demo.
 - Sửa trị số CV theo đo đạc mới (98,3% hoàn tất) — tránh bẫy tech lead mở DB kiểm chứng thấy 21 run FAILED.
+
+---
+
+Task ID: 121
+Agent: main (Z.ai Code)
+Task: Kiểm tra sandbox reset hay còn dữ liệu — nếu reset thì khôi phục lại toàn bộ app từ repo GitHub
+
+Work Log:
+- Chẩn đoán: sandbox ĐÃ reset về snapshot cũ (HEAD local = a8adea4 — bản nháp sớm #113, .git ngày 16/10) trong khi origin/main = 42b8e6c (Task 120, đi trước 7 commit: #114 fix env · #115/#116 CV · #117 health · #118 6 ảnh · #119 OpenCode · #120 audit DB); PM2 chết sạch (không God Daemon, không dump), app :3000 chết, .env trên đĩa bị platform ghi đè thành sqlite cũ; engine :3003 platform-managed sống sót pid 961
+- Backup commit local chưa push: branch backup/pre-reset-snapshot (a8adea4) → git reset --hard origin/main → HEAD 42b8e6c, working tree sạch, .env phục hồi từ repo (Supabase pooler ap-northeast-2 — nhờ quyết định #113 track .env)
+- bun install: 537 installs no changes · env -u DATABASE_URL prisma generate (Client v6.19.3) · db push: "already in sync" với Supabase — dữ liệu mây không drift
+- Cài lại PM2 7.0.4 global + God Daemon + pm2 start ecosystem.config.js --only the-trader (chỉ app :3000, tránh tranh chấp cổng 3003 với engine platform-managed) + pm2 save → dump.pm2
+- App dậy: GET / 200 (77ms) · engine :3003 ok:true đủ 8 job scheduler · engine push tick ngay (POST /api/market/tick 200) · chu kỳ agent catch-up tự chạy ([rag] L1 truy hồi 8/700 docs)
+- Audit DB (script prisma count): bar 219.388 (+75 so Task 120) · intradayBar 5.032 · agentRun 1.226 (+13) · signal 48 (+4) · decisionEvaluation 48 · newsItem 832 · agentMessage 1.178 · auditLog 977 · agent 23/23 · marketAssessment 55 — mọi dữ liệu nguyên vẹn
+- Browser E2E: title đúng · nav 8 workspace · dữ liệu thật (lệnh chờ MUA TCB 100 @ 33.800 · vị thế TCB/VIC/VPB · số dư sandbox 198.983.965₫ · tin RSS Tuổi Trẻ) · mở nav module (bẫy: sidebar mặc định thu gọn expanded=false → phải click "Mở thanh điều hướng module" trước khi tab hiện trong snapshot) · workspace Tín hiệu: 26 MUA/BÁN · 5 Đã duyệt · 7 Đã từ chối · có % đồng thuận · 0 console error · 0 page error · mobile 390 sw===cw flush · 2 screenshots p121-restore-signals.png + p121-restore-mobile.png
+
+Stage Summary:
+- Sandbox đã reset nhưng KHÔNG mất dữ liệu: Supabase cloud nguyên vẹn và còn tăng trưởng (bar/agentRun/signal đều tăng nhờ engine :3003 sống qua reset + catch-up khi app dậy)
+- Thời gian khôi phục ~5 phút nhờ 2 quyết định kiến trúc cũ: (1) #113 track .env trong repo → cấu hình DB tự hồi sau reset; (2) #114 package.json env -u DATABASE_URL wrapper + ecosystem.config.js tự đọc .env đè env nhiễm
+- Playbook reset chuẩn hoá: git fetch → backup branch commit local → reset --hard origin/main → bun install → db:generate → db:push → pm2 -g → start --only the-trader → pm2 save → health check 2 cổng → browser E2E → worklog + commit + push
+- Bẫy mới ghi nhận: sidebar workspace mặc định thu gọn sau reset trình duyệt — phải mở nav module trước khi find role tab; accessible name tab = "tên + mô tả" dài
+- Kế tiếp: Task 122
