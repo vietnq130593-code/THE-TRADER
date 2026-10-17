@@ -4195,3 +4195,20 @@ Stage Summary:
 - Trả lời Q2: CÓ — bộ não đã xuất model NGAY TỪ ĐẦU dưới dạng registry versioned trong Postgres (MlModel v1→v8, mỗi Chủ nhật 04:00 tự thêm version); weights là ma trận JSON thuần 7,3KB portable sang Python/ONNX được; "1 model" thật ra là ensemble 4 artifact (MLP weights + Bandit posterior + Q-table + RAG corpus data)
 - Phát hiện interview-worthy: ml-forecast mean 0,657 cao nhất hội đồng — máy học đang thắng 5 agent LLM về đoán hướng, bandit tự học tin nó nhiều nhất
 - Kế tiếp: Task 125
+
+---
+
+Task ID: 125
+Agent: main (Z.ai Code)
+Task: Review kiến trúc + vận hành bộ não ở vai kỹ sư AI theo mục tiêu "phân tích cực mạnh dữ liệu thị trường + phán đoán kinh tế" — tìm lỗi/vấn đề/thiếu sót
+
+Work Log:
+- Đối chiếu bằng chứng code + DB trước khi kết luận: featureAt() 16/16 đặc trưng thuần kỹ thuật giá (không macro) · FinancialFundamental 0 record (bảng rỗng dù agent-context có nhánh đọc) · CorporateEvent 2 record · ForeignFlow 754 (chỉ vào prompt, không vào feature) · sentiment lexicon không vào MLP · ENSEMBLE_WEIGHTS hardcoded 0,7/0,3 không học · XREL domestic-only dù có data US 10 mã + HK 4 mã sync 06:15 · instrument 90 mã 5 thị trường (HOSE 40 · HNX 22 · UPCOM 14 · US 10 · HK 4) · Bandit 28 pulls/arm
+- Viết docs/AI_ENGINEER_REVIEW_BRAIN.md: phán quyết 5 khía cạnh (ops 9/10 · phản hồi 8,5/10 · phủ dữ liệu 4/10 · dự báo 5/10 · triết lý học 6/10) — không có fatal bug; 3 findings P0 (không pipeline vĩ mô · dữ liệu phi-giá đã thu nhưng silo không vào não · ensemble weights hardcoded nghịch lý với triết lý học) + 7 P1 (edge mỏng chưa calibration · single horizon direction-only · XREL bỏ kênh US→VN · bandit 28 pulls low power · BM25 lexical-only · survivorship bias tiềm ẩn · Q-table thô) + 5 P2 (intraday 5k · nhịp 240p vs tick 10s · 21 FAILED transient · guard prompt-only · không episodic memory) + 5 điều KHÔNG sửa (tách kênh học · D-LEDGER counterfactual · GRU Brier gate · registry/PSI/sweep · trung thực 39,4%)
+- Lộ trình 3 giai đoạn không phá kiến trúc: GĐ1 "cho não nhìn kinh tế" (job vĩ mô + populate Fundamental/Event + feature v3-macro 16→24 + point-in-time universe) · GĐ2 "não mạnh hơn" (đa nhiệm hướng+biên độ+vol · calibration Platt/isotonic · học ensemble weights bằng meta-learner từ D-LEDGER · XREL quốc tế · RAG hybrid embedding) · GĐ3 "phản hồi chặt" (contextual bandit · regime detection · Monte Carlo VaR · bandit ≥100 pulls)
+- Kết trung thực: trần dự báo kinh tế là thật — mục tiêu là cạnh biên đo được + bất định định lượng + tự nhận sai, không phải prophet
+
+Stage Summary:
+- Sản phẩm: docs/AI_ENGINEER_REVIEW_BRAIN.md (portfolio evidence — kỷ luật tự review cho tech lead NEXGEN BROS)
+- Phát hiện đắt nhất: P0-2 — hệ thống ĐANG CÓ dữ liệu (ForeignFlow/sentiment) nhưng vòng học không tiêu thụ; P0-3 — trọng số ensemble hardcoded mâu thuẫn triết lý "mọi trọng số phải học từ bằng chứng"
+- Kế tiếp: Task 126 (user quyết có triển khai GĐ1 hay không)
