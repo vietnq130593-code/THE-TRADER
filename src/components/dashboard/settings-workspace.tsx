@@ -693,7 +693,7 @@ function LlmCard({ settings }: { settings: SettingsResponse }) {
           Mô hình AI &amp; đội agent
         </CardTitle>
         <CardDescription>
-          Đội 23 agent chạy trên model AI đang chọn (nút “Model AI” ở workspace Đội
+          Đội 24 agent chạy trên model AI đang chọn (nút “Model AI” ở workspace Đội
           Agent — kèm nút Kiểm tra model thật) · nguồn giá ở card trên · thông tin
           runtime chỉ đọc
         </CardDescription>
@@ -716,7 +716,7 @@ function LlmCard({ settings }: { settings: SettingsResponse }) {
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          23 agents · 5 nhóm · chu kỳ 6 đợt (nền tảng → nghiên cứu + học máy →
+          24 agents · 5 nhóm · chu kỳ 6 đợt (nền tảng → nghiên cứu + học máy →
           kiểm soát VETO → Bộ tổng hợp Bayes → chủ tịch → thực thi)
         </p>
 

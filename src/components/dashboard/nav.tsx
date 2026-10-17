@@ -74,7 +74,7 @@ const WORKSPACE_ITEMS: {
   {
     id: "agents",
     label: "Đội Agent",
-    description: "23 agents · 5 nhóm · bảng điểm · độ phủ",
+    description: "24 agents · 5 nhóm · bảng điểm · độ phủ",
     icon: Bot,
   },
   {

@@ -165,7 +165,7 @@ export function Header() {
       queryClient.setQueryData(["k-run"], res);
       if (vars.action === "start") {
         toast.success("Đã bật chế độ chạy liên tục", {
-          description: `Chu kỳ 23 agents tự chạy mỗi ${res.intervalMinutes} phút — tắt bất cứ lúc nào bằng đúng nút này.`,
+          description: `Chu kỳ 24 agents tự chạy mỗi ${res.intervalMinutes} phút — tắt bất cứ lúc nào bằng đúng nút này.`,
         });
       } else if (vars.action === "stop") {
         toast.success("Đã tắt chế độ chạy liên tục", {
@@ -435,7 +435,7 @@ export function Header() {
             </Button>
 
             {/* K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.4): chế độ chạy liên tục.
-             * Bật → chu kỳ 23 agents tự chạy theo nhịp cho tới khi trader tắt.
+             * Bật → chu kỳ 24 agents tự chạy theo nhịp cho tới khi trader tắt.
              * Tắt hiệu lực từ chu kỳ kế (không giết giữa dòng). Khi key k-run
              * tồn tại, AppSetting thắng tuyệt đối — env AGENT_CYCLE_MINUTES chỉ
              * còn là mặc định hậu phương (exists=false). */}
@@ -500,7 +500,7 @@ export function Header() {
                 <TooltipContent side="bottom" className="max-w-72 text-left">
                   <p className="mb-1 text-xs font-semibold">Chế độ chạy liên tục (K2)</p>
                   <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-                    <li>Bật: chu kỳ 23 agents tự chạy lặp theo nhịp đã chọn.</li>
+                    <li>Bật: chu kỳ 24 agents tự chạy lặp theo nhịp đã chọn.</li>
                     <li>Tắt: dừng từ chu kỳ kế tiếp — không giắt giữa dòng.</li>
                     <li>
                       Đã chạy tích luỹ: {kRun?.cyclesRun ?? 0} chu kỳ

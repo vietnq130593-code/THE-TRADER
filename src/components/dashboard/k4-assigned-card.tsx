@@ -127,7 +127,7 @@ export function K4AssignedCard() {
         </CardTitle>
         <CardDescription>
           Chủ tịch Hội đồng giao việc cho agents ngoài Ban Điều hành ngay trong
-          chu kỳ 23 agents — nhiệm vụ rơi vào hạ tầng định kỳ K3.
+          chu kỳ 24 agents — nhiệm vụ rơi vào hạ tầng định kỳ K3.
         </CardDescription>
         <CardAction className="flex items-center gap-2">
           <Badge

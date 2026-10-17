@@ -59,6 +59,7 @@ import type {
 import {
   CONSENSUS_EPSILON,
   CONSENSUS_MIN_POOL,
+  CONSENSUS_POOL_SIZE,
   CONSENSUS_THRESHOLD,
   WEAK_MAJORITY_THRESHOLD,
 } from "@/lib/consensus";
@@ -190,8 +191,9 @@ function compositeFromSegments(
 /* ───────────────────── B9 · CỔNG ĐỒNG THUẬN 80% (§3.5) ───────────────── */
 
 /**
- * Tính tally + consensusRatio + gate trên pool 6 cử tri (5 LLM + ml-forecast).
- * Trả null khi chưa có phiếu nào (DB trống) — gate không áp đảo lên dữ liệu cũ.
+ * Tính tally + consensusRatio + gate trên pool 7 cử tri (6 LLM + ml-forecast —
+ * #126 thêm A20 macro-economist). Trả null khi chưa có phiếu nào (DB trống)
+ * — gate không áp đảo lên dữ liệu cũ.
  */
 function computeConsensus(votes: AgentVote[], enforce: boolean): ConsensusSnapshot | null {
   if (votes.length === 0) return null;
@@ -243,8 +245,8 @@ function computeConsensus(votes: AgentVote[], enforce: boolean): ConsensusSnapsh
   const dirVi = dominant === "UP" ? "tăng" : dominant === "DOWN" ? "giảm" : "đi ngang";
   const note =
     present < CONSENSUS_MIN_POOL
-      ? `Chỉ ${present}/6 cử tri có mặt (< 4) → coi như KHÔNG ĐỒNG THUẬN (fail-safe).`
-      : `${present}/6 cử tri · số đông nghiêng ${dirVi} với tỉ lệ trọng số ${(ratio * 100).toFixed(1).replace(".", ",")}% → ${gateLabel}.${wouldBlock ? " Tín hiệu MỚI sẽ bị ép GIỮ khi bật enforcement" + (enforce ? " (đang BẬT)" : " (hiện shadow — đã-sẽ-chặn)") : " Tín hiệu được phép EXECUTE nếu posterior đạt stance"}.`;
+      ? `Chỉ ${present}/${CONSENSUS_POOL_SIZE} cử tri có mặt (< ${CONSENSUS_MIN_POOL}) → coi như KHÔNG ĐỒNG THUẬN (fail-safe).`
+      : `${present}/${CONSENSUS_POOL_SIZE} cử tri · số đông nghiêng ${dirVi} với tỉ lệ trọng số ${(ratio * 100).toFixed(1).replace(".", ",")}% → ${gateLabel}.${wouldBlock ? " Tín hiệu MỚI sẽ bị ép GIỮ khi bật enforcement" + (enforce ? " (đang BẬT)" : " (hiện shadow — đã-sẽ-chặn)") : " Tín hiệu được phép EXECUTE nếu posterior đạt stance"}.`;
 
   return {
     ratio: Number(ratio.toFixed(6)),

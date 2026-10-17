@@ -28,6 +28,7 @@ import {
   buildOpenSignalsBlock,
   buildValuationBlock,
   buildLiquidityBlock,
+  buildMacroBlock,
   buildPortfolioWeightsBlock,
   buildIntlReferenceBlock,
 } from "@/lib/agent-context";
@@ -76,7 +77,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * POST /api/agents/run — chu kỳ phân tích đầy đủ 23 AGENTS, 6 ĐỢT (phiên #34):
+ * POST /api/agents/run — chu kỳ phân tích đầy đủ 24 AGENTS, 6 ĐỢT (phiên #34 + #126):
  *
  *  ĐỢT A · Nền tảng dữ liệu (4 service — 0 LLM, 3 nhịp con §3.3 — #57):
  *    nhịp 1: S0 data-collector ∥ S2 feature-store → nhịp 2: A9 data-integrity
@@ -86,12 +87,13 @@ export const maxDuration = 300;
  *  ĐỢT B · Hội đồng Nghiên cứu + Phòng Học máy:
  *    service song song (8): ml-forecast · backtest · learning-rag · rl-gym ·
  *    rl-policy · dl-trainer · rl-trainer · model-registry
- *    LLM tuần tự (4): market-analyst · fair-value · news-sentiment · liquidity
+ *    LLM tuần tự (5): market-analyst · fair-value · news-sentiment · liquidity
+ *    · macro-economist (#126 A20 — bảng điều khiển vĩ mô 3 lớp)
  *    (mỗi agent LLM trả thêm assessment JSON {direction, confidence, evidence})
  *  ĐỢT C · Ủy ban Kiểm soát (VETO): risk-manager (LLM) + exposure · compliance
  *    (service, chạy song song với risk-manager)
  *  ĐỢT D · BỘ TỔNG HỢP BAYES (mới — phiên #34, 0 LLM ~1-2s): buildEvidenceBundle
- *    (breadth/lexicon tin 24h/flows/Holt/regime + assessment JSON của 5 agent
+ *    (breadth/lexicon tin 24h/flows/Holt/regime + assessment JSON của 6 agent
  *    LLM) → synthesizeMarketAssessment (log-odds 3 bậc nhân quả) → lưu bảng
  *    MarketAssessment. Lỗi tổng hợp KHÔNG làm hỏng chu kỳ (log + bỏ qua).
  *  ĐỢT E · Chủ tịch Hội đồng: portfolio-strategist (LLM) tổng hợp TOÀN BỘ
@@ -109,14 +111,14 @@ export const maxDuration = 300;
 const CYCLE_COOLDOWN_MS = 60_000;
 let lastCycleStartedAt = 0;
 
-// ── Sơ đồ đợt (tất cả code đều nằm trong AGENT_ROSTER 23 agents) ──
+// ── Sơ đồ đợt (tất cả code đều nằm trong AGENT_ROSTER 24 agents) ──
 // Đợt A chia 3 nhịp con (§3.3 — #57): WAVE_A_BEAT1 ∥ → A9 → S1 (đọc verdict)
 const WAVE_A_CODES = ["data-collector", "notification-officer", "feature-store", "data-integrity"] as const;
 const WAVE_B_SERVICE_CODES = [
   "ml-forecast", "backtest", "learning-rag", "rl-gym",
   "rl-policy", "dl-trainer", "rl-trainer", "model-registry",
 ] as const;
-const WAVE_B_LLM_CODES = ["market-analyst", "fair-value", "news-sentiment", "liquidity"] as const;
+const WAVE_B_LLM_CODES = ["market-analyst", "fair-value", "news-sentiment", "liquidity", "macro-economist"] as const;
 const WAVE_C_LLM_CODES = ["risk-manager"] as const;
 const WAVE_C_SERVICE_CODES = ["exposure", "compliance"] as const;
 const CHAIRMAN_CODE = "portfolio-strategist";
@@ -289,12 +291,12 @@ function buildBayesPromptBlock(view: MarketAssessmentView): string {
       (s) =>
         `- ${s.label}: TĂNG ${fmt(s.pUp)} · GIẢM ${fmt(s.pDown)} · NGANG ${fmt(s.pFlat)} (${s.symbolCount} mã)${s.note ? ` — ${s.note.split(" — ")[1] ?? ""}` : ""}`
     );
-  // B9 — khối CỔNG ĐỒNG THUẬN 80% (6 cử tri — chairman bắt buộc tôn trọng)
+  // B9 — khối CỔNG ĐỒNG THUẬN 80% (7 cử tri — chairman bắt buộc tôn trọng; #126 thêm A20 macro-economist)
   const c = view.consensus;
   const consensusLines = c
     ? [
         "",
-        "CỔNG ĐỒNG THUẬN 80% (6 cử tri nghiên cứu — BẮT BUỘC TÔN TRỌNG khi ra tín hiệu):",
+        "CỔNG ĐỒNG THUẬN 80% (7 cử tri nghiên cứu — BẮT BUỘC TÔN TRỌNG khi ra tín hiệu):",
         `- Tally: ${c.tally.map((t) => `${t.agentName} → ${t.direction} (w ${t.weight.toFixed(2)})`).join(" · ")}`,
         `- Tỉ lệ trọng số số đông: ${(c.ratio * 100).toFixed(1).replace(".", ",")}% → ${c.gateLabel}`,
         c.gate === "CONSENSUS"
@@ -411,7 +413,7 @@ export async function POST() {
     // load — agent kẹt do crash cũ không được phép chặn chu kỳ vĩnh viễn
     await reapStaleAgentRuns();
 
-    // ── Load toàn bộ 23 agents ───────────────────────────────
+    // ── Load toàn bộ 24 agents ───────────────────────────────
     agents = await db.agent.findMany({
       where: { code: { in: ALL_CODES } },
       select: { id: true, code: true, config: true, healthScore: true, status: true },
@@ -424,7 +426,7 @@ export async function POST() {
       lastCycleStartedAt = prevCycleStartedAt;
       return NextResponse.json(
         {
-          error: `Thiếu agent trong hệ thống: ${missing.join(", ")}. Chạy "bun prisma/expand-agents.ts" để đồng bộ roster 23 agents.`,
+          error: `Thiếu agent trong hệ thống: ${missing.join(", ")}. Chạy "bun prisma/expand-agents.ts" để đồng bộ roster 24 agents.`,
         },
         { status: 404 }
       );
@@ -545,7 +547,9 @@ export async function POST() {
 
   try {
     // ── 1. Snapshot — builder dùng chung (PHASE3_BLUEPRINT §4.6) ────
-    const [market, newsBlock, flowsBlock, openSignalsBlock, valuationBlock, liquidityBlock] =
+    // #126 A20: thêm buildMacroBlock (bảng điều khiển vĩ mô 3 lớp — tự
+    // khai báo lỗi bên trong nên KHÔNG bọc .catch thêm ở đây).
+    const [market, newsBlock, flowsBlock, openSignalsBlock, valuationBlock, liquidityBlock, macroBlock] =
       await Promise.all([
         buildMarketBlock(),
         buildNewsBlock(),
@@ -553,6 +557,7 @@ export async function POST() {
         buildOpenSignalsBlock(),
         buildValuationBlock(),
         buildLiquidityBlock(),
+        buildMacroBlock(),
       ]);
     const marketBlock = market.block;
 
@@ -593,7 +598,7 @@ export async function POST() {
 
     // ── 2. Role prompts cho các agent LLM (dựng SAU đợt A — để tiêm cờ A9) ─
     // P0-4 §3.3 + chốt 8-1b: verdict ≠ PASS → khối "TÍNH TRẠNG DỮ LIỆU" vào
-    // prompt 4 agent nghiên cứu LLM + Chủ tịch (ml-forecast là service — 5
+    // prompt 5 agent nghiên cứu LLM + Chủ tịch (ml-forecast là service — 6
     // agent nghiên cứu đủ phủ). PASS → không tiêm (tiết kiệm token).
     const dqPromptBlock =
       dqVerdict && dqVerdict.level !== "PASS" ? dataQualityPromptBlock(dqVerdict) : null;
@@ -613,6 +618,12 @@ export async function POST() {
       liquidity: {
         system: ROLE_PROMPTS["liquidity"].system,
         user: [marketBlock, liquidityBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+      },
+      "macro-economist": {
+        // #126 A20 — bảng điều khiển vĩ mô 3 lớp (lớp 1-2-3) + dòng khối ngoại
+        // + XREL (lead-lag quốc tế→VN). Macro block đã chứa tin vĩ mô RSS riêng.
+        system: ROLE_PROMPTS["macro-economist"].system,
+        user: [macroBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       // risk-manager KHÔNG build ở đây — prompt cần khối QUANT của
       // RiskQuantEngine (chạy sau đợt B, trước đợt C — phiên #51 CRB §2)
@@ -688,7 +699,7 @@ export async function POST() {
       }
     }
 
-    // Cả 4 agent nghiên cứu LLM đều lỗi → không thể tổng hợp
+    // Cả 5 agent nghiên cứu LLM đều lỗi → không thể tổng hợp
     if (WAVE_B_LLM_CODES.every((c) => failures.includes(c))) {
       // F-205 (audit 19-b): không để các agent sau kẹt RUNNING khi chu kỳ bỏ cuộc sớm
       await db.agent
@@ -700,7 +711,7 @@ export async function POST() {
       return NextResponse.json(
         {
           error:
-            "Cả 4 agent nghiên cứu (Market/Fair Value/News/Liquidity) đều lỗi lúc này (mô hình AI không phản hồi). Vui lòng thử lại sau ít phút.",
+            "Cả 5 agent nghiên cứu (Market/Fair Value/News/Liquidity/Macro Economist) đều lỗi lúc này (mô hình AI không phản hồi). Vui lòng thử lại sau ít phút.",
           failures,
         },
         { status: 502 }
@@ -887,7 +898,7 @@ export async function POST() {
       if (bayesView.consensus) {
         if (bayesView.consensus.wouldBlock) {
           console.log(
-            `[consensus] shadow: ĐÃ-SẼ-CHẶN — gate ${bayesView.consensus.gate} · ratio ${(bayesView.consensus.ratio * 100).toFixed(1)}% · ${bayesView.consensus.present}/6 cử tri — tín hiệu mới sẽ bị ép GIỮ khi bật enforcement`
+            `[consensus] shadow: ĐÃ-SẼ-CHẶN — gate ${bayesView.consensus.gate} · ratio ${(bayesView.consensus.ratio * 100).toFixed(1)}% · ${bayesView.consensus.present}/7 cử tri — tín hiệu mới sẽ bị ép GIỮ khi bật enforcement`
           );
         }
         try {
@@ -1406,7 +1417,7 @@ export async function POST() {
         entity: "AgentRun",
         entityId: strategistRunId || executionRunId || null,
         after: JSON.stringify({
-          architecture: "23-agents",
+          architecture: "24-agents",
           messages: createdMessages.length,
           agentsRan: ranCount,
           signal: createdSignal?.symbol ?? null,
@@ -1502,7 +1513,7 @@ export async function POST() {
         durationMs: cycleDurationMs,
         // Mở rộng 23 agents — tổng kết các đợt đã chạy
         waves: {
-          architecture: "23-agents",
+          architecture: "24-agents",
           agentsRan: ranCount,
           platform: WAVE_A_CODES.length,
           researchAndMl: WAVE_B_SERVICE_CODES.length + WAVE_B_LLM_CODES.length,

@@ -32,6 +32,16 @@ export const CONSENSUS_EPSILON = 1e-9;
 /** Số cử tri tối thiểu để cổng có hiệu lực (pool < 4 → fail-safe). */
 export const CONSENSUS_MIN_POOL = 4;
 
+/**
+ * Quy mô pool cử tri đầy đủ — hiển thị "present/total". #126: 7 cử tri
+ * (6 agent LLM có phiếu: 5 nghiên cứu + risk-manager … nhưng risk-manager
+ * chỉ vào votes khi chu kỳ chạy · ml-forecast luôn vào) — tổng đúng nghĩa
+ * = 5 LLM nghiên cứu + risk-manager + ml-forecast = 7 sau khi thêm A20
+ * macro-economist (#126). Chỉ dùng HIỂN THỊ — toán cổng hoàn toàn theo
+ * phiếu có mặt (weights), không phụ thuộc hằng này.
+ */
+export const CONSENSUS_POOL_SIZE = 7;
+
 /** Ngưỡng ĐỒNG THUẬN (80%) và ĐA SỐ YẾU (50%). */
 export const CONSENSUS_THRESHOLD = 0.8;
 export const WEAK_MAJORITY_THRESHOLD = 0.5;

@@ -89,7 +89,7 @@ export function AgentsPanel() {
             onClick={() => setActiveWorkspace("agents")}
             aria-label="Mở workspace Đội Agent"
           >
-            Xem hồ sơ chi tiết 23 agents (workspace Đội Agent)
+            Xem hồ sơ chi tiết 24 agents (workspace Đội Agent)
             <ArrowRight className="size-3" aria-hidden="true" />
           </Button>
 
@@ -235,7 +235,7 @@ export function AgentDiscussionCard() {
                   <span className="font-medium text-foreground">
                     Chu kỳ đa tác tử
                   </span>{" "}
-                  đang chạy: 23 agents qua 5 nhóm — nền tảng dữ liệu → nghiên cứu
+                  đang chạy: 24 agents qua 5 nhóm — nền tảng dữ liệu → nghiên cứu
                   → kiểm soát VETO → điều hành → học máy…
                 </p>
               </li>

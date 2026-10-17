@@ -46,12 +46,13 @@ import type {
   SymbolFeature,
   SynthesisInput,
 } from "@/lib/bayes/types";
-/** 5 agent LLM có phiếu assessment: 4 nghiên cứu + risk-manager. */
+/** 6 agent LLM có phiếu assessment: 5 nghiên cứu (kể cả A20 macro-economist #126) + risk-manager. */
 export const LLM_VOTE_CODES = [
   "market-analyst",
   "fair-value",
   "news-sentiment",
   "liquidity",
+  "macro-economist",
   "risk-manager",
 ] as const;
 

@@ -4212,3 +4212,23 @@ Stage Summary:
 - Sản phẩm: docs/AI_ENGINEER_REVIEW_BRAIN.md (portfolio evidence — kỷ luật tự review cho tech lead NEXGEN BROS)
 - Phát hiện đắt nhất: P0-2 — hệ thống ĐANG CÓ dữ liệu (ForeignFlow/sentiment) nhưng vòng học không tiêu thụ; P0-3 — trọng số ensemble hardcoded mâu thuẫn triết lý "mọi trọng số phải học từ bằng chứng"
 - Kế tiếp: Task 126 (user quyết có triển khai GĐ1 hay không)
+
+---
+Task ID: 126
+Agent: main (Z.ai Code)
+Task: Thêm mũ chuyên gia kinh tế (A20 macro-economist) + đánh giá nguồn dữ liệu dưới góc nhìn kinh tế vĩ mô VN + khung tư duy phân tích
+
+Work Log:
+- Rà code thật trước khi đánh giá: NEWS_FEEDS 5 nguồn RSS (2 market + 3 macro-định tính) · instrument 90 mã nhưng 0 BOND/FOREX/COMMODITY · FinancialFundamental 0 record · ForeignFlow 754 (simulated) · nhận ra multi-market-sync.ts #106 ĐÃ CÓ sẵn 4 adapter thật (Treasury CSV · Frankfurter ECB · er-api VND=X · Yahoo) + script seed scripts/p106-seed-markets.ts nhưng universe chưa từng được seed — "cơ sở hạ tầng đợi kích hoạt"
+- Seed + sync 14 instrument vĩ mô: bun scripts/p106-seed-markets.ts --sync-full → Treasury 1.344 bar (US5Y 4,89% · US10Y 5,09% · US30Y 5,43%) · Frankfurter 2.910 bar (EURUSD/USDJPY/AUDUSD) · er-api VND=X 1 điểm forward + Yahoo backfill 231 bar · Yahoo 5.486 bar 22/22 mã OK 0 lỗi (DXY 101,84 · Vàng 4.181 · WTI 101,41 · Brent · Bạc · Đồng · Khí) → tổng kho 225.644 bar
+- Prisma: thêm enum MACRO_ECONOMIST → db push + generate (bẫy cũ: phải restart pm2 the-trader sau generate vì client stale → PrismaClientUnknownRequestError)
+- Agent A20 macro-economist (thành viên 24): roster entry (research · llm · gen1 A20) · ROLE_PROMPTS system nhúng khung tư duy top-down 3 lớp (thanh khoản toàn cầu → vĩ mô VN → truyền dẫn) + quy tắc nghề (dẫn đường vs chậm · proxy phải khai báo · không bịa CPI/GDP/SBV · tổng hợp chéo ≥2 lớp) · buildMacroBlock() ~150 dòng: bảng điều khiển vĩ mô từ DB thật (lợi suất + spread 10Y−5Y/30Y−10Y cb · DXY/FX · hàng hoá · VN-Index/VN30 20p/90p + vị trí dải · breadth · ADTV proxy · 12 tin RSS ưu tiên category=macro · khối CÒN THIẾU khai báo trung thực) cache 60s · case single-run + chat
+- Tích hợp chu kỳ: WAVE_B_LLM_CODES + macro-economist (đợt B LLM thứ 5) · prompt map + macroBlock/xrel · LLM_VOTE_CODES (evidence.ts) · BANDIT_ARM_CODES 7 arm (cold-start Beta(1,1), tạo tay qua upsert) · CONSENSUS_POOL_SIZE=7 (consensus.ts export mới, synthesis.ts note động) · Chairman prompt "đội 24 agents" + danh sách nghiên cứu có Macro Economist · sửa ~20 chỗ hardcode "23 agents"→"24" + "/6 cử tri"→"/7" (route log, chairman block, synthesis-workspace, assessment-brief, agents-workspace, header/nav/footer/settings) · icon Globe2 cho MACRO_ECONOMIST trong agent-roster-card
+- bun prisma/expand-agents.ts → "tạo 1 · cập nhật 23 · tổng 24 agents"
+- Verify: lint sạch · E2E single-run macro-economist 10,4s SUCCESS — LLM đọc Treasury thật (US10Y −14cb), khai báo simulated/SEVERE trung thực, tổng hợp 3 lớp, trả JSON hợp lệ (4.111 token vào · $0,0034) · agent-browser: nav "Đội Agent 24 agents", card "Macro Economist — Hội đồng Nghiên cứu — sức khoẻ 100%" + nút "Chạy riêng" + scorecard "chưa đủ dữ liệu" (đúng, chưa có Brier history) · dev.log sạch sau restart
+
+Stage Summary:
+- NÃO MỚI: A20 Macro Economist — cử tri thứ 7 của cổng đồng thuận 80%, arm bandit riêng tự học từ settle 5 phiên, cùng hợp đồng assessment JSON như 5 cử tri LLM khác
+- DỮ LIỆU MỚI (trả lời câu "đủ chưa"): lớp 1 (toàn cầu) ĐÃ ĐỦ định lượng thật — Treasury curve/DXY/hàng hoá 2 năm · lớp 2 (VN) VẪN THIẾU chuỗi nội địa (CPI/GDP/SBV/tín dụng/M2/PMI/TPCP VN) — macro block khai báo rõ + hướng proxy; tin RSS vĩ mô là nguồn duy nhất dạng số cho VN hiện tại
+- Công việc 06:15 engine tự sync toàn bộ adapter (đã có từ #106) — hệ tự nuôi dữ liệu vĩ mô từ nay
+- Kế tiếp: Task 127 — pipeline chuỗi vĩ mô nội địa VN (GSO/SBV/PXE) hoặc để bandit tích luỹ pulls cho A20

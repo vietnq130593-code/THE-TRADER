@@ -60,9 +60,9 @@ export function AssessmentBrief() {
           <CardDescription>
             {assessment
               ? assessment.source === "cycle"
-                ? `Nguồn: chu kỳ 23 agents lúc ${formatDateTime(assessment.createdAt)}`
+                ? `Nguồn: chu kỳ 24 agents lúc ${formatDateTime(assessment.createdAt)}`
                 : "Tổng hợp lại thủ công"
-              : "Tổng hợp đánh giá 23 agents theo mô hình nhân quả Bayes"}
+              : "Tổng hợp đánh giá 24 agents theo mô hình nhân quả Bayes"}
           </CardDescription>
           {assessment && (
             <CardAction>
@@ -264,13 +264,13 @@ function BriefConsensus({ consensus }: { consensus: ConsensusSnapshot }) {
       <Badge
         variant="outline"
         className={cn("text-[11px] font-semibold", tone)}
-        title={consensus.note || "Tỷ lệ trọng số phiếu 6 cử tri Hội đồng Nghiên cứu"}
+        title={consensus.note || "Tỷ lệ trọng số phiếu 7 cử tri Hội đồng Nghiên cứu"}
       >
         {consensus.gateLabel}
       </Badge>
       <span className="tabular-nums font-semibold">{pct1(consensus.ratio)}</span>
       <span className="text-[11px] text-muted-foreground">
-        · {consensus.present}/6 cử tri
+        · {consensus.present}/7 cử tri
       </span>
       {consensus.shadow ? (
         <Badge

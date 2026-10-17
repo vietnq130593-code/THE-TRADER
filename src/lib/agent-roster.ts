@@ -1,13 +1,14 @@
 /**
- * src/lib/agent-roster.ts — DANH SÁCH 23 AGENTS của The Trader.
+ * src/lib/agent-roster.ts — DANH SÁCH 24 AGENTS của The Trader.
  *
  * Mở rộng từ pipeline 5 agent (Gen-2) lên kiến trúc 23 thành phần Gen-1
  * (DESIGN.md §4.1 — 4 dịch vụ S + 19 agent A), giữ nguyên 5 agent pipeline
- * hiện có làm lõi ra quyết định:
+ * hiện có làm lõi ra quyết định. Task 126 (#126) bổ sung thành phần thứ 24:
+ * macro-economist (A20) — mũ chuyên gia kinh tế vĩ mô cho Hội đồng Nghiên cứu:
  *
- *   ── NHÓM 1 · research (5) — Hội đồng Nghiên cứu ──────────────────────
+ *   ── NHÓM 1 · research (6) — Hội đồng Nghiên cứu ──────────────────────
  *      market-analyst (A2) · fair-value (A3) · news-sentiment (A4) ·
- *      liquidity (A5) · ml-forecast (A15)
+ *      liquidity (A5) · ml-forecast (A15) · macro-economist (A20)
  *   ── NHÓM 2 · control (3) — Ủy ban Kiểm soát (quyền VETO) ─────────────
  *      risk-manager (A6) · exposure (A7) · compliance (A8)
  *   ── NHÓM 3 · executive (4) — Ban Điều hành & Thực thi ────────────────
@@ -89,7 +90,11 @@ export const AGENT_GROUPS: {
 ];
 
 export const AGENT_ROSTER: RosterEntry[] = [
-  // ══════════════ NHÓM 1 · research — Hội đồng Nghiên cứu (5) ══════════════
+  // ══════════════ NHÓM 1 · research — Hội đồng Nghiên cứu (6) ══════════════
+  // Task 126 (#126): macro-economist (A20) — mũ chuyên gia kinh tế vĩ mô,
+  // cử tri thứ 7 của cổng đồng thuận (Bayes evidence llm-vote + bandit arm
+  // riêng, cold-start Beta(1,1) — trọng số tự học từ track record như mọi
+  // cử tri khác).
   {
     code: "market-analyst",
     name: "Market Analyst",
@@ -151,6 +156,25 @@ export const AGENT_ROSTER: RosterEntry[] = [
     config: { horizonDays: 5, lookbackDays: 30, topN: 5 },
   },
 
+  {
+    code: "macro-economist",
+    name: "Macro Economist",
+    role: "MACRO_ECONOMIST",
+    group: "research",
+    kind: "llm",
+    gen1: "A20",
+    title: "Kinh tế vĩ mô",
+    description:
+      "Chuyên gia kinh tế vĩ mô: đọc chu kỳ tín dụng SBV, lạm phát, tăng trưởng, cán cân ngoài (tỷ giá/FDI/thương mại) và chu kỳ thanh khoản toàn cầu (Fed, lợi suất Treasury, DXY, hàng hoá) — truyền dẫn xuống thị trường chứng khoán VN theo khung top-down 3 lớp.",
+    config: {
+      framework: "top-down-3-layer",
+      layers: ["global-liquidity", "domestic-macro", "transmission"],
+      newsPerCycle: 12,
+      yieldCurveTenors: ["US5Y", "US10Y", "US30Y"],
+      weight: 0.2,
+    },
+  },
+
   // ══════════════ NHÓM 2 · control — Ủy ban Kiểm soát (3, VETO) ══════════════
   {
     code: "risk-manager",
@@ -200,7 +224,7 @@ export const AGENT_ROSTER: RosterEntry[] = [
     title: "Chủ tịch Hội đồng",
     description:
       "Tổng hợp tín hiệu từ toàn bộ Hội đồng Nghiên cứu & Ủy ban Kiểm soát, phân bổ danh mục theo phong cách cân bằng rủi ro-lợi nhuận.",
-    config: { targetPositions: 8, rebalanceThresholdPct: 5, style: "balanced", council: "23-agent" },
+    config: { targetPositions: 8, rebalanceThresholdPct: 5, style: "balanced", council: "24-agent" },
   },
   {
     code: "execution-manager",
@@ -412,6 +436,7 @@ export const ROLE_LABELS: Record<string, string> = {
   DL_TRAINER: "Huấn luyện DL",
   RL_TRAINER: "Huấn luyện RL",
   MODEL_REGISTRY: "Đăng ký mô hình",
+  MACRO_ECONOMIST: "Kinh tế vĩ mô",
 };
 
 /** Nhãn tiếng Việt cho nhóm agent (UI + API groupLabel). */

@@ -22,7 +22,7 @@ import type { AgentsResponse } from "@/lib/types";
 import { AGENT_GROUP_ORDER as GROUP_ORDER } from "@/lib/agent-roster";
 
 /**
- * Phiên #34 — card tóm tắt hệ thống 23 agents (5 nhóm) trên Tổng quan.
+ * Phiên #34 — card tóm tắt hệ thống 24 agents (5 nhóm) trên Tổng quan.
  * Mỗi nhóm 1 hàng: tên + badge số lượng + chấm trạng thái tổng (đỏ khi có
  * agent ERROR, xanh nhấp nháy khi có agent RUNNING). Hàng cuối: link sang
  * workspace Đội Agent + model LLM đang chạy (phiên #47 — nút chạy chu kỳ
@@ -97,7 +97,7 @@ export function AgentSystemBrief() {
           <CardDescription>
             {data
               ? `${agentList.length} agents · 5 nhóm · nền tảng dữ liệu → nghiên cứu → kiểm soát VETO → chủ tịch → thực thi`
-              : "23 agents · 5 nhóm phối hợp"}
+              : "24 agents · 5 nhóm phối hợp"}
           </CardDescription>
           <CardAction>
             <Button

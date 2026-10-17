@@ -426,7 +426,7 @@ function AssessmentHeaderCard({ assessment }: { assessment: MarketAssessmentView
         <CardTitle className="text-base">Nhận định hiện tại</CardTitle>
         <CardDescription>
           {assessment.source === "cycle"
-            ? `Nguồn: chu kỳ 23 agents lúc ${formatDateTime(assessment.createdAt)}`
+            ? `Nguồn: chu kỳ 24 agents lúc ${formatDateTime(assessment.createdAt)}`
             : "Tổng hợp lại thủ công"}
         </CardDescription>
       </CardHeader>
@@ -785,7 +785,7 @@ function ConsensusCard({ consensus }: { consensus: ConsensusSnapshot }) {
           Cổng đồng thuận 80%
         </CardTitle>
         <CardDescription>
-          {consensus.present}/6 cử tri Hội đồng Nghiên cứu · tỷ lệ đồng thuận
+          {consensus.present}/7 cử tri Hội đồng Nghiên cứu · tỷ lệ đồng thuận
           trọng số{" "}
           <span className="tabular-nums font-semibold text-foreground">
             {pct1(consensus.ratio)}
@@ -812,9 +812,9 @@ function ConsensusCard({ consensus }: { consensus: ConsensusSnapshot }) {
               Enforcement ĐANG BẬT
             </Badge>
           )}
-          {consensus.present < 6 && (
+          {consensus.present < 7 && (
             <span className="text-[11px] text-muted-foreground">
-              {consensus.present}/6 cử tri có mặt
+              {consensus.present}/7 cử tri có mặt
             </span>
           )}
         </div>
@@ -1858,7 +1858,7 @@ function EmptyState({
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-          Bộ tổng hợp Bayes tổng hợp đánh giá của toàn bộ 23 agents theo mô hình
+          Bộ tổng hợp Bayes tổng hợp đánh giá của toàn bộ 24 agents theo mô hình
           nhân quả (thị trường → ngành → cổ phiếu). Dùng nút “Chạy agent” trên
           thanh bar trên cùng để cả đội sinh bằng chứng, hoặc tổng hợp ngay từ
           dữ liệu định lượng hiện có — không tốn LLM.

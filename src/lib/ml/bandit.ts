@@ -26,6 +26,7 @@ export const BANDIT_ARM_CODES = [
   "fair-value",
   "news-sentiment",
   "liquidity",
+  "macro-economist", // #126 A20 — arm cold-start Beta(1,1), tự học từ settle 5 phiên
   "risk-manager",
   "ml-forecast",
 ] as const;

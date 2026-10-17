@@ -66,6 +66,7 @@ enum AgentRole {
   DL_TRAINER // A17 — huấn luyện deep learning
   RL_TRAINER // A18 — huấn luyện RL
   MODEL_REGISTRY // A19 — đăng ký mô hình
+  MACRO_ECONOMIST // A20 — kinh tế vĩ mô (Task 126: mũ chuyên gia kinh tế)
 }
 
 enum AgentStatus {

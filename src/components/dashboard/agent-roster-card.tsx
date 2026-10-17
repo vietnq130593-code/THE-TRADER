@@ -15,6 +15,7 @@ import {
   Droplets,
   FileCheck2,
   Gamepad2,
+  Globe2,
   GraduationCap,
   History,
   Layers,
@@ -37,7 +38,8 @@ import { cn } from "@/lib/utils";
 import type { AgentCard } from "@/lib/types";
 
 /** Icon theo vai agent — dùng chung roster card + detail panel (PHASE3 §4.7).
- *  Mở rộng 23 agents: đủ icon cho toàn bộ role enum phía backend. */
+ *  Mở rộng 24 agents (#126 thêm A20 macro-economist — icon Globe2): đủ icon
+ *  cho toàn bộ role enum phía backend. */
 export const AGENT_ROLE_ICONS: Record<
   string,
   React.ComponentType<{ className?: string }>
@@ -50,6 +52,7 @@ export const AGENT_ROLE_ICONS: Record<
   FAIR_VALUE: Scale,
   LIQUIDITY: Droplets,
   ML_FORECAST: TrendingUp,
+  MACRO_ECONOMIST: Globe2,
   EXPOSURE: Radar,
   COMPLIANCE: FileCheck2,
   SETTLEMENT: Receipt,

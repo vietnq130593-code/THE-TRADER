@@ -806,7 +806,7 @@ function healthTone(n: number | null | undefined): string {
 
 /**
  * Card "Bảng điểm Hội đồng Nghiên cứu" — đặt ngay dưới section nhóm research
- * (chốt user §0.3). 6 cử tri: hit-rate 5 phiên · Brier · đóng góp posterior
+ * (chốt user §0.3). 7 cử tri: hit-rate 5 phiên · Brier · đóng góp posterior
  * |Δlog-odds| · streak · posterior bandit · health. pulls < 5 → hàng mờ +
  * badge "chưa đủ dữ liệu" (trung thực, không bịa). TanStack Query
  * "/api/research/scorecard" + skeleton + error state + retry.
@@ -830,7 +830,7 @@ function ResearchScorecard() {
           Bảng điểm Hội đồng Nghiên cứu
         </CardTitle>
         <CardDescription>
-          6 cử tri · hit-rate 5 phiên · Brier · đóng góp posterior — sắp theo
+          7 cử tri · hit-rate 5 phiên · Brier · đóng góp posterior — sắp theo
           hit-rate giảm dần
         </CardDescription>
         {data?.generatedAt && (

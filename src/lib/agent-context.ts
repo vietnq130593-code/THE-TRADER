@@ -394,6 +394,199 @@ export async function buildFlowsBlock(): Promise<string> {
     : "DÒNG KHỐI NGOẠI: (nguồn không khả dụng — bỏ metric này khỏi phân tích)";
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Task 126 (#126) — A20 MACRO ECONOMIST: BẢNG ĐIỀU KHIỂN VĨ MÔ 3 LỚP
+// (global-liquidity → domestic-macro → transmission). Mọi con số từ DB
+// thật (Treasury CSV · Frankfurter/er-api · Yahoo · dchart EOD · RSS);
+// thiếu chuỗi định lượng VN nào thì KHAI BẢO trong khối "CÒN THIẾU" —
+// cùng kỷ luật không-bịa như mọi agent khác.
+// ═══════════════════════════════════════════════════════════════════
+
+const MACRO_CACHE_TTL_MS = 60_000;
+let macroCache: { at: number; block: string } = { at: 0, block: "" };
+
+/** Xuất cuối của N phiên trước (cho delta) — null khi thiếu bar. */
+function prevOf(closes: number[], sessions: number): number | null {
+  if (closes.length < sessions + 1) {
+    return closes.length >= 2 ? closes[closes.length - 2] : null;
+  }
+  return closes[closes.length - 1 - sessions];
+}
+
+/** % thay đổi qua N phiên — null khi không đủ dữ liệu. */
+function chgPctOf(closes: number[], sessions: number): number | null {
+  const prev = prevOf(closes, sessions);
+  if (prev == null || prev <= 0) return null;
+  return ((closes[closes.length - 1] - prev) / prev) * 100;
+}
+
+function fmtSignedPct(v: number | null): string {
+  if (v == null) return "—";
+  const s = Math.abs(v).toFixed(1).replace(".", ",");
+  return `${v > 0 ? "+" : v < 0 ? "−" : ""}${s}%`;
+}
+
+interface TrendRow {
+  closes: number[];
+}
+
+/** Chuỗi close của 1 symbol active (đủ N+1 bar cho delta N phiên). */
+async function barsOf(symbol: string, minBars: number): Promise<TrendRow | null> {
+  const inst = await db.instrument.findFirst({
+    where: { symbol, isActive: true },
+    select: { id: true },
+  });
+  if (!inst) return null;
+  const bars = await db.bar.findMany({
+    where: { instrumentId: inst.id },
+    orderBy: { date: "asc" },
+    take: 120,
+    select: { close: true },
+  });
+  return bars.length >= minBars ? { closes: bars.map((b) => b.close) } : null;
+}
+
+async function buildMacroInner(): Promise<string> {
+  // ── Lớp 1 · Thanh khoản & giá tài sản toàn cầu ────────────────────
+  // Treasury: Bar.close = LỢI SUẤT %×100 → 1 đơn vị = 1 điểm cơ bản (cb).
+  const [us5, us10, us30, dxy, vndx, eurusd, usdjpy, audusd, gcf, clf, bzf, sif, ngf, hgf] =
+    await Promise.all([
+      barsOf("US5Y", 2),
+      barsOf("US10Y", 2),
+      barsOf("US30Y", 2),
+      barsOf("DX-Y.NYB", 2),
+      barsOf("VND=X", 2),
+      barsOf("EURUSD=X", 2),
+      barsOf("USDJPY=X", 2),
+      barsOf("AUDUSD=X", 2),
+      barsOf("GC=F", 2),
+      barsOf("CL=F", 2),
+      barsOf("BZ=F", 2),
+      barsOf("SI=F", 2),
+      barsOf("NG=F", 2),
+      barsOf("HG=F", 2),
+    ]);
+  const y = (r: TrendRow | null) => (r ? r.closes[r.closes.length - 1] / 100 : null);
+  const cb = (r: TrendRow | null) => {
+    if (!r) return null;
+    const prev = prevOf(r.closes, 20);
+    return prev == null ? null : r.closes[r.closes.length - 1] - prev;
+  };
+  const fmtCb = (v: number | null) =>
+    v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}cb`;
+  const fmtY = (v: number | null) => (v == null ? "—" : `${v.toFixed(2).replace(".", ",")}%`);
+
+  const c5 = y(us5);
+  const c10 = y(us10);
+  const c30 = y(us30);
+  const slope510 = c5 != null && c10 != null ? (c10 - c5) * 100 : null; // 10Y−5Y (cb)
+  const slope1030 = c10 != null && c30 != null ? (c30 - c10) * 100 : null; // 30Y−10Y (cb)
+
+  const rate = (r: TrendRow | null) =>
+    r ? r.closes[r.closes.length - 1] / 10_000 : null; // FOREX ×10.000
+  const dxyLast = dxy ? dxy.closes[dxy.closes.length - 1] / 100 : null;
+  const vndLast = vndx ? vndx.closes[vndx.closes.length - 1] / 100 : null; // ₫/USD
+
+  const cmdty = (r: TrendRow | null, sym: string) => {
+    if (!r) return null;
+    const kind = unitKindOf("COMMODITY", "CMDTY");
+    const last = r.closes[r.closes.length - 1];
+    const human = formatUnitPrice(last, kind);
+    return `${sym} ${human ?? String(last)} (${fmtSignedPct(chgPctOf(r.closes, 20))}/20p)`;
+  };
+  const commodities = [cmdty(gcf, "Vàng"), cmdty(clf, "Dầu WTI"), cmdty(bzf, "Dầu Brent"), cmdty(sif, "Bạc"), cmdty(hgf, "Đồng"), cmdty(ngf, "Khí tự nhiên")]
+    .filter((x): x is string => x != null);
+
+  // ── Lớp 3 · Truyền dẫn thị trường VN (EOD thật dchart) ─────────────
+  const [vnindex, vn30, adtvTop] = await Promise.all([
+    barsOf("VNINDEX", 21),
+    barsOf("VN30", 21),
+    topByAdtv(10, { market: "HOSE", type: "STOCK" }).catch(() => []),
+  ]);
+  const idxLine = (r: TrendRow | null, label: string) => {
+    if (!r) return `${label}: (chưa có dữ liệu nến)`;
+    const lastRaw = r.closes[r.closes.length - 1];
+    const last = lastRaw / 100;
+    const w90 = r.closes.slice(-90);
+    const min = Math.min(...w90);
+    const max = Math.max(...w90);
+    const pos = max > min ? ((lastRaw - min) / (max - min)) * 100 : 50;
+    return `${label} ${last.toLocaleString("vi-VN", { maximumFractionDigits: 2 })} điểm · ${fmtSignedPct(chgPctOf(r.closes, 20))}/20 phiên · ${fmtSignedPct(chgPctOf(r.closes, 90))}/90 phiên · vị trí dải 90 phiên ~${Math.round(Math.max(0, Math.min(100, pos)))}%`;
+  };
+  // Độ rộng thị trường: quote mới nhất từng mã HOSE-STOCK
+  const hoseQuotes = await db.instrument.findMany({
+    where: { isActive: true, market: "HOSE", type: "STOCK" },
+    select: { quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { changePct: true } } },
+  });
+  const chgVals = hoseQuotes
+    .map((i) => i.quotes[0]?.changePct)
+    .filter((c): c is number => typeof c === "number" && Number.isFinite(c));
+  const advancing = chgVals.filter((c) => c > 0).length;
+  const declining = chgVals.filter((c) => c < 0).length;
+  const totalAdtv = adtvTop.reduce((s, t) => s + t.adtv, 0);
+
+  // ── Tin vĩ mô RSS (thật — 12 mới nhất, ưu tiên category=macro) ────
+  const news = await db.newsItem.findMany({
+    orderBy: { publishedAt: "desc" },
+    take: 20,
+    select: { title: true, summary: true, source: true, category: true, publishedAt: true },
+  });
+  const macroFirst = [
+    ...news.filter((n) => n.category === "macro"),
+    ...news.filter((n) => n.category !== "macro"),
+  ].slice(0, 12);
+  const newsAge = (d: Date) => {
+    const h = Math.max(0, Math.round((Date.now() - d.getTime()) / 3_600_000));
+    return h <= 0 ? "vừa xong" : h < 48 ? `${h}h trước` : `${Math.round(h / 24)} ngày trước`;
+  };
+
+  const lines: string[] = [
+    "BẢNG ĐIỀU KHIỂN VĨ MÔ 3 LỚP (A20 — mọi con số từ dữ liệu thật của kho; đơn vị khai báo kèm):",
+    "",
+    "LỚP 1 · THANH KHOẢN & GIÁ TÀI SẢN TOÀN CẦU (nguồn thật: Treasury CSV · Frankfurter/er-api · Yahoo):",
+    `- Lợi suất Treasury Mỹ: 5 năm ${fmtY(c5)} (${fmtCb(cb(us5))}/20 phiên) · 10 năm ${fmtY(c10)} (${fmtCb(cb(us10))}) · 30 năm ${fmtY(c30)} (${fmtCb(cb(us30))})`,
+    `- Đường cong lợi suất: 10Y−5Y ${fmtCb(slope510)} · 30Y−10Y ${fmtCb(slope1030)} (dương = cong lên; âm/nghịch = lo ngại tăng trưởng — tín hiệu quan trọng cho thị trường mới nổi như VN)`,
+    `- Đô la Mỹ: DXY ${dxyLast != null ? dxyLast.toFixed(1).replace(".", ",") : "—"} (${fmtSignedPct(dxy ? chgPctOf(dxy.closes, 20) : null)}/20 phiên) · EUR/USD ${rate(eurusd) != null ? rate(eurusd)?.toFixed(4).replace(".", ",") : "—"} · USD/JPY ${rate(usdjpy) != null ? Math.round(rate(usdjpy)!) : "—"} · AUD/USD ${rate(audusd) != null ? rate(audusd)?.toFixed(4).replace(".", ",") : "—"}`,
+    commodities.length
+      ? `- Hàng hoá (đầu vào doanh nghiệp VN + kênh chứng khoán hoá): ${commodities.join(" · ")}`
+      : "- Hàng hoá: (chưa sync — dùng dữ liệu khác, không bịa giá)",
+    "",
+    "LỚP 2 · VĨ MÔ TRONG NƯỚC (kênh định lượng duy nhất có ở lớp này là tỷ giá — thật):",
+    `- USD/VND ${vndLast != null ? Math.round(vndLast).toLocaleString("vi-VN") + "₫" : "—"} (${fmtSignedPct(vndx ? chgPctOf(vndx.closes, 20) : null)}/20 phiên) — VND giảm giá khi con số tăng; áp lực tỷ giá mạnh = rủi ro thắt thanh khoản nội địa`,
+    "(Lưu ý khai báo: chuỗi định lượng VN khác — CPI, GDP, lãi suất điều hành SBV, tín dụng, M2 — xem khối CÒN THIẾU dưới cùng)",
+    "",
+    "LỚP 3 · TRUYỀN DẪN XUỐNG THỊ TRƯỜNG CHỨNG KHOÁN VN (EOD thật dchart):",
+    `- ${idxLine(vnindex, "VN-Index")} · ${idxLine(vn30, "VN30")}`,
+    `- Độ rộng thị trường HOSE: ${advancing} mã tăng / ${declining} mã giảm (tổng ${chgVals.length} mã có báo giá)`,
+    `- Proxy thanh khoản nội địa: tổng ADTV 45 phiên của top-10 HOSE ≈ ${(totalAdtv / 1e9).toFixed(1).replace(".", ",")} tỷ₫/phiên — chu kỳ tín dụng/tiền vào thị trường thường soi qua đây trước khi CPI/GDP công bố`,
+    "",
+    "TIN VĨ MÔ & KINH TẾ MỚI NHẤT (RSS thật — đọc kỹ tiêu đề/trích dẫn, BÀI NÀO NÊU CON SỐ thì trích đúng con số đó):",
+    ...(macroFirst.length
+      ? macroFirst.map(
+          (n) => `- [${n.source} · ${n.category === "macro" ? "vĩ mô" : "thị trường"} · ${newsAge(n.publishedAt)}] ${n.title}${n.summary ? ` — ${n.summary.slice(0, 120)}` : ""}`
+        )
+      : ["- (chưa nạp được tin mới — khai báo 'no new data', KHÔNG bịa tin)"]),
+    "",
+    "CÒN THIẾU (khai báo trung thực — suy luận bắc cầu PHẢI ghi rõ 'proxy'):",
+    "- Kho dữ liệu CHƯA có chuỗi định lượng nội địa: CPI/lạm phát · GDP · lãi suất điều hành SBV · tăng trưởng tín dụng · M2 · PMI · lợi suất trái phiếu chính phủ VN · lãi liên ngân hàng · xuất nhập khẩu · FDI.",
+    "- Cách xử lý: (a) ưu tiên con số trong tin RSS ở trên (chỉ khi bài nêu rõ); (b) dùng proxy lớp 1-3 (US10Y/DXY cho điều kiện tài chính toàn cầu, VND=X cho sức ép tỷ giá, ADTV+breadth cho chu kỳ thanh khoản nội); (c) không có gì thì nói KHÔNG có — tuyệt đối không bịa CPI/GDP/lãi suất.",
+  ];
+  return lines.join("\n");
+}
+
+/** Khối BẢNG ĐIỀU KHIỂN VĨ MÔ (cache 60s) — cho A20 macro-economist. */
+export async function buildMacroBlock(): Promise<string> {
+  if (macroCache.block && Date.now() - macroCache.at < MACRO_CACHE_TTL_MS) {
+    return macroCache.block;
+  }
+  const block = await buildMacroInner().catch((err) => {
+    console.error("[buildMacroBlock] lỗi dựng khối vĩ mô:", err);
+    return "BẢNG ĐIỀU KHIỂN VĨ MÔ: (lỗi truy vấn dữ liệu — khai báo 'no data', phân tích bằng khối khác trong prompt nếu có)";
+  });
+  macroCache = { at: Date.now(), block };
+  return block;
+}
+
 /** Trung bình / độ lệch chuẩn — cho dải giá 90 phiên (A3 Fair Value). */
 function meanOf(xs: number[]): number {
   return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0;
@@ -745,9 +938,31 @@ ${SOURCE_MODE_DECLARATION}`,
 Trả lời tự do bằng TIẾNG VIỆT, 2–5 câu; bám sát dữ liệu khối lượng/bid-ask/dòng khối ngoại được cung cấp; KHÔNG bịa số liệu.
 ${SOURCE_MODE_DECLARATION}`,
   },
+  "macro-economist": {
+    system: `Bạn là agent "Macro Economist" (A20) của hệ thống giao dịch đa tác tử The Trader (VNDIRECT, Việt Nam) — chuyên gia kinh tế vĩ mô của Hội đồng Nghiên cứu.
+Nhiệm vụ: đọc BẢNG ĐIỀU KHIỂN VĨ MÔ 3 LỚP và đánh giá bối cảnh kinh tế-tài chính tác động tới thị trường chứng khoán VN 5 phiên tới.
+
+TƯ DUY 3 LỚP TOP-DOWN (làm theo đúng thứ tự):
+1. LỚP 1 · Thanh khoản toàn cầu: lợi suất Treasury (đặc biệt US10Y — "giá của tiền" toàn cầu) và DXY quyết định dòng vốn vào/ra thị trường mới nổi như VN. US10Y giảm + DXY yếu = môi trường thuận; US10Y vọt nhanh + DXY mạnh = gió ngược. Đường cong 10Y−5Y âm/nghịch là tín hiệu lo ngại tăng trưởng toàn cầu.
+2. LỚP 2 · Vĩ mô trong nước: VN chạy theo chu kỳ tín dụng SBV — nới lỏng (hạ lãi suất điều hành, nới room tín dụng) → tiền vào tài sản → thị trường tăng; lạm phát nóng/thắt chặt → gãy chu kỳ. Kênh theo dõi định lượng hiện có: tỷ giá USD/VND (áp lực VND = rủi ro thắt), dòng khối ngoại, tin vĩ mô RSS.
+3. LỚP 3 · Truyền dẫn: thanh khoản + độ rộng + ADTV của chính thị trường VN là "nhiệt kế" của chu kỳ — tiền thường về thị trường TRƯỚC khi số liệu CPI/GDP công bố (dẫn đường hơn số liệu chậm).
+
+QUY TẮC NGHỀ:
+- Phân biệt chỉ số DẪN ĐƯỜNG (US10Y, DXY, VND=X, ADTV, độ rộng) và CHẬM (CPI, GDP) — không dùng số chậm kết luận ngắn hạn.
+- Chuỗi định lượng VN chưa có trong kho (khối CÒN THIẾU): chỉ dùng con số từ tin RSS nêu rõ, hoặc ghi rõ chữ "proxy" khi suy luận bắc cầu; TUYỆT ĐỐI KHÔNG bịa CPI/GDP/lãi suất SBV.
+- Kết luận phải là TỔNG HỢP chéo ít nhất 2 lớp (vd: lớp 1 thuận + lớp 3 xấu = nghiêng TRUNG LẬP với độ tin cậy thấp), không bao giờ kết luận từ 1 con số đơn lẻ.
+- Nêu rõ giai đoạn chu kỳ hiện tại trong 1 câu: nới lỏng / dung hoà / thắt chặt.
+
+Trường "assessment" là quan điểm thị trường CHUNG 5 phiên tới (direction UP/DOWN/FLAT) kèm độ tin cậy 0..1 và 1–3 lý do ngắn — sẽ được Bộ tổng hợp Bayes dùng làm bằng chứng định lượng.
+Trả lời TIẾNG VIỆT, 3–5 câu theo cấu trúc: lớp 1 → lớp 2 → lớp 3 → tổng hợp. Trả về duy nhất JSON: {"content": "<phân tích 3-5 câu>", "reasoning": "<1 câu: giai đoạn chu kỳ + hướng tổng hợp>", "assessment": {"direction": "UP"|"DOWN"|"FLAT", "confidence": <0..1>, "evidence": ["<chuỗi ngắn kèm con số>", ...]}}
+${SOURCE_MODE_DECLARATION}`,
+    systemCompact: `Bạn là agent "Macro Economist" của hệ thống The Trader (VNDIRECT) — chuyên gia kinh tế vĩ mô, đọc chu kỳ thanh khoản toàn cầu (US10Y, DXY) → vĩ mô VN (tỷ giá, tín dụng) → truyền dẫn thị trường VN theo khung top-down 3 lớp.
+Trả lời tự do bằng TIẾNG VIỆT, 3–5 câu theo thứ tự lớp 1→2→3 rồi tổng hợp; chỉ dùng con số trong dữ liệu được cung cấp, ghi rõ "proxy" khi suy luận bắc cầu, KHÔNG bịa CPI/GDP/lãi suất.
+${SOURCE_MODE_DECLARATION}`,
+  },
   "portfolio-strategist": {
     system: `Bạn là agent "Portfolio Strategist" (A1 — Chủ tịch Hội đồng) của hệ thống giao dịch đa tác tử The Trader (VNDIRECT, Việt Nam).
-Nhiệm vụ: tổng hợp báo cáo của TOÀN BỘ đội 23 agents ở trên (Hội đồng Nghiên cứu: Market Analyst, Fair Value, News & Sentiment, Liquidity, ML Forecast · Ủy ban Kiểm soát: Risk Manager, Exposure, Compliance · Nền tảng dữ liệu & Phòng Học máy) để (a) đưa ra nhận định danh mục ngắn gọn, (b) sinh MỘT tín hiệu giao dịch cụ thể, (c) trình khối ĐỀ XUẤT PHÂN BỔ DANH MỤC (chỉ tham mưu).
+Nhiệm vụ: tổng hợp báo cáo của TOÀN BỘ đội 24 agents ở trên (Hội đồng Nghiên cứu: Market Analyst, Fair Value, News & Sentiment, Liquidity, ML Forecast, Macro Economist · Ủy ban Kiểm soát: Risk Manager, Exposure, Compliance · Nền tảng dữ liệu & Phòng Học máy) để (a) đưa ra nhận định danh mục ngắn gọn, (b) sinh MỘT tín hiệu giao dịch cụ thể, (c) trình khối ĐỀ XUẤT PHÂN BỔ DANH MỤC (chỉ tham mưu).
 Quy tắc tín hiệu: chỉ chọn mã CỔ PHIẾU/ETF VIỆT NAM có trong bảng chỉ báo (HOSE/HNX/UPCOM) — đây là vũ trụ giao dịch duy nhất của Hội đồng theo chính sách của trader (đầu tư chỉ tại thị trường Việt Nam); khối THỊ TRƯỜNG QUỐC TẾ trong dữ liệu CHỈ THAM CHIẾU bối cảnh (tỷ giá USD/VND, giá hàng hoá, cảm xúc qtế đôi lúc ảnh hưởng thị trường VN) — KHÔNG chọn mã ngoài Việt Nam cho tín hiệu; direction BUY chỉ khi nghiên cứu + cảm xúc + rủi ro đều thuận, SELL khi cần cắt tỷ trọng vi phạm giới hạn hoặc chốt lời/lỗ vị thế đang nắm, còn lại HOLD; score 0–100; giá là số nguyên VND bội 100 đúng cột "giá" trong bảng chỉ báo; BUY: stopLoss < giá hiện tại < targetPrice < takeProfit; SELL: targetPrice < giá hiện tại < stopLoss.
 Quy tắc phân bổ (E-P1-1): dựa trên block "TỶ TRỌNG DANH MỤC HIỆN TẠI" trong dữ liệu; mục tiêu ${ALLOCATION_TARGET_POSITIONS} vị thế; ngưỡng tái cân bằng ${ALLOCATION_REBALANCE_THRESHOLD_PCT}% — chỉ đề xuất MUA/BÁN khi |targetPct − currentPct| VƯỢT ngưỡng (phạt mềm L2: kéo về từ từ, không bán tái cấu trúc đột ngột), trong ngưỡng để GIỮ; phong cách ${ALLOCATION_STYLE}; KHÔNG tự sinh lệnh — trader phê duyệt từng lệnh.
 Trả về duy nhất JSON: {"summary": "<2-4 câu tổng hợp>", "recommendation": "<một khuyến nghị cụ thể>", "confidence": "LOW"|"MEDIUM"|"HIGH", "signal": {"symbol": "<mã CP/ETF Việt Nam hợp lệ trong bảng chỉ báo>", "direction": "BUY"|"SELL"|"HOLD", "score": 0-100, "rationale": "...", "targetPrice": <int VND bội 100|null>, "stopLoss": <int|null>, "takeProfit": <int|null>} | null, "allocation": {"narrative": "<1-2 câu lý do phân bổ>", "rows": [{"symbol": "<mã>", "currentPct": <số %NAV hiện tại từ dữ liệu>, "targetPct": <số %NAV mục tiêu>, "action": "MUA"|"BÁN"|"GIỮ"}] (tối đa ${ALLOCATION_TARGET_POSITIONS} dòng)} }
@@ -939,6 +1154,19 @@ export async function buildSingleRunPrompt(
         system: role.system,
         user: [market.block, liquidity, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
       };
+    case "macro-economist": {
+      // A20 (#126): bảng điều khiển vĩ mô 3 lớp + dòng khối ngoại + XREL
+      // (quan hệ thị trường — kinh tế gia quan tâm lead-lag quốc tế→VN).
+      const [macro, macroFlows, macroXrel] = await Promise.all([
+        buildMacroBlock(),
+        buildFlowsBlock(),
+        buildXrelPromptBlock().catch(() => null),
+      ]);
+      return {
+        system: role.system,
+        user: [macro, macroFlows, ...(ragBlock ? [ragBlock] : []), ...(macroXrel ? [macroXrel] : [])].join("\n\n"),
+      };
+    }
     case "portfolio-strategist": {
       // F-73A-03: single-run cấp cùng block tỷ trọng như chu kỳ — hợp đồng
       // allocation cần currentPct đo từ DB, không để LLM bịa.
@@ -1035,6 +1263,13 @@ async function buildChatContextBlock(code: string): Promise<string> {
     case "liquidity": {
       const [market, liquidity] = await Promise.all([buildMarketBlock(), buildLiquidityBlock()]);
       return [market.compact, liquidity].join("\n\n");
+    }
+    case "macro-economist": {
+      const [macro, xrel] = await Promise.all([
+        buildMacroBlock(),
+        buildXrelPromptBlock().catch(() => null),
+      ]);
+      return [macro, ...(xrel ? [xrel] : [])].join("\n\n");
     }
     default: {
       const market = await buildMarketBlock();
