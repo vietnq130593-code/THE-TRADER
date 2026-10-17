@@ -4150,3 +4150,29 @@ Stage Summary:
 - Thiết kế theo chuẩn skill charts: Layout C phased vertical, palette blue-gray progression + amber accent duy nhất ở cổng 80% (điểm ra quyết định), mỗi tầng có ẩn dụ đời thường — đạt yêu cầu "người bình thường hiểu được"
 - Vòng phản hồi hai chiều được thể hiện bằng đường đứt dọc bên phải — đúng bản chất kiến trúc (RAG + Bandit là 2 kênh agents dạy lại não; MLP KHÔNG học từ agents — học từ giá)
 - Kế tiếp: Task 123
+
+---
+
+Task ID: 123
+Agent: main (Z.ai Code)
+Task: Rà soát lại văn phong sơ đồ kiến trúc — bỏ giọng nói chuyện riêng, chuyển sang trung lập cho tài liệu CV/portfolio phỏng vấn
+
+Work Log:
+- Rà toàn bộ text HTML sơ đồ theo yêu cầu "dòng nào viết cho anh thì chỉnh lại trung lập cho mọi người đọc" — 10 chỗ sửa:
+  (1) "cả lúc Anh mở app lẫn lúc ngủ" → "hệ thống tự chạy liên tục, không cần ai mở ứng dụng";
+  (2) "sandbox có bị xoá, dữ liệu vẫn còn nguyên" → "dù hệ thống khởi động lại bao nhiêu lần, dữ liệu vẫn an toàn nguyên vẹn";
+  (3) "AI chỉ bước vào từ tầng 2 trở xuống" → "AI chỉ tham gia từ tầng 2 trở đi";
+  (4) "agents 'biết' cả quá khứ lẫn dự phóng, chứ không nhìn giá mỗi ngày một cách trơ trọi" → "mỗi agent mang theo ngữ cảnh cả quá khứ lẫn dự phóng, thay vì chỉ nhìn dữ liệu hiện tại";
+  (5) "kể cả khi tài khoản trống rỗng" (chi tiết nội bộ F-207) → bỏ, giữ "quyết định dựa trên đồng thuận, tách hẳn khỏi cảm tính";
+  (6) "đo tài năng đầu tư" → "kiểm chứng chiến lược đầu tư";
+  (7) chip "6 phiếu/tuần" (không chính xác) → "6 phiếu mỗi chu kỳ";
+  (8) "chu kỳ sau nào đó cần thì truy hồi ra dùng lại" → "chu kỳ sau khi cần sẽ được truy hồi dùng lại";
+  (9) "mọi lời nói hôm trước… không ai thoát trách nhiệm" → "mọi nhận định… không nhận định nào thoát trách nhiệm";
+  (10) typo "phạt phơi nhiễm" → "giới hạn phơi nhiễm"
+- VLM glm-5v-turbo vòng 1: xác nhận sạch giọng cá nhân + 0 lỗi chính tả, nhưng phát hiện jargon nội bộ còn sót "sandbox reset" trong chú giải ô xanh → sửa thành "an toàn tuyệt đối trước mọi sự cố máy chủ" (Supabase/VNDIRECT/veto/backtest/prompt/paper trading giữ nguyên — thuật ngữ ngành đúng mức cho vị trí AI Engineer, dòng "Dễ hiểu" đã lo phần người thường)
+- Re-render 2x Python Playwright → PNG 2480×4444 (1.047KB) — VLM vòng 2 xác nhận đạt chuẩn tài liệu đưa nhà tuyển dụng
+
+Stage Summary:
+- Sơ đồ giờ là văn phong ngôi thứ ba trung lập, mô tả hệ thống như công trình sản phẩm — dùng được trực tiếp trong CV/portfolio NEXGEN BROS
+- Giữ nguyên các ẩn dụ đời thường (đội thu hồ sơ / 3 phần não / hội đồng bỏ phiếu / tự chấm bài) vì chúng phục vụ người đọc mọi nền tảng, không mang giọng cá nhân
+- Kế tiếp: Task 124
