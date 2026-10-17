@@ -203,6 +203,24 @@ export async function POST(req: Request) {
     // Clamp 1..64 — giá trị THẬT ghi vào SweepRun.candidates (trung thực).
     budgetOverride = Math.min(64, Math.max(1, Math.round(body.budget)));
   }
+  // F-01 (#129): featureSet của đợt — "v3-macro" → ứng viên 24 chiều (8 chiều
+  // vĩ mô) đấu sweep fair với serving; mặc định v2-lag16 (đường engine CN 04:15).
+  const featureSet: string | undefined =
+    body.featureSet === "v3-macro" ? "v3-macro" : undefined;
+
+  /** F-00 (#129): audit ML_SWEEP_AUTO (đường engine force=false) — outcome
+   *  skipped/done/failed + runId + featureSet — "2 Chủ nhật liên tiếp có audit
+   *  + dòng SweepRun mới" là gate nghiệm thu F-00. */
+  const auditAuto = async (after: Record<string, unknown>): Promise<void> => {
+    if (force !== false) return; // gọi tay giữ hành vi cũ (không audit)
+    try {
+      await db.auditLog.create({
+        data: { action: "ML_SWEEP_AUTO", entity: "SweepRun", entityId: null, after: JSON.stringify(after) },
+      });
+    } catch {
+      // audit fail-soft
+    }
+  };
 
   // Mutex dùng chung với train route (F2 — nghiệm thu §4.7-6/7): train hoặc
   // sweep khác đang chạy → 429 kèm Retry-After (engine không đánh dấu Chủ
@@ -218,7 +236,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const summary = await runSweepOnce({ force, budgetOverride });
+    const summary = await runSweepOnce({ force, budgetOverride, featureSet });
     if (summary.busy === true) {
       return NextResponse.json(
         {
@@ -229,6 +247,13 @@ export async function POST(req: Request) {
       );
     }
     if (summary.skipped === true) {
+      await auditAuto({
+        outcome: "skipped-no-new-window",
+        reason: summary.reason ?? "windowHash unchanged",
+        windowHash: summary.windowHash ?? null,
+        featureSet: featureSet ?? "v2-lag16",
+        durationMs: summary.durationMs ?? null,
+      });
       return NextResponse.json({
         ok: true,
         skipped: true,
@@ -239,6 +264,13 @@ export async function POST(req: Request) {
     }
     if (!summary.ok) {
       // Lỗi chặn (runner đã ghi SweepRun "failed" + logJson) — 500 thân thiện.
+      await auditAuto({
+        outcome: "failed",
+        runId: summary.runId ?? null,
+        status: summary.status ?? "failed",
+        featureSet: featureSet ?? "v2-lag16",
+        reason: summary.reason ?? null,
+      });
       return NextResponse.json(
         {
           ok: false,
@@ -250,9 +282,24 @@ export async function POST(req: Request) {
         { status: 500 }
       );
     }
+    await auditAuto({
+      outcome: "done",
+      runId: summary.runId ?? null,
+      featureSet: featureSet ?? "v2-lag16",
+      candidates: summary.candidates ?? null,
+      evaluated: summary.evaluated ?? null,
+      champion: summary.champion?.tag ?? null,
+      swapped: summary.swapped === true,
+      durationMs: summary.durationMs ?? null,
+    });
     return NextResponse.json(summary);
   } catch (err) {
     console.error("[api/ml/sweep] POST run lỗi:", err);
+    await auditAuto({
+      outcome: "failed",
+      featureSet: featureSet ?? "v2-lag16",
+      reason: err instanceof Error ? err.message : String(err),
+    });
     return NextResponse.json(
       { ok: false, error: "Đợt sweep thất bại (lỗi ngoài dự kiến)." },
       { status: 500 }

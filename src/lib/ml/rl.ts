@@ -42,6 +42,8 @@ const RL_STEPS = 230;
 const RL_EXPOSURE_STEP = 0.5;
 const RL_TRANSACTION_COST = 0.001;
 const RL_STATES = 48;
+/** F-13 (#129): bảng 96 trạng thái (thêm bit regime VNINDEX). */
+export const RL_STATES_V2 = 96;
 const RL_ACTIONS = 3;
 const RL_RNG_SEED = 123;
 /** Nhiệt độ softmax khi diễn giải Q thành xác suất (nhỏ = quyết đoán hơn). */
@@ -140,10 +142,19 @@ function basketStats(b: number[]): BasketStats {
 }
 
 /**
- * Chỉ số trạng thái 0..47 tại phiên i với mức phơi nhiễm cho trước:
- * ((trend×4 + rsiBucket)×2 + mom)×3 + exposureBucket.
+ * Chỉ số trạng thái tại phiên i với mức phơi nhiễm cho trước:
+ *   48-state (legacy): ((trend×4 + rsiBucket)×2 + mom)×3 + exposureBucket.
+ *   F-13 (#129) 96-state: thêm bit regime VNINDEX (SMA50 vs SMA200 —
+ *   BULL=1/BEAR=0) làm CHỐ ĐẦU: ((regime×2 + trend)×4 + rsiBucket)×2 + mom)×3
+ *   + exposureBucket — "chính sách 1 bộ cho mọi chế độ là sai về kinh tế học".
+ * regimeBits == null → bảng 48 legacy (tương thích Q-table v13 đang serving).
  */
-function stateIndexAt(st: BasketStats, i: number, exposure: number): number {
+function stateIndexAt(
+  st: BasketStats,
+  i: number,
+  exposure: number,
+  regimeBit?: number
+): number {
   const sma20 = st.sma20[i];
   const sma50 = st.sma50[i];
   const trend = sma20 != null && sma50 != null && sma20 > sma50 ? 1 : 0;
@@ -151,7 +162,10 @@ function stateIndexAt(st: BasketStats, i: number, exposure: number): number {
   const rsiBucket = rsi == null ? 2 : rsi < 30 ? 0 : rsi < 50 ? 1 : rsi < 70 ? 2 : 3;
   const mom = (st.mom5[i] ?? 0) >= 0 ? 1 : 0;
   const expBucket = exposure < 0.25 ? 0 : exposure <= 0.75 ? 1 : 2;
-  return ((trend * 4 + rsiBucket) * 2 + mom) * 3 + expBucket;
+  if (regimeBit == null) {
+    return ((trend * 4 + rsiBucket) * 2 + mom) * 3 + expBucket;
+  }
+  return (((regimeBit ? 2 : 0) + trend) * 4 + rsiBucket) * 2 + mom * 3 + expBucket;
 }
 
 /**
@@ -159,7 +173,10 @@ function stateIndexAt(st: BasketStats, i: number, exposure: number): number {
  * rổ) hoặc chuỗi rổ đã chuẩn hoá sẵn. ε-greedy 1,0→0,05, 300 episode ×
  * ~230 bước random start.
  */
-export function trainQTable(closesTop10: number[][] | number[]): QTrainResult {
+export function trainQTable(
+  closesTop10: number[][] | number[],
+  opts: { regimeBits?: number[] } = {}
+): QTrainResult {
   const basket = Array.isArray(closesTop10[0])
     ? buildBasket(closesTop10 as number[][])
     : (closesTop10 as number[]);
@@ -168,7 +185,15 @@ export function trainQTable(closesTop10: number[][] | number[]): QTrainResult {
   }
   const st = basketStats(basket);
   const n = basket.length;
-  const qTable: number[][] = Array.from({ length: RL_STATES }, () => [0, 0, 0]);
+  // F-13 (#129): regimeBits cùng độ dài basket (bit VNINDEX SMA50/SMA200) →
+  // bảng 96 trạng thái; thiếu → bảng 48 legacy (tương thích serving v13).
+  const useRegime =
+    opts.regimeBits != null &&
+    opts.regimeBits.length >= basket.length &&
+    basket.length >= 200; // cần SMA200 của VNINDEX có nghĩa
+  const states = useRegime ? RL_STATES_V2 : RL_STATES;
+  const regimeBits = useRegime ? opts.regimeBits! : null;
+  const qTable: number[][] = Array.from({ length: states }, () => [0, 0, 0]);
   const rng = mulberry32(RL_RNG_SEED);
 
   let epsilon = RL_EPS_START;
@@ -183,7 +208,7 @@ export function trainQTable(closesTop10: number[][] | number[]): QTrainResult {
     let totalReward = 0;
 
     for (let t = start; t < end; t++) {
-      const s = stateIndexAt(st, t, exposure);
+      const s = stateIndexAt(st, t, exposure, regimeBits != null ? regimeBits[t] : undefined);
       // ε-greedy: khám phá ngẫu nhiên hay khai thác argmax Q
       const action =
         rng() < epsilon
@@ -196,7 +221,12 @@ export function trainQTable(closesTop10: number[][] | number[]): QTrainResult {
       );
       const ret = st.retNext[t] ?? 0;
       const reward = exposure * ret - RL_TRANSACTION_COST * Math.abs(newExposure - exposure);
-      const sNext = stateIndexAt(st, Math.min(t + 1, n - 1), newExposure);
+      const sNext = stateIndexAt(
+        st,
+        Math.min(t + 1, n - 1),
+        newExposure,
+        regimeBits != null ? regimeBits[Math.min(t + 1, n - 1)] : undefined
+      );
       const maxNext = Math.max(...qTable[sNext]);
       // Cập nhật Bellman: Q ← Q + α(r + γ·maxQ[s'] − Q)
       qTable[s][action] += RL_ALPHA * (reward + RL_GAMMA * maxNext - qTable[s][action]);
@@ -220,7 +250,7 @@ export function trainQTable(closesTop10: number[][] | number[]): QTrainResult {
     epsilonEnd: Number(epsilon.toFixed(4)),
     avgRewardFirst50: Number(first50.toFixed(4)),
     avgRewardLast50: Number(last50.toFixed(4)),
-    states: RL_STATES,
+    states,
     actions: RL_ACTIONS,
   };
 }
@@ -233,14 +263,25 @@ export function trainQTable(closesTop10: number[][] | number[]): QTrainResult {
 export function policyStance(
   qTable: number[][],
   basket: number[],
-  exposure = 0.5
+  exposure = 0.5,
+  regimeBit?: number
 ): PolicyStance {
   const last = basket.length - 1;
-  if (basket.length < 60 || qTable.length !== RL_STATES) {
+  // F-13 (#129): chấp nhận cả bảng 48 (legacy v13) lẫn 96 (regime-aware).
+  if (
+    basket.length < 60 ||
+    (qTable.length !== RL_STATES && qTable.length !== RL_STATES_V2)
+  ) {
     return { stance: "giữ", exposure, qMax: 0, probsSoftmax: [1 / 3, 1 / 3, 1 / 3] };
   }
   const st = basketStats(basket);
-  const s = stateIndexAt(st, last, exposure);
+  // Bảng 96 bắt buộc regimeBit; bảng 48 bỏ qua (legacy) — trung thực tương thích.
+  const s = stateIndexAt(
+    st,
+    last,
+    exposure,
+    qTable.length === RL_STATES_V2 ? (regimeBit ?? 0) : undefined
+  );
   const q = qTable[s];
   const action = q.indexOf(Math.max(...q)); // 0 giảm · 1 giữ · 2 tăng
   const newExposure = Math.max(0, Math.min(1, exposure + (action - 1) * RL_EXPOSURE_STEP));
@@ -260,8 +301,47 @@ export function policyStance(
 /** Parse Q-table từ cột MlModel.weights (kind rl-q). */
 export function parseQTable(weightsJson: string): number[][] {
   const raw = JSON.parse(weightsJson) as { qTable?: number[][] };
-  if (!Array.isArray(raw.qTable) || raw.qTable.length !== RL_STATES) {
-    throw new Error("Q-table hỏng (không đủ 48 trạng thái)");
+  // F-13 (#129): bảng 48 (legacy) hoặc 96 (regime-aware) đều hợp lệ.
+  if (
+    !Array.isArray(raw.qTable) ||
+    (raw.qTable.length !== RL_STATES && raw.qTable.length !== RL_STATES_V2)
+  ) {
+    throw new Error("Q-table hỏng (cần 48 hoặc 96 trạng thái)");
   }
   return raw.qTable.map((row) => (Array.isArray(row) ? row.map(Number) : []));
+}
+
+/**
+ * F-13 (#129): chuỗi bit regime VNINDEX (SMA50 vs SMA200 tại từng phiên,
+ * 1 = BULL) căn theo độ dài rổ — caller truyền chuỗi closes VNINDEX đủ dài;
+ * trả mảng bit cùng độ dài basket (session cuối căn theo chuỗi VNINDEX).
+ */
+export function regimeBitsOf(vnindexCloses: number[], basketLength: number): number[] {
+  const n = vnindexCloses.length;
+  const bits: number[] = new Array(basketLength).fill(0);
+  if (n < 200) return bits; // SMA200 chưa có nghĩa → toàn 0 (trung tính)
+  // SMA200 trượt trên chuỗi VNINDEX
+  let s200 = 0;
+  let s50 = 0;
+  const sma200: (number | null)[] = new Array(n).fill(null);
+  const sma50: (number | null)[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    s200 += vnindexCloses[i]!;
+    if (i >= 200) s200 -= vnindexCloses[i - 200]!;
+    if (i >= 199) sma200[i] = s200 / 200;
+    s50 += vnindexCloses[i]!;
+    if (i >= 50) s50 -= vnindexCloses[i - 50]!;
+    if (i >= 49) sma50[i] = s50 / 50;
+  }
+  const bitAt = (i: number): number => {
+    const a = sma50[i];
+    const b = sma200[i];
+    return a != null && b != null && b > 0 && a > b ? 1 : 0;
+  };
+  // căn ĐUÔI chuỗi (basket = N phiên cuối): bit[j] ứng phiên vnindex[n − basketLength + j]
+  for (let j = 0; j < basketLength; j++) {
+    const idx = n - basketLength + j;
+    bits[j] = idx >= 0 ? bitAt(idx) : 0;
+  }
+  return bits;
 }

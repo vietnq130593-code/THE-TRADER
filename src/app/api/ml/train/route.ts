@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+// F-00 (#129): audit ML_TRAIN_AUTO (đường engine force=false).
+import { db } from "@/lib/db";
 import {
   buildTrainingSet,
   loadTopSeries,
@@ -10,7 +12,10 @@ import {
 } from "@/lib/ml/features";
 import { GRU } from "@/lib/ml/gru";
 import { buildTrainingSequences, ML_GRU_WINDOW } from "@/lib/ml/features";
-import { buildBasket, policyStance, trainQTable } from "@/lib/ml/rl";
+import { buildBasket, policyStance, trainQTable, regimeBitsOf } from "@/lib/ml/rl";
+// F-09 (#129): MLP đa nhiệm 3 đầu ra (hướng + biên độ + biến động).
+import { MultitaskMLP } from "@/lib/ml/multitask";
+import { standardize } from "@/lib/ml/features";
 import { settlePendingRewards } from "@/lib/ml/bandit";
 // C1/F2 (#99 — ML_AUTOML_BLUEPRINT §0.9-F2): toàn bộ bộ train + lưu dl-mlp +
 // guards A4/B1 + mutex/cooldown F-612R-06 trích sang lib — route và sweep route
@@ -88,7 +93,7 @@ export const runtime = "nodejs";
  * đang chạy → 429 (không bao giờ 2 hàng trùng version).
  */
 
-type MlTrainTarget = "all" | "dl-mlp" | "rl-q" | "dl-gru";
+type MlTrainTarget = "all" | "dl-mlp" | "rl-q" | "dl-gru" | "dl-mtl";
 
 /** Metrics trả về FE — khớp RlQMetrics trong src/hooks/use-ml.ts. */
 interface TrainedRlQMetrics {
@@ -199,9 +204,31 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
   }
   // P1-2 — digest rổ Q-learning (tái lập PIT — cùng hàm với dl-mlp)
   const windowMeta = trainingWindowDigest(series);
-  const q = trainQTable(closes);
+  // F-13 (#129)(c): bit regime VNINDEX (SMA50 vs SMA200 từng phiên) → Q-table
+  // 96 trạng thái thay 48 — "chính sách 1 bộ cho mọi chế độ là sai về kinh tế
+  // học". Fail-soft: không tải được VNINDEX → bảng 48 legacy như cũ.
+  let regimeBits: number[] | undefined;
+  try {
+    const vnindexInst = await db.instrument.findFirst({
+      where: { symbol: "VNINDEX", isActive: true },
+      select: { id: true },
+    });
+    if (vnindexInst) {
+      const vnindexBars = await db.bar.findMany({
+        where: { instrumentId: vnindexInst.id },
+        orderBy: { date: "asc" },
+        select: { close: true },
+      });
+      const vnindexCloses = vnindexBars.map((b) => b.close).filter((c) => c > 0);
+      const basketProbe = buildBasket(closes);
+      regimeBits = regimeBitsOf(vnindexCloses, basketProbe.length);
+    }
+  } catch (err) {
+    console.error("[api/ml/train] regimeBits VNINDEX lỗi (fail-soft → 48-state):", err);
+  }
+  const q = trainQTable(closes, regimeBits ? { regimeBits } : {});
   const basket = buildBasket(closes);
-  const stance = policyStance(q.qTable, basket, 0.5);
+  const stance = policyStance(q.qTable, basket, 0.5, regimeBits?.[regimeBits.length - 1]);
   const metrics: TrainedRlQMetrics = {
     episodes: q.episodes,
     epsilonEnd: q.epsilonEnd,
@@ -213,6 +240,59 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
     qMax: stance.qMax,
   };
   await saveModel("rl-q", JSON.stringify({ qTable: q.qTable }), null, { ...metrics }, windowMeta);
+  return metrics;
+}
+
+/**
+ * F-09 (#129) — Train MLP ĐA NHIỆM (kind "dl-mtl", status archived — shadow:
+ * lên serving chỉ qua sweep gate như ứng viên, đặc tả F-09 gate MAE vol ≥ 10%
+ * so baseline vol20). Backbone 16→24→12 + 3 head (dir 8→3 · mag 4→1 · vol
+ * 4→1); Loss CE + 0,3·MSE_mag + 0,3·MSE_vol; nhãn giàu từ labelRichAt.
+ */
+async function trainDlMtl(): Promise<{
+  epochs: number;
+  samples: number;
+  valAcc: number;
+  valLoss: number;
+  maeMag: number;
+  maeVol: number;
+  maeVolBaseline: number;
+  volEdgePct: number | null;
+  params: number;
+}> {
+  const set = await buildTrainingSet(20, { richLabels: true });
+  if (set.X.length < 600 || !set.rich || set.rich.length !== set.X.length) {
+    throw new Error(
+      `chỉ có ${set.X.length} mẫu đa nhiệm (cần ≥ 600) — kiểm tra dữ liệu EOD`
+    );
+  }
+  const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
+  const { mean, std, Xstd } = standardize(set.X);
+  const mtl = new MultitaskMLP(set.X[0].length);
+  const fit = mtl.fit(Xstd, set.rich);
+  mtl.setNorm({ mean, std });
+  const volEdgePct =
+    fit.maeVolBaseline > 0
+      ? Number((((fit.maeVolBaseline - fit.maeVol) / fit.maeVolBaseline) * 100).toFixed(2))
+      : null;
+  const metrics = {
+    ...fit,
+    volEdgePct,
+    params: mtl.paramCount,
+  };
+  await saveModel(
+    "dl-mtl",
+    mtl.toJSON(),
+    JSON.stringify({ mean, std }),
+    { ...metrics },
+    {
+      ...windowMeta,
+      featureSet: set.featureSet,
+      // F-09 — meta mở rộng (MlModelMeta cho phép trường tuỳ chọn qua cast)
+      ...({ task: "multitask", note: "F-09 shadow — lên serving qua sweep gate (MAE vol ≥ 10% so baseline)" } as Record<string, unknown>),
+    },
+    { promote: false } // shadow — KHÔNG serving trực tiếp (đúng N3)
+  );
   return metrics;
 }
 
@@ -252,9 +332,9 @@ export async function POST(req: Request) {
   } catch {
     // body rỗng — giữ "all" + force=true
   }
-  if (target !== "all" && target !== "dl-mlp" && target !== "rl-q" && target !== "dl-gru") {
+  if (target !== "all" && target !== "dl-mlp" && target !== "rl-q" && target !== "dl-gru" && target !== "dl-mtl") {
     return NextResponse.json(
-      { error: `target "${target}" không hợp lệ (all | dl-mlp | rl-q | dl-gru).` },
+      { error: `target "${target}" không hợp lệ (all | dl-mlp | rl-q | dl-gru | dl-mtl).` },
       { status: 400 }
     );
   }
@@ -298,6 +378,7 @@ export async function POST(req: Request) {
     let dlMlp: TrainedDlMlpMetrics | null = null;
     let rlQ: TrainedRlQMetrics | null = null;
     let dlGru: TrainedGruMetrics | null = null;
+    let dlMtl: Awaited<ReturnType<typeof trainDlMtl>> | null = null;
     let dlPromotion: DlMlpPromotion | null = null;
     let appliedTuning: AppliedMlpTuning | null = null;
 
@@ -327,6 +408,26 @@ export async function POST(req: Request) {
         console.log(
           `[api/ml/train] A4 skip-guard: windowHash unchanged (khớp bản ${matched} — ${windowMeta.windowHash.slice(0, 12)}…) — không train`
         );
+        // F-00 (#129): train bị skip-guard chặn VẪN để lại audit "skipped" —
+        // im lặng là lỗi giám sát (đặc tả F-00 mục 1: phân biệt chạy-tay).
+        try {
+          await db.auditLog.create({
+            data: {
+              action: "ML_TRAIN_AUTO",
+              entity: "MlModel",
+              entityId: null,
+              after: JSON.stringify({
+                outcome: "skipped-no-new-window",
+                matched,
+                windowHash: windowMeta.windowHash,
+                durationMs: Date.now() - started,
+                note: "A4 Chủ nhật chạy đúng lịch — windowHash không đổi (không có bar mới)",
+              }),
+            },
+          });
+        } catch {
+          // audit fail-soft
+        }
         return NextResponse.json({
           ok: true,
           skipped: true,
@@ -370,6 +471,16 @@ export async function POST(req: Request) {
         errors.push(`GRU: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    if (target === "dl-mtl") {
+      // F-09 (#129) — multitask 3 đầu ra (shadow archived, lên serving qua sweep).
+      try {
+        dlMtl = await trainDlMtl();
+        trained.push("dl-mtl");
+      } catch (err) {
+        console.error("[api/ml/train] trainDlMtl failed:", err);
+        errors.push(`MTL: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     const durationMs = Date.now() - started;
 
@@ -382,7 +493,28 @@ export async function POST(req: Request) {
       );
     }
 
-    const payload: Record<string, unknown> = { ok: true, trained, durationMs, dlMlp, rlQ, dlGru };
+    // F-00 (#129): đường ENGINE (force=false) audit ML_TRAIN_AUTO với outcome
+    // trained — 2 Chủ nhật liên tiếp có audit là gate nghiệm thu F-00.
+    if (force === false) {
+      try {
+        await db.auditLog.create({
+          data: {
+            action: "ML_TRAIN_AUTO",
+            entity: "MlModel",
+            entityId: null,
+            after: JSON.stringify({
+              outcome: trained.length > 0 ? "trained" : "failed",
+              trained,
+              errors,
+              durationMs: Date.now() - started,
+            }),
+          },
+        });
+      } catch {
+        // audit fail-soft
+      }
+    }
+    const payload: Record<string, unknown> = { ok: true, trained, durationMs, dlMlp, rlQ, dlGru, dlMtl };
     // A4 (#79) — kết quả serving-swap guard (chỉ khi dl-mlp được train).
     // B1/F-B811-01 (#81): kèm promotionReason để FE nói đúng LÝ DO (valAcc
     // thua baseline ≠ cổng featureSet chưa mở).

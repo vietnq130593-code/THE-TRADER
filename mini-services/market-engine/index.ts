@@ -140,6 +140,16 @@ const K1_EQUITY_DISABLED = process.env.K1_EQUITY_DISABLED === "1";
  *  t2–t6, gate eodSync hôm đó; định giá phi-VN quy VND theo #107 E-EXEC). */
 const COUNCIL_EVAL_AT = process.env.COUNCIL_EVAL_AT ?? "16:45";
 const COUNCIL_EVAL_DISABLED = process.env.COUNCIL_EVAL_DISABLED === "1";
+// F-02A (#129 — AI_ENGINEER_REVIEW_BRAIN §3 F-02): trích xuất chuỗi vĩ mô VN
+//  từ tin RSS 06:35 ICT hằng ngày (SAU intl-sync 06:15, TRƯỚC mở cửa VN 09:00
+//  — Pha A LLM có trích dẫn; cooldown 60s + audit MACRO_INGESTED ở route).
+const MACRO_VN_AT = process.env.MACRO_VN_AT ?? "06:35";
+const MACRO_VN_DISABLED = process.env.MACRO_VN_DISABLED === "1";
+// F-03a (#129): snapshot dòng khối ngoại 16:05 ICT hằng ngày (SAU eod-sync
+//  15:45 — Quote đã neo close thật → ForeignFlow upsert khớp Bar cùng ngày;
+//  Pha B adapter live chờ egress, hiện mô phỏng deterministic persist sẵn có).
+const FLOW_SYNC_AT = process.env.FLOW_SYNC_AT ?? "16:05";
+const FLOW_SYNC_DISABLED = process.env.FLOW_SYNC_DISABLED === "1";
 
 /** "HH:MM" ICT → phút kể từ nửa đêm ICT (UTC+7). */
 function parseHhMm(s: string): number | null {
@@ -156,6 +166,9 @@ const SETTLE_MINUTES = parseHhMm(SETTLE_AT) ?? parseHhMm("16:15")!;
 const K1_EQUITY_MINUTES = parseHhMm(K1_EQUITY_AT) ?? parseHhMm("16:30")!;
 // #106/#107 — job hằng ngày của Hội đồng (fail-safe parseHhMm như K1)
 const COUNCIL_EVAL_MINUTES = parseHhMm(COUNCIL_EVAL_AT) ?? parseHhMm("16:45")!;
+// #129 (F-02A + F-03a) — fail-safe parseHhMm như các slot hằng ngày khác
+const MACRO_VN_MINUTES = parseHhMm(MACRO_VN_AT) ?? parseHhMm("06:35")!;
+const FLOW_SYNC_MINUTES = parseHhMm(FLOW_SYNC_AT) ?? parseHhMm("16:05")!;
 
 /** "SUN:HH:MM" (tên ngày 3 chữ) hoặc "0:HH:MM" (0=CN..6=T7) → { dow, minutes } — lịch hằng tuần. */
 const DOW_NAMES: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
@@ -246,6 +259,16 @@ const stats = {
   lastCouncilEvalDate: null as string | null,
   lastCouncilEvalError: null as string | null,
   councilEvalRuns: 0,
+  // #129 (F-02A) — trích xuất vĩ mô VN 06:35 ICT (P0-5 sống sót restart)
+  lastMacroVnAt: null as string | null,
+  lastMacroVnDate: null as string | null,
+  lastMacroVnError: null as string | null,
+  macroVnRuns: 0,
+  // #129 (F-03a) — snapshot dòng khối ngoại 16:05 ICT (P0-5)
+  lastFlowSyncAt: null as string | null,
+  lastFlowSyncDate: null as string | null,
+  lastFlowSyncError: null as string | null,
+  flowSyncRuns: 0,
   lastCycleAt: null as string | null,
   cycles: 0,
   // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chế độ chạy liên tục
@@ -283,6 +306,8 @@ const http = createServer((req, res) => {
         mlSweepAt: ML_SWEEP_AT,
         k1EquityAt: K1_EQUITY_AT,
         councilEvalAt: COUNCIL_EVAL_AT,
+        macroVnAt: MACRO_VN_AT,
+        flowSyncAt: FLOW_SYNC_AT,
         ...stats,
       })
     );
@@ -336,6 +361,11 @@ interface EngineState {
   // #106/#107 — COUNCIL: ngày đã đánh giá quyết định (P0-5; 2 job E-ALLOC tháo #107)
   lastCouncilEvalDate?: string | null;
   lastCouncilEvalAt?: string | null;
+  // #129 (F-02A + F-03a) — P0-5 sống sót restart
+  lastMacroVnDate?: string | null;
+  lastMacroVnAt?: string | null;
+  lastFlowSyncDate?: string | null;
+  lastFlowSyncAt?: string | null;
 }
 
 /** Boot: đọc state từ DB → đổ vào stats + biến backoff (restart không quên). */
@@ -381,6 +411,11 @@ async function hydrateEngineState(): Promise<void> {
     // route mark/evaluate idempotent nhưng tránh cả lần gọi thừa)
     if (typeof s.lastCouncilEvalDate === "string") stats.lastCouncilEvalDate = s.lastCouncilEvalDate;
     if (typeof s.lastCouncilEvalAt === "string") stats.lastCouncilEvalAt = s.lastCouncilEvalAt;
+    // #129 (F-02A + F-03a) — phục hồi lịch vĩ mô/flow (P0-5)
+    if (typeof s.lastMacroVnDate === "string") stats.lastMacroVnDate = s.lastMacroVnDate;
+    if (typeof s.lastMacroVnAt === "string") stats.lastMacroVnAt = s.lastMacroVnAt;
+    if (typeof s.lastFlowSyncDate === "string") stats.lastFlowSyncDate = s.lastFlowSyncDate;
+    if (typeof s.lastFlowSyncAt === "string") stats.lastFlowSyncAt = s.lastFlowSyncAt;
     if (typeof s.intlFailStreak === "number") intlFailStreak = s.intlFailStreak;
     if (typeof s.lastIntlFailAt === "number") lastIntlFailAt = s.lastIntlFailAt;
     log(
@@ -422,6 +457,11 @@ async function persistEngineState(): Promise<void> {
         // #106/#107 — COUNCIL: lịch đánh giá quyết định sống sót restart (P0-5)
         lastCouncilEvalDate: stats.lastCouncilEvalDate,
         lastCouncilEvalAt: stats.lastCouncilEvalAt,
+        // #129 (F-02A + F-03a) — P0-5
+        lastMacroVnDate: stats.lastMacroVnDate,
+        lastMacroVnAt: stats.lastMacroVnAt,
+        lastFlowSyncDate: stats.lastFlowSyncDate,
+        lastFlowSyncAt: stats.lastFlowSyncAt,
       } satisfies EngineState),
       signal: AbortSignal.timeout(15_000),
     });
@@ -973,6 +1013,33 @@ async function mlSweepAndBroadcast(): Promise<void> {
       "ml-sweep",
       `sweep C1 xong (${data.skipped === true ? `skip — ${data.reason ?? "windowHash không đổi"}` : `${data.evaluated ?? "?"}/${data.candidates ?? "?"} ứng viên · champion ${champion?.tag ?? "—"} ${champion?.arch ?? ""}`}) · ${(data.durationMs ?? "?")}ms${data.swapped === true ? " · SWAP serving" : ""}`
     );
+    // F-01 (#129): sweep THỨ HAI cho featureSet v3-macro (24 chiều — 8 chiều
+    // vĩ mô) — sau đợt v2 xong hẳn (không chồng mutex route). Đấu fair cùng
+    // cổng championGate + paired-bootstrap; skip-guard theo featureSet riêng.
+    try {
+      const v3 = await postJson("/api/ml/sweep", { force: false, featureSet: "v3-macro" }, {
+        timeoutMs: ML_SWEEP_POST_TIMEOUT_MS,
+      });
+      log(
+        "ml-sweep",
+        `sweep v3-macro xong (${v3.skipped === true ? `skip — ${v3.reason ?? "windowHash không đổi"}` : `${v3.evaluated ?? "?"}/${v3.candidates ?? "?"} ứng viên · champion ${(v3 as { champion?: { tag?: string } }).champion?.tag ?? "—"}`}) · ${(v3.durationMs ?? "?")}ms${v3.swapped === true ? " · SWAP serving (v3!)" : ""}`
+      );
+    } catch (err) {
+      log("ml-sweep", `sweep v3-macro bỏ qua (fail-soft): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // F-07 (#129): meta-learner trọng số ensemble — train sau sweep (đặc tả
+    // "gắn vào job sweep Chủ nhật"); cold-start < 60 phiếu → giữ fixed 0,7/0,3.
+    try {
+      const learned = await postJson("/api/ml/ensemble-learn", undefined, {
+        timeoutMs: 120_000,
+      });
+      log(
+        "ml-learn",
+        `ensemble-learn F-07: ${String(learned.outcome ?? "?")} — ${String(learned.note ?? "")}`
+      );
+    } catch (err) {
+      log("ml-learn", `ensemble-learn bỏ qua (fail-soft): ${err instanceof Error ? err.message : String(err)}`);
+    }
   } catch (err) {
     stats.lastMlSweepError = err instanceof Error ? err.message : String(err);
     log("ml-sweep", `LỖI (thử lại phút sau): ${stats.lastMlSweepError}`);
@@ -1018,6 +1085,91 @@ async function k1EquityAndBroadcast(): Promise<void> {
     // P0-5 — ngày đã settle sandbox sống sót restart
     void persistEngineState();
   }
+}
+
+/** #129 (F-02A) — trích xuất chuỗi vĩ mô VN từ RSS 06:35 ICT: POST
+ *  /api/macro/ingest (1 lời gọi LLM có trích dẫn — cooldown 60s route;
+ *  audit MACRO_INGESTED + markSource macro-vn). Fail-soft: LLM 502 → KHÔNG
+ *  đánh dấu ngày, 30 phút sau (nhịp slot lướt qua do-check 60s sẽ không
+ *  retry trong ngày — chấp nhận: job ngày mai tự bù, cursor không tiến khi
+ *  lỗi nên KHÔNG mất tin). */
+let macroVnInFlight = false;
+const MACRO_VN_POST_TIMEOUT_MS = 180_000;
+async function macroVnAndBroadcast(): Promise<void> {
+  macroVnInFlight = true;
+  try {
+    const data = await postJson("/api/macro/ingest", undefined, {
+      timeoutMs: MACRO_VN_POST_TIMEOUT_MS,
+    });
+    stats.lastMacroVnAt = new Date().toISOString();
+    stats.macroVnRuns++;
+    stats.lastMacroVnError = null;
+    stats.lastMacroVnDate = ictNow().date;
+    io.emit("macro-vn", data);
+    log(
+      "macro-vn",
+      `F-02A trích xuất vĩ mô xong: quét ${data.scanned ?? "?"} tin · trích ${data.extracted ?? 0} quan sát · loại ${data.rejected ?? 0}`
+    );
+  } catch (err) {
+    stats.lastMacroVnError = err instanceof Error ? err.message : String(err);
+    log("macro-vn", `LỖI: ${stats.lastMacroVnError}`);
+  } finally {
+    macroVnInFlight = false;
+    void persistEngineState();
+  }
+}
+
+/** #129 (F-03a) — snapshot dòng khối ngoại 16:05 ICT: GET /api/market/flows
+ *  (getForeignFlows tự persist ForeignFlow upsert (mã, ngày) — sau eod-sync
+ *  15:45 Quote neo close thật → số liệu khớp Bar cùng ngày; fail-soft). */
+let flowSyncInFlight = false;
+const FLOW_SYNC_GET_TIMEOUT_MS = 120_000;
+async function flowSyncAndBroadcast(): Promise<void> {
+  flowSyncInFlight = true;
+  try {
+    const res = await fetch(`${APP_URL}/api/market/flows`, {
+      signal: AbortSignal.timeout(FLOW_SYNC_GET_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as Record<string, unknown>;
+    stats.lastFlowSyncAt = new Date().toISOString();
+    stats.flowSyncRuns++;
+    stats.lastFlowSyncError = null;
+    stats.lastFlowSyncDate = ictNow().date;
+    io.emit("flow-sync", data);
+    log(
+      "flow-sync",
+      `F-03a snapshot khối ngoại xong: mode ${String(data.mode ?? "?")} · tổng ròng ${String(data.totalNet ?? "?")}`
+    );
+  } catch (err) {
+    stats.lastFlowSyncError = err instanceof Error ? err.message : String(err);
+    log("flow-sync", `LỖI: ${stats.lastFlowSyncError}`);
+  } finally {
+    flowSyncInFlight = false;
+    void persistEngineState();
+  }
+}
+
+function macroVnDue(): boolean {
+  if (MACRO_VN_DISABLED) return false;
+  if (macroVnInFlight) return false;
+  const ict = ictNow();
+  return (
+    ict.minutes >= MACRO_VN_MINUTES &&
+    stats.lastMacroVnDate !== ict.date &&
+    stats.lastIntlSyncDate === ict.date
+  );
+}
+
+function flowSyncDue(): boolean {
+  if (FLOW_SYNC_DISABLED) return false;
+  if (flowSyncInFlight) return false;
+  const ict = ictNow();
+  return (
+    ict.minutes >= FLOW_SYNC_MINUTES &&
+    stats.lastFlowSyncDate !== ict.date &&
+    stats.lastEodSyncDate === ict.date
+  );
 }
 
 /** Kiểm tra hằng phút: đã qua 15:45 ICT hôm nay và chưa sync ngày này → sync.
@@ -1083,16 +1235,32 @@ function settleDue(): boolean {
 }
 
 /** A4 (#79) — Chủ nhật, đã qua 04:00 ICT, chưa train Chủ nhật này → retrain
- *  (y hệt pattern reprobeDue: parseWeekly "SUN:04:00" · guard in-flight). */
+ *  (y hệt pattern reprobeDue: parseWeekly "SUN:04:00" · guard in-flight).
+ *  F-00 (#129 — mục 2 "Catch-up lúc boot"): due-check mở từ "hôm nay là CN"
+ *  thành "Chủ nhật GẦN NHẤT trong 24h qua" — engine chết qua đêm Chủ nhật →
+ *  thứ Hai sáng chạy bù 1 lần (không phát sinh 2 lần nhờ cờ Chủ nhật đã
+ *  đánh dấu + skip-guard windowHash của route; audit ML_TRAIN_AUTO để lại
+ *  dấu vết cho ml-cycle-health). Quá 24h → không cưu (tuần sau chạy lại). */
+function lastSundaySlot(): { date: string; minutesElapsed: number } | null {
+  const ict = ictNow();
+  const sched = ML_TRAIN_SCHEDULE;
+  // phút ICT từ nửa đêm thứ Hai của TUẦN chứa (hoặc đứng trước) hôm nay
+  const dayOffset = (ict.dow - sched.dow + 7) % 7; // 0 hôm nay là CN … 6 T7
+  const slotMinutesTotal = (ict.minutes + dayOffset * 1440) - sched.minutes;
+  if (slotMinutesTotal < 0) return null; // slot tuần này chưa tới
+  const slotDate = new Date(Date.now() + 7 * 3_600_000 - slotMinutesTotal * 60_000);
+  return {
+    date: slotDate.toISOString().slice(0, 10),
+    minutesElapsed: slotMinutesTotal,
+  };
+}
 function mlTrainDue(): boolean {
   if (ML_TRAIN_DISABLED || !ML_TRAIN_SCHEDULE) return false;
   if (mlTrainInFlight) return false;
-  const ict = ictNow();
-  return (
-    ict.dow === ML_TRAIN_SCHEDULE.dow &&
-    ict.minutes >= ML_TRAIN_SCHEDULE.minutes &&
-    stats.lastMlTrainSunday !== ict.date
-  );
+  const slot = lastSundaySlot();
+  if (slot == null) return false;
+  if (slot.minutesElapsed > 24 * 60) return false; // F-00: catch-up chỉ trong 24h
+  return stats.lastMlTrainSunday !== slot.date;
 }
 
 /** C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3) — Chủ nhật, đã qua 04:15 ICT, chưa
@@ -1103,12 +1271,13 @@ function mlSweepDue(): boolean {
   if (ML_SWEEP_DISABLED || !ML_SWEEP_SCHEDULE) return false;
   if (sweepInFlight) return false;
   if (mlTrainInFlight) return false; // không bao giờ đè lên retrain A4
+  // F-00 (#129): catch-up 24h như A4 — tính theo lịch sweep (SUN:04:15).
   const ict = ictNow();
-  return (
-    ict.dow === ML_SWEEP_SCHEDULE.dow &&
-    ict.minutes >= ML_SWEEP_SCHEDULE.minutes &&
-    stats.lastMlSweepSunday !== ict.date
-  );
+  const dayOffset = (ict.dow - ML_SWEEP_SCHEDULE.dow + 7) % 7;
+  const slotMinutesTotal = (ict.minutes + dayOffset * 1440) - ML_SWEEP_SCHEDULE.minutes;
+  if (slotMinutesTotal < 0 || slotMinutesTotal > 24 * 60) return false;
+  const slotDate = new Date(Date.now() + 7 * 3_600_000 - slotMinutesTotal * 60_000);
+  return stats.lastMlSweepSunday !== slotDate.toISOString().slice(0, 10);
 }
 
 /** B12 — đã qua 06:15 ICT hôm nay và chưa sync ngày này → sync.
@@ -1182,7 +1351,7 @@ http.listen(PORT, () => {
   log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL}`);
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
@@ -1224,6 +1393,10 @@ http.listen(PORT, () => {
       // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
       // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
       if (k1EquityDue()) void k1EquityAndBroadcast();
+      // #129 (F-02A + F-03a) — macro VN 06:35 (gate intl đã sync) + flow 16:05
+      // (gate eod đã sync) — cùng try/catch chung, lỗi 1 lịch không giết khối.
+      if (macroVnDue()) void macroVnAndBroadcast();
+      if (flowSyncDue()) void flowSyncAndBroadcast();
       // #106 — COUNCIL_STEWARDSHIP_BLUEPRINT §6: mark thí nghiệm 16:35 → đánh giá
       // quyết định 16:45 → hội nghị phân bổ LLM CN 05:50 (cùng try/catch chung)
       if (councilEvalDue()) void councilEvalAndBroadcast();

@@ -1,4 +1,9 @@
 import { db } from "@/lib/db";
+// #129 (F-02A + F-10 + F-17): chuỗi vĩ mô VN từ MacroSeries + kênh truyền
+// dẫn quốc tế XREL + bảng dự báo multi-asset 8 tài sản cho A20 macro-economist.
+import { macroSeriesPromptLines } from "@/lib/macro-vn";
+import { buildXrelIntlPromptBlock } from "@/lib/ml/xrel";
+import { macroAssetForecasts } from "@/lib/ml/macro-forecast";
 import { atr, bollinger, stochastic } from "@/lib/indicators";
 import { topByAdtv } from "@/lib/dated-series";
 import { latestFeatureSnapshot } from "@/lib/ml/features";
@@ -553,7 +558,7 @@ async function buildMacroInner(): Promise<string> {
     "",
     "LỚP 2 · VĨ MÔ TRONG NƯỚC (kênh định lượng duy nhất có ở lớp này là tỷ giá — thật):",
     `- USD/VND ${vndLast != null ? Math.round(vndLast).toLocaleString("vi-VN") + "₫" : "—"} (${fmtSignedPct(vndx ? chgPctOf(vndx.closes, 20) : null)}/20 phiên) — VND giảm giá khi con số tăng; áp lực tỷ giá mạnh = rủi ro thắt thanh khoản nội địa`,
-    "(Lưu ý khai báo: chuỗi định lượng VN khác — CPI, GDP, lãi suất điều hành SBV, tín dụng, M2 — xem khối CÒN THIẾU dưới cùng)",
+    "(Lưu ý khai báo: chuỗi định lượng VN — CPI, GDP, lãi suất điều hành SBV, tín dụng, M2... — xem khối VĨ MÔ TRONG NƯỚC · CHUỖI ĐỊNH LƯỢNG dưới cùng; series thiếu được khai báo trung thực)",
     "",
     "LỚP 3 · TRUYỀN DẪN XUỐNG THỊ TRƯỜNG CHỨNG KHOÁN VN (EOD thật dchart):",
     `- ${idxLine(vnindex, "VN-Index")} · ${idxLine(vn30, "VN30")}`,
@@ -567,11 +572,71 @@ async function buildMacroInner(): Promise<string> {
         )
       : ["- (chưa nạp được tin mới — khai báo 'no new data', KHÔNG bịa tin)"]),
     "",
-    "CÒN THIẾU (khai báo trung thực — suy luận bắc cầu PHẢI ghi rõ 'proxy'):",
-    "- Kho dữ liệu CHƯA có chuỗi định lượng nội địa: CPI/lạm phát · GDP · lãi suất điều hành SBV · tăng trưởng tín dụng · M2 · PMI · lợi suất trái phiếu chính phủ VN · lãi liên ngân hàng · xuất nhập khẩu · FDI.",
-    "- Cách xử lý: (a) ưu tiên con số trong tin RSS ở trên (chỉ khi bài nêu rõ); (b) dùng proxy lớp 1-3 (US10Y/DXY cho điều kiện tài chính toàn cầu, VND=X cho sức ép tỷ giá, ADTV+breadth cho chu kỳ thanh khoản nội); (c) không có gì thì nói KHÔNG có — tuyệt đối không bịa CPI/GDP/lãi suất.",
+    ...(await macroPromptTail()),
   ];
   return lines.join("\n");
+}
+
+/**
+ * #129 (F-02A + F-10 + F-17) — phần đuôi bảng điều khiển vĩ mô A20:
+ *  • F-02A: khối "VĨ MÔ TRONG NƯỚC — CHUỖI ĐỊNH LƯỢNG (MacroSeries)" — series
+ *    CÓ dữ liệu hiển thị giá trị + Δ + kỳ + nguồn (mode extracted kèm URL);
+ *    series còn thiếu sinh động từ DB (thay khối "CÒN THIẾU" tĩnh cũ).
+ *  • F-10: khối "KÊNH TRUYỀN DẪN QUỐC TẾ → VN" từ MarketRelation họ intl:*
+ *    (lead-lag có chỉnh múi giờ, permutation p + Bonferroni) — null khi chưa
+ *    đủ cặp đáng tin (N2 — không bịa quan hệ).
+ *  • F-17: bảng "DỰ BÁO 5 PHIÊN 8 TÀI SẢN" (macro-mlp) — mỗi dòng kèm Brier
+ *    rolling 60 phiên vs baseline 0,667; tài sản chưa đủ cạnh biên khai báo
+ *    rõ (N6 trung thực).
+ * Mọi khối fail-soft — lỗi 1 nguồn không phá bảng điều khiển chính.
+ */
+async function macroPromptTail(): Promise<string[]> {
+  const out: string[] = [];
+  // F-02A — chuỗi vĩ mô VN từ MacroSeries (đã qua Q10 releaseAt ≤ now).
+  try {
+    const seriesLines = await macroSeriesPromptLines();
+    out.push(...seriesLines);
+  } catch (err) {
+    console.error("[buildMacroInner] macroSeriesPromptLines lỗi (fail-soft):", err);
+  }
+  // F-10 — kênh truyền dẫn quốc tế (null = chưa đủ dữ liệu, bỏ im lặng).
+  try {
+    const intlBlock = await buildXrelIntlPromptBlock();
+    if (intlBlock != null) {
+      out.push("", intlBlock);
+    }
+  } catch (err) {
+    console.error("[buildMacroInner] buildXrelIntlPromptBlock lỗi (fail-soft):", err);
+  }
+  // F-17 — dự báo 5 phiên 8 tài sản (đóng kỳ vọng "trái phiếu").
+  try {
+    const forecast = await macroAssetForecasts();
+    if (forecast.assets.length > 0) {
+      out.push("", "DỰ BÁO 5 PHIÊN · 8 TÀI SẢN (macro-mlp — model riêng từng tài sản, Brier rolling 60 phiên so baseline đi-ngang 0,667):");
+      for (const a of forecast.assets) {
+        const dirTxt = a.direction === "UP" ? "TĂNG" : a.direction === "DOWN" ? "GIẢM" : "ĐI NGANG";
+        const brierTxt =
+          a.brier60 == null
+            ? "chưa đủ dữ liệu chấm"
+            : `${a.brier60.toFixed(3)}${a.edge ? " (CÓ cạnh biên vs 0,667)" : " (chưa đủ cạnh biên — đọc thận trọng)"}`;
+        out.push(
+          `- ${a.label}: ${dirTxt} (pT ${((a.pUp ?? 0) * 100).toFixed(0)}% / pN ${((a.pDown ?? 0) * 100).toFixed(0)}%) · Brier60 ${brierTxt}`
+        );
+      }
+      out.push(
+        "(Dự báo định lượng từ dữ liệu cũ — KHÔNG phải khuyến nghị; US10Y/US30Y là dự báo LỢI SUẤT trái phiếu: TĂNG = lợi suất tăng = giá trái phiếu giảm.)"
+      );
+    }
+  } catch (err) {
+    console.error("[buildMacroInner] macroAssetForecasts lỗi (fail-soft):", err);
+  }
+  return out.length > 0
+    ? out
+    : [
+        "CÒN THIẾU (khai báo trung thực — suy luận bắc cầu PHẢI ghi rõ 'proxy'):",
+        "- Kho dữ liệu CHƯA có chuỗi định lượng nội địa: CPI/lạm phát · GDP · lãi suất điều hành SBV · tăng trưởng tín dụng · M2 · PMI · lợi suất trái phiếu chính phủ VN · lãi liên ngân hàng · xuất nhập khẩu · FDI.",
+        "- Cách xử lý: (a) ưu tiên con số trong tin RSS ở trên (chỉ khi bài nêu rõ); (b) dùng proxy lớp 1-3 (US10Y/DXY cho điều kiện tài chính toàn cầu, VND=X cho sức ép tỷ giá, ADTV+breadth cho chu kỳ thanh khoản nội); (c) không có gì thì nói KHÔNG có — tuyệt đối không bịa CPI/GDP/lãi suất.",
+      ];
 }
 
 /** Khối BẢNG ĐIỀU KHIỂN VĨ MÔ (cache 60s) — cho A20 macro-economist. */

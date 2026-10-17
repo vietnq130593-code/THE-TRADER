@@ -98,7 +98,18 @@ export function BanditBlock({
 function ArmRow({ arm }: { arm: BanditArm }) {
   const mean = clamp01(arm.posteriorMean);
   const name = arm.name || arm.agentCode;
-  const meta = `${arm.agentCode} · α ${nf1.format(arm.alpha)} · β ${nf1.format(arm.beta)} · ${nf0.format(arm.pulls)} pulls · ${nf1.format(arm.wins)} wins`;
+  // F-15 (#129): Wilson CI 95% cạnh posterior + mốc "≥100 pulls = tin khoảng
+  // cách"; F-13: regime posterior (nếu có) hiển thị hậu tố theo regime.
+  const hasCi =
+    typeof arm.wilsonLow === "number" && typeof arm.wilsonHigh === "number" && arm.pulls > 0;
+  const ciTxt = hasCi
+    ? `CI95 ${pct1(clamp01(arm.wilsonLow ?? 0))}–${pct1(clamp01(arm.wilsonHigh ?? 1))}${arm.pulls < 100 ? " (<100 pulls — chưa tin khoảng cách)" : ""}`
+    : "";
+  const regimeTxt =
+    typeof arm.regimePosteriorMean === "number"
+      ? ` · regime ${pct1(clamp01(arm.regimePosteriorMean))}`
+      : "";
+  const meta = `${arm.agentCode} · α ${nf1.format(arm.alpha)} · β ${nf1.format(arm.beta)} · ${nf0.format(arm.pulls)} pulls · ${nf1.format(arm.wins)} wins${regimeTxt}`;
 
   return (
     <TableRow>
@@ -109,9 +120,14 @@ function ArmRow({ arm }: { arm: BanditArm }) {
             <span className="truncate text-xs font-semibold" title={name}>
               {name}
             </span>
-            <span className="truncate text-[10px] text-muted-foreground" title={meta}>
+            <span className="truncate text-[10px] text-muted-foreground" title={hasCi ? `${meta} · ${ciTxt}` : meta}>
               {meta}
             </span>
+            {hasCi ? (
+              <span className="truncate text-[10px] tabular-nums text-muted-foreground">
+                {ciTxt}
+              </span>
+            ) : null}
           </div>
           <span className="flex shrink-0 items-center gap-2">
             <Progress
@@ -154,7 +170,14 @@ function ArmRow({ arm }: { arm: BanditArm }) {
             className="h-1.5 w-20 [&>div]:bg-emerald-600 dark:[&>div]:bg-emerald-400"
             aria-label={`Posterior mean ${pct1(mean)}`}
           />
-          <span className="tabular-nums text-xs font-semibold">{pct1(mean)}</span>
+          <span className="flex flex-col leading-tight">
+            <span className="tabular-nums text-xs font-semibold">{pct1(mean)}</span>
+            {hasCi ? (
+              <span className="text-[10px] tabular-nums text-muted-foreground" title={ciTxt}>
+                {ciTxt}
+              </span>
+            ) : null}
+          </span>
         </span>
       </TableCell>
     </TableRow>

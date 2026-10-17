@@ -342,7 +342,7 @@ async function main() {
     hidden: [48, 96],
     activations: ["relu", "tanh"],
     lossWeights: [1, 1, 1],
-    hyper: { ...MLP_TUNING_DEFAULT, lr: MLP_TUNING_DEFAULT.lr, seed: SEED } as SweepCandidate["hyper"],
+    hyper: { ...MLP_TUNING_DEFAULT, lr: MLP_TUNING_DEFAULT.lr, seed: SEED, featureSet: "v2-lag16" } as SweepCandidate["hyper"],
   };
   const craftTop2: SweepCandidate = {
     ...craftTop1,

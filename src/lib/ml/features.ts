@@ -31,15 +31,25 @@
 
 import { db } from "@/lib/db";
 import { loadTopDatedSeries, topByAdtv } from "@/lib/dated-series";
+// F-04 (#129): chuỗi sentiment hằng ngày — chiều x[23] của v3-macro (F-01)
+// (phần DB tách sang sentiment-daily.ts — sentiment.ts giữ thuần client-safe).
+import { dailySentimentScores, weightedSentiment7 } from "@/lib/quant/sentiment-daily";
 // P1-2 PIT — SHA-256 window-hash của cửa sổ train (node:crypto, backend only)
 import { createHash } from "node:crypto";
 
 /** Số đặc trưng đầu vào của MLP (thay đổi phải đổi cả kiến trúc mạng).
- *  B1 (#81 — ML_OPS_BLUEPRINT §4): 10 → 16 (v2-lag16). */
+ *  B1 (#81 — ML_OPS_BLUEPRINT §4): 10 → 16 (v2-lag16).
+ *  F-01 (#129 — AI_ENGINEER_REVIEW_BRAIN §3): 16 → 24 (v3-macro) — 8 chiều
+ *  vĩ mô/định lượng căn chỉnh point-in-time (alignMacroBefore N4). */
 export const ML_FEATURE_COUNT = 16;
 /** Nhãn bộ đặc trưng hiện hành — lưu MlModel.meta.featureSet khi train
  *  (B1: bản v8 cũ không có trường này → đọc về "v1-lag10"). */
 export const ML_FEATURE_SET = "v2-lag16";
+/** F-01 (#129): bộ v3-macro — 16 chiều giá + 8 chiều vĩ mô (x[16]–x[23]).
+ *  Chỉ vào serving khi thắng sweep (cổng championGate — N3). */
+export const ML_FEATURE_SET_V3 = "v3-macro";
+/** F-01 (#129): số chiều của v3-macro. */
+export const ML_FEATURE_COUNT_V3 = 24;
 /** Nhãn bộ đặc trưng v1 (10 chiều) — bản train trước B1. */
 export const ML_FEATURE_SET_V1 = "v1-lag10";
 /** Số phiên lịch sử tối thiểu trước điểm lấy mẫu (warmup RSI/MACD/SMA50/max60). */
@@ -362,7 +372,11 @@ function clip8(v: number): number {
  */
 // A3 (phiên #79): export cho ml/psi.ts đo drift — tái dùng CÙNG featureAt của
 // train (FeatureContract P0-3 — không đường tính đặc trưng thứ 2).
-export function featureAt(r: RollingSeries, t: number): number[] | null {
+export function featureAt(
+  r: RollingSeries,
+  t: number,
+  macro?: MacroContext | null
+): number[] | null {
   if (t < ML_WARMUP_BARS - 1 || t >= r.closes.length) return null;
   const close = r.closes[t];
   const sma20 = r.sma20[t];
@@ -377,7 +391,7 @@ export function featureAt(r: RollingSeries, t: number): number[] | null {
   const rsiPrev5 = t >= 5 ? r.rsi14[t - 5] : null;
   const volzPrev5 = t >= 5 ? r.volz20[t - 5] : null;
   const sma20Prev5 = t >= 5 ? r.sma20[t - 5] : null;
-  return [
+  const v16 = [
     (rsi ?? 50) / 100, // RSI phẳng → trung tính 0,5
     hist != null ? hist / close : 0,
     r.logret5[t] ?? 0,
@@ -396,6 +410,26 @@ export function featureAt(r: RollingSeries, t: number): number[] | null {
     clip8(r.volz20[t] ?? 0) - clip8(volzPrev5 ?? 0), // Δvolz5 — biên ±16 tự nhiên
     sma20Prev5 != null && sma20Prev5 > 0 ? sma20 / sma20Prev5 - 1 : 0,
   ];
+  // F-01 (#129): không có macro → vector 16 cũ NGUYÊN VẸN (tương thích ngược
+  // cho serving v8 + mọi caller hiện có — bit-flip test F-01 nghiệm thu 1).
+  if (macro == null) return v16;
+  // 8 chiều vĩ mô — thiếu chuỗi thì chiều = 0 (trung tính, không bỏ mẫu — N2).
+  return [
+    ...v16,
+    macro.dus10y20, // x[16] cb
+    macro.slope10y5y, // x[17] cb
+    macro.dxyMom20, // x[18] ratio
+    macro.vndMom20, // x[19] ratio
+    macro.cmdtyMom20, // x[20] ratio trung bình GC/CL/BZ
+    macro.breadth20, // x[21] 0..1
+    clip3(macro.flow20), // x[22] clip ±3 theo đặc tả F-03
+    macro.sent7, // x[23] −1..+1
+  ];
+}
+
+/** F-01 (#129) — clip flow ±3 (đặc tả F-03 mục 3). */
+function clip3(v: number): number {
+  return Math.max(-3, Math.min(3, v));
 }
 
 /** Nhãn hướng 5 phiên tới: 0=DOWN · 1=FLAT · 2=UP. */
@@ -420,26 +454,78 @@ export interface TrainingSetWithSeries extends TrainingSet {
    * chuỗi NÀY (trước đây route load LẦN THỨ HAI độc lập → bar đổi giữa 2 lượt
    * nạp làm window-hash sai sự thật của cửa sổ đã train). */
   series: SymbolSeries[];
+  /** F-01 (#129): featureSet thực tế đã build ("v2-lag16" | "v3-macro"). */
+  featureSet: "v2-lag16" | "v3-macro";
+  /** F-11 (#129): true nếu rổ chọn point-in-time (chống bias sống sót). */
+  pointInTime: boolean;
+  /** F-09 (#129): nhãn giàu (hướng + biên độ + biến động) — chỉ khi
+   * opts.richLabels; cùng thứ tự X/y (caller multitask dùng). */
+  rich?: RichLabel[];
 }
 
-export async function buildTrainingSet(topN = 20): Promise<TrainingSetWithSeries> {
-  const series = await loadTopSeries(topN);
+/** F-01/F-11 (#129) — tuỳ chọn build tập train. */
+export interface BuildTrainingOpts {
+  /** v3-macro → 24 chiều (8 chiều vĩ mô); mặc định v2-lag16 (16 chiều). */
+  featureSet?: "v2-lag16" | "v3-macro";
+  /** F-11: rổ top-N chọn theo thanh khoản TẠI THỜI ĐIỂM lấy mẫu (weekly basket)
+   * thay vì topByAdtv hiện tại — chống bias sống sót (đặc tả P1-6). */
+  pointInTime?: boolean;
+  /** F-09 (#129): kèm nhãn giàu (dir/mag/vol) cho task multitask. */
+  richLabels?: boolean;
+}
+
+export async function buildTrainingSet(
+  topN = 20,
+  opts: BuildTrainingOpts = {}
+): Promise<TrainingSetWithSeries> {
+  const featureSet = opts.featureSet === ML_FEATURE_SET_V3 ? ML_FEATURE_SET_V3 : "v2-lag16";
+  // F-11 (#129): đường PIT — rổ theo tuần (pointInTimeBaskets), chuỗi nạp cho
+  // union toàn bộ rổ từng xuất hiện; mẫu chỉ giữ khi mã ∈ rổ của tuần đó.
+  const series = opts.pointInTime
+    ? await loadPitUnionSeries(topN)
+    : await loadTopSeries(topN);
+  const pitBaskets = opts.pointInTime ? await weeklyPitBaskets(topN) : null;
   const xs: number[][] = [];
   const ys: number[] = [];
   const syms: string[] = [];
   const dts: string[] = [];
+  const rich: RichLabel[] = []; // F-09 (#129)
+
+  // F-01 (#129): v3-macro — nạp MacroContext cho MỌI ngày lấy mẫu (1 truy
+  // vấn breadth + 1 truy vấn bar vĩ mô + flow + sentiment, cache 10 phút).
+  let macroByDate: Map<string, MacroContext> | null = null;
+  if (featureSet === ML_FEATURE_SET_V3) {
+    // Ngày lấy mẫu chưa biết trước (tuỳ rổ/warmup) — nạp cho TOÀN BỘ ngày
+    // phiên HOSE (distinct) bằng breadth cache làm mốcchuẩn rồi lọc trong
+    // vòng lặp: dùng breadthMap keys (đã có sẵn từ loader) làm nguồn ngày.
+    macroByDate = null; // sẽ lazy-nạp bên dưới khi biết ngày đầu tiên
+  }
 
   for (const s of series) {
     if (s.closes.length < ML_WARMUP_BARS + ML_HORIZON_DAYS) continue;
     const roll = buildRolling(s.closes, s.volumes);
     for (let t = ML_WARMUP_BARS - 1; t < s.closes.length; t++) {
-      const x = featureAt(roll, t);
+      const dateStr = s.bars[t].date.toISOString().slice(0, 10);
+      // F-11: lọc rổ PIT theo tuần của ngày lấy mẫu
+      if (pitBaskets != null && !pitBaskets.inBasket(dateStr, s.instrumentId)) continue;
+      // F-01: lazy nạp macro contexts một lần khi có ngày đầu tiên
+      if (macroByDate === null && featureSet === ML_FEATURE_SET_V3) {
+        const allDates = await hoseSessionDates(); // distinct Bar.date HOSE-STOCK
+        macroByDate = await loadMacroContexts(allDates);
+      }
+      const macro =
+        featureSet === ML_FEATURE_SET_V3 ? (macroByDate?.get(dateStr) ?? null) : undefined;
+      const x = featureSet === ML_FEATURE_SET_V3 ? featureAt(roll, t, macro ?? undefined) : featureAt(roll, t);
       const y = labelAt(roll, t);
       if (x == null || y == null) continue;
       xs.push(x);
       ys.push(y);
       syms.push(s.symbol);
-      dts.push(s.bars[t].date.toISOString().slice(0, 10));
+      dts.push(dateStr);
+      if (opts.richLabels) {
+        const rl = labelRichAt(roll, t);
+        if (rl != null) rich.push(rl);
+      }
     }
   }
 
@@ -453,6 +539,9 @@ export async function buildTrainingSet(topN = 20): Promise<TrainingSetWithSeries
     symbols: keep.map((i) => syms[i]),
     dates: keep.map((i) => dts[i]),
     series, // F-611-01/#61 — digest phải hash CHÍNH chuỗi này
+    featureSet, // F-01 (#129)
+    pointInTime: opts.pointInTime === true, // F-11 (#129)
+    ...(opts.richLabels && rich.length === keep.length ? { rich: keep.map((i) => rich[i]!) } : {}),
   };
 }
 
@@ -647,8 +736,13 @@ export function latestFeatureSnapshot(
  * vẫn vào rổ nếu đủ bar (feature tính từ bar, không cần quote).
  * B5: cùng rổ HOSE-STOCK như lúc train (loadTopSeries) — KHÔNG trộn
  * index/ETF/HNX vào feature serving (drift mô hình).
+ * F-01 (#129): `dims=24` → vector 24 chiều v3-macro (8 chiều vĩ mô phiên
+ * cuối từ latestMacroContext — cache 10 phút, chỉ 1 lần breadth SQL);
+ * mặc định 16 chiều như cũ (tương thích ngược 100%).
  */
-export async function latestFeatures(): Promise<{ symbol: string; x: number[] }[]> {
+export async function latestFeatures(
+  dims: 16 | 24 = 16
+): Promise<{ symbol: string; x: number[] }[]> {
   const ranked = await topByAdtv(10, { market: "HOSE", type: "STOCK" });
 
   const barLists = await Promise.all(
@@ -664,6 +758,15 @@ export async function latestFeatures(): Promise<{ symbol: string; x: number[] }[
     )
   );
 
+  // F-01: macro context phiên cuối — 1 lần cho cả rổ (fail-soft → trung tính).
+  let macroCtx: MacroContext | null = null;
+  if (dims === 24) {
+    macroCtx = await latestMacroContext().catch(() => null);
+    if (macroCtx == null) {
+      macroCtx = { dus10y20: 0, slope10y5y: 0, dxyMom20: 0, vndMom20: 0, cmdtyMom20: 0, breadth20: 0.5, flow20: 0, sent7: 0, missing: 8 };
+    }
+  }
+
   const out: { symbol: string; x: number[] }[] = [];
   ranked.forEach((t, i) => {
     const rows = barLists[i];
@@ -672,8 +775,8 @@ export async function latestFeatures(): Promise<{ symbol: string; x: number[] }[
       rows.map((b) => b.close),
       rows.map((b) => b.volume)
     );
-    const x = featureAt(roll, rows.length - 1);
-    if (x != null) out.push({ symbol: t.symbol, x });
+    const x = featureAt(roll, rows.length - 1, dims === 24 ? macroCtx : undefined);
+    if (x != null && x.length === dims) out.push({ symbol: t.symbol, x });
   });
   return out;
 }
@@ -889,4 +992,487 @@ export function standardize(X: number[][]): { mean: number[]; std: number[]; Xst
 /** Áp norm z-score đã học cho 1 vector đặc trưng (serving). */
 export function applyNorm(x: number[], mean: number[], std: number[]): number[] {
   return x.map((v, j) => (v - (mean[j] ?? 0)) / ((std[j] ?? 1) || 1));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * F-01 (#129 — AI_ENGINEER_REVIEW_BRAIN §3 F-01) · MACRO CONTEXT LOADER
+ * 8 chiều vĩ mô/định lượng cho feature set v3-macro (x[16]–x[23]) — mọi
+ * chiều căn chỉnh point-in-time (N4): bar quốc tế dùng "bar cuối có
+ * date < phiên VN t" (US đóng 04:00 ICT sáng nay → luôn "đã biết" khi VN
+ * mở cửa 09:00); breadth/flow/sentiment dùng chính ngày t. Thiếu chuỗi →
+ * chiều = 0 (trung tính) + đếm missing — KHÔNG bỏ mẫu, KHÔNG bịa (N2).
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** 8 chiều vĩ mô đã căn chỉnh cho MỘT phiên VN (key = "YYYY-MM-DD"). */
+export interface MacroContext {
+  /** Δ lợi suất US10Y 20 phiên (cb — Bar BOND_PCT×100 → /100). */
+  dus10y20: number;
+  /** Độ dốc đường cong 10Y−5Y (cb; âm/nghịch = lo ngại tăng trưởng). */
+  slope10y5y: number;
+  /** Động lượng đô la DXY 20 phiên (ratio). */
+  dxyMom20: number;
+  /** Sức ép tỷ giá VND=X 20 phiên (mất giá = dương). */
+  vndMom20: number;
+  /** Chu kỳ hàng hoá: trung bình MOM20 của GC=F/CL=F/BZ=F (ratio). */
+  cmdtyMom20: number;
+  /** Độ rộng thị trường: tỷ lệ mã HOSE có close > SMA20 (0..1). */
+  breadth20: number;
+  /** Dòng khối ngoại chuẩn hoá: Σ netValue(20p)/Σ ADTV(20p) — F-03. */
+  flow20: number;
+  /** Điểm sentiment lexicon 7 ngày (−1..+1) — F-04. */
+  sent7: number;
+  /** Số chiều vĩ mô thiếu dữ liệu tại phiên này (0..8) — trung thực N6. */
+  missing: number;
+}
+
+/** Chuỗi bar 1 instrument vĩ mô (date string "YYYY-MM-DD" asc + close). */
+interface MacroBarSeries {
+  dates: string[];
+  closes: number[];
+}
+
+/** Symbol vĩ mô phục vụ 8 chiều (14 instrument #126 — chỉ lấy số cần). */
+const MACRO_BAR_SYMBOLS = ["US10Y", "US5Y", "DX-Y.NYB", "VND=X", "GC=F", "CL=F", "BZ=F"] as const;
+
+/** Cache toàn bộ nguồn vĩ mô (bar + breadth + giá trị thị trường + flow +
+ *  sentiment) — TTL 10 phút: buildTrainingSet tuần 1 lần + serving nhẹ. */
+interface MacroCache {
+  at: number;
+  bars: Map<string, MacroBarSeries>;
+  /** Breadth theo ngày: above/total (SQL window, ~0,7s toàn lịch sử). */
+  breadth: Map<string, { above: number; total: number }>;
+  /** Σ giá trị giao dịch HOSE-STOCK theo ngày (VND — làm mẫu ADTV). */
+  mktValue: Map<string, number>;
+  /** Σ ForeignFlow.netValue theo ngày (VND — dương = mua ròng). */
+  flowNet: Map<string, number>;
+  /** Điểm sentiment lexicon theo ngày (F-04). */
+  sentDaily: Map<string, { score: number; n: number }>;
+  /** Lịch phiên HOSE (distinct dates của breadth — sorted asc). */
+  sessions: string[];
+}
+let macroCacheBox: MacroCache | null = null;
+const MACRO_CACHE_TTL_MS = 10 * 60_000;
+
+/** Nạp (hoặc đọc cache) toàn bộ nguồn vĩ mô — fail-soft từng nguồn (N2). */
+async function loadMacroCache(): Promise<MacroCache> {
+  if (macroCacheBox && Date.now() - macroCacheBox.at < MACRO_CACHE_TTL_MS) {
+    return macroCacheBox;
+  }
+  const bars = new Map<string, MacroBarSeries>();
+  try {
+    const instruments = await db.instrument.findMany({
+      where: { symbol: { in: [...MACRO_BAR_SYMBOLS] } },
+      select: { id: true, symbol: true },
+    });
+    const idBySymbol = new Map(instruments.map((i) => [i.symbol, i.id]));
+    const barRows = await db.bar.findMany({
+      where: { instrumentId: { in: instruments.map((i) => i.id) } },
+      orderBy: { date: "asc" },
+      select: { instrumentId: true, date: true, close: true },
+    });
+    for (const row of barRows) {
+      if (!(row.close > 0)) continue;
+      const symbol = instruments.find((i) => i.id === row.instrumentId)?.symbol;
+      if (!symbol) continue;
+      let s = bars.get(symbol);
+      if (!s) {
+        s = { dates: [], closes: [] };
+        bars.set(symbol, s);
+      }
+      s.dates.push(row.date.toISOString().slice(0, 10));
+      s.closes.push(row.close);
+    }
+    void idBySymbol;
+  } catch (err) {
+    console.error("[ml/features] nạp bar vĩ mô lỗi (fail-soft → chiều = 0):", err);
+  }
+
+  // Breadth + tổng giá trị giao dịch 1 truy vấn SQL window (thử đo #129:
+  // 3.439 ngày · 744ms toàn lịch sử — chấp nhận cho nhịp train/serving).
+  const breadth = new Map<string, { above: number; total: number }>();
+  const mktValue = new Map<string, number>();
+  try {
+    const rows = await db.$queryRaw<{ d: Date; above: bigint; total: bigint; val: bigint | null }[]>`
+      WITH b AS (
+        SELECT bar."instrumentId", (bar.date)::date AS d, bar.close,
+               AVG(bar.close) OVER (PARTITION BY bar."instrumentId" ORDER BY bar.date
+                 ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS sma20,
+               (bar.close::bigint) * (bar.volume::bigint) AS val
+        FROM "Bar" bar
+        JOIN "Instrument" i ON i.id = bar."instrumentId"
+        WHERE i."isActive" = true AND i.market = 'HOSE' AND i.type = 'STOCK' AND bar.close > 0
+      )
+      SELECT d,
+             COUNT(*) FILTER (WHERE close > sma20) AS above,
+             COUNT(*) FILTER (WHERE sma20 IS NOT NULL) AS total,
+             SUM(val) AS val
+      FROM b GROUP BY d ORDER BY d`;
+    for (const r of rows) {
+      const key = new Date(r.d).toISOString().slice(0, 10);
+      breadth.set(key, { above: Number(r.above), total: Number(r.total) });
+      mktValue.set(key, Number(r.val ?? 0));
+    }
+  } catch (err) {
+    console.error("[ml/features] breadth SQL lỗi (fail-soft → chiều = 0):", err);
+  }
+
+  // Dòng khối ngoại theo ngày (768+ dòng — simulated khai báo, F-03 Pha A).
+  const flowNet = new Map<string, number>();
+  try {
+    const rows = await db.$queryRaw<{ d: Date; net: bigint }[]>`
+      SELECT (date)::date AS d, SUM("netValue") AS net FROM "ForeignFlow" GROUP BY 1`;
+    for (const r of rows) {
+      flowNet.set(new Date(r.d).toISOString().slice(0, 10), Number(r.net));
+    }
+  } catch (err) {
+    console.error("[ml/features] ForeignFlow SQL lỗi (fail-soft):", err);
+  }
+
+  // Sentiment hằng ngày (F-04 — NewsItem toàn lịch sử tin còn giữ).
+  let sentDaily = new Map<string, { score: number; n: number }>();
+  try {
+    sentDaily = await dailySentimentScores();
+  } catch (err) {
+    console.error("[ml/features] dailySentimentScores lỗi (fail-soft):", err);
+  }
+
+  const sessions = [...breadth.keys()].sort();
+  const cache: MacroCache = { at: Date.now(), bars, breadth, mktValue, flowNet, sentDaily, sessions };
+  macroCacheBox = cache;
+  return cache;
+}
+
+/** alignMacroBefore (N4): index bar cuối có date < vnDate (binary search). */
+function alignBefore(vnDate: string, dates: string[]): number {
+  let lo = 0;
+  let hi = dates.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (dates[mid]! < vnDate) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
+/** Căn chỉnh PIT: trả {i, c} của bar cuối TRƯỚC phiên VN — null khi chưa có. */
+function macroAt(symbol: string, vnDate: string, bars: Map<string, MacroBarSeries>): { i: number; c: number } | null {
+  const s = bars.get(symbol);
+  if (!s) return null;
+  const i = alignBefore(vnDate, s.dates);
+  if (i < 0) return null;
+  return { i, c: s.closes[i]! };
+}
+
+/** Δ value qua 20 PHIÊN của chuỗi vĩ mô tại index i (null khi thiếu depth). */
+function delta20At(s: MacroBarSeries, i: number): number | null {
+  if (i - 20 < 0) return null;
+  return s.closes[i]! - s.closes[i - 20]!;
+}
+
+/** Momentum ratio 20 phiên tại index i (null khi thiếu depth). */
+function mom20At(s: MacroBarSeries, i: number): number | null {
+  if (i - 20 < 0) return null;
+  const prev = s.closes[i - 20]!;
+  return prev > 0 ? s.closes[i]! / prev - 1 : null;
+}
+
+/**
+ * F-01 (#129): nạp MacroContext cho danh sách ngày phiên VN (key "YYYY-MM-DD").
+ * 1 lần gọi = đọc cache 10 phút; thiếu ngày → context trung tính (missing=8).
+ */
+export async function loadMacroContexts(dates: string[]): Promise<Map<string, MacroContext>> {
+  const out = new Map<string, MacroContext>();
+  if (dates.length === 0) return out;
+  const cache = await loadMacroCache();
+  const sessions = cache.sessions;
+  // Cửa sổ trượt 20 phiên cho flow/mktValue — cumulative sum theo sessions.
+  const flowCum: number[] = new Array(sessions.length + 1).fill(0);
+  const mktCum: number[] = new Array(sessions.length + 1).fill(0);
+  for (let i = 0; i < sessions.length; i++) {
+    flowCum[i + 1] = flowCum[i] + (cache.flowNet.get(sessions[i]!) ?? 0);
+    mktCum[i + 1] = mktCum[i] + (cache.mktValue.get(sessions[i]!) ?? 0);
+  }
+  const sessionIdx = new Map<string, number>();
+  sessions.forEach((d, i) => sessionIdx.set(d, i));
+
+  for (const d of [...new Set(dates)]) {
+    let missing = 0;
+    // ── x[16] ΔUS10Y 20 phiên (cb) ──
+    const us10 = macroAt("US10Y", d, cache.bars);
+    const s10 = cache.bars.get("US10Y");
+    let dus10y20 = 0;
+    if (us10 && s10) {
+      const dl = delta20At(s10, us10.i);
+      if (dl != null) dus10y20 = dl / 100; // BOND_PCT×100 → cb
+      else missing++;
+    } else missing++;
+    // ── x[17] slope 10Y−5Y (cb) ──
+    const us5 = macroAt("US5Y", d, cache.bars);
+    let slope10y5y = 0;
+    if (us10 && us5) slope10y5y = (us10.c - us5.c) / 100;
+    else missing++;
+    // ── x[18]/x[19] momentum DXY / VND=X ──
+    const dxy = macroAt("DX-Y.NYB", d, cache.bars);
+    const dxyS = cache.bars.get("DX-Y.NYB");
+    let dxyMom20 = 0;
+    if (dxy && dxyS) {
+      const m = mom20At(dxyS, dxy.i);
+      if (m != null) dxyMom20 = m;
+      else missing++;
+    } else missing++;
+    const vndx = macroAt("VND=X", d, cache.bars);
+    const vndS = cache.bars.get("VND=X");
+    let vndMom20 = 0;
+    if (vndx && vndS) {
+      const m = mom20At(vndS, vndx.i);
+      if (m != null) vndMom20 = m;
+      else missing++;
+    } else missing++;
+    // ── x[20] chu kỳ hàng hoá: trung bình MOM20 GC/CL/BZ (có mấy lấy trung bình mấy) ──
+    const moms: number[] = [];
+    for (const sym of ["GC=F", "CL=F", "BZ=F"] as const) {
+      const at = macroAt(sym, d, cache.bars);
+      const s = cache.bars.get(sym);
+      if (at && s) {
+        const m = mom20At(s, at.i);
+        if (m != null) moms.push(m);
+      }
+    }
+    const cmdtyMom20 = moms.length > 0 ? moms.reduce((a, b) => a + b, 0) / moms.length : 0;
+    if (moms.length === 0) missing++;
+    // ── x[21] breadth: tỷ lệ mã HOSE close > SMA20 ──
+    const br = cache.breadth.get(d);
+    const breadth20 = br && br.total >= 10 ? br.above / br.total : 0.5;
+    if (!br || br.total < 10) missing++;
+    // ── x[22] flow_20: Σ netValue(20 phiên ≤ d) / Σ giá trị GD(20 phiên ≤ d) ──
+    let flow20 = 0;
+    const idx = sessionIdx.get(d);
+    if (idx != null && idx >= 0) {
+      const from = Math.max(0, idx - 19);
+      const netSum = flowCum[idx + 1] - flowCum[from];
+      const valSum = mktCum[idx + 1] - mktCum[from];
+      if (valSum > 0) flow20 = netSum / valSum;
+      else missing++;
+    } else missing++;
+    // ── x[23] sent_7 (F-04 — trung bình trọng số theo độ tươi, n<5 → 0) ──
+    const sent7 = weightedSentiment7(cache.sentDaily, d);
+
+    out.set(d, {
+      dus10y20,
+      slope10y5y,
+      dxyMom20,
+      vndMom20,
+      cmdtyMom20,
+      breadth20,
+      flow20,
+      sent7,
+      missing,
+    });
+  }
+  return out;
+}
+
+/**
+ * F-01/F-17 (#129): MacroContext cho PHIÊN VN CUỐI CÙNG (serving forward) —
+ * dùng bar vĩ mô đã sync sáng nay (06:15 ICT) cho dự báo chiều hôm nay.
+ */
+export async function latestMacroContext(): Promise<MacroContext | null> {
+  const cache = await loadMacroCache();
+  const last = cache.sessions[cache.sessions.length - 1];
+  if (last == null) return null;
+  const map = await loadMacroContexts([last]);
+  return map.get(last) ?? null;
+}
+
+/** F-01 (#129): lịch phiên HOSE (distinct dates) — dùng làm lịch chuẩn flow. */
+export async function hoseSessionDates(): Promise<string[]> {
+  const cache = await loadMacroCache();
+  return cache.sessions;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * F-11 (#129) · POINT-IN-TIME BASKET — chống bias sống sót (P1-6)
+ * Rổ top-N theo Σ giá trị GD 45 phiên KẾT THÚC TRƯỚC tuần lấy mẫu (1 truy
+ * vấn SQL window cho toàn bộ lịch sử ~30 mã × ~717 tuần ≈ 21k dòng).
+ * Giới hạn trung thực: kho chỉ còn instrument isActive — mã đã thoái ngang
+ * khỏi dchart không thể phục hồi (khai báo trong ML_OPS — không bịa).
+ * ═══════════════════════════════════════════════════════════════════ */
+
+export interface PitBaskets {
+  /** Số tuần có rổ (tuần ISO). */
+  weeks: number;
+  /** instrumentId ∈ rổ của tuần chứa dateStr (fallback tuần gần nhất TRƯỚC). */
+  inBasket(dateStr: string, instrumentId: string): boolean;
+  /** Toàn bộ instrumentId từng xuất hiện trong bất kỳ rổ nào (union). */
+  unionIds: Set<string>;
+}
+
+/** Cache rổ PIT theo topN (TTL 10 phút — dùng trong buildTrainingSet). */
+const pitBasketCache = new Map<number, { at: number; value: PitBaskets }>();
+
+export async function weeklyPitBaskets(topN: number): Promise<PitBaskets> {
+  const hit = pitBasketCache.get(topN);
+  if (hit && Date.now() - hit.at < MACRO_CACHE_TTL_MS) return hit.value;
+  // weekKey (YYYY-MM-DD thứ Hai) → instrumentId → adtv45 cuối tuần
+  const byWeek = new Map<string, Map<string, number>>();
+  try {
+    const rows = await db.$queryRaw<{ instrumentId: string; wk: Date; adtv45: bigint }[]>`
+      WITH r AS (
+        SELECT b."instrumentId", (b.date)::date AS d,
+               (SUM((b.close::bigint) * (b.volume::bigint)) OVER (PARTITION BY b."instrumentId"
+                 ORDER BY b.date ROWS BETWEEN 45 PRECEDING AND 1 PRECEDING)) AS adtv45
+        FROM "Bar" b
+        JOIN "Instrument" i ON i.id = b."instrumentId"
+        WHERE i."isActive" = true AND i.market = 'HOSE' AND i.type = 'STOCK' AND b.close > 0 AND b.volume > 0
+      ),
+      ranked AS (
+        SELECT "instrumentId", date_trunc('week', d) AS wk, d, adtv45,
+               ROW_NUMBER() OVER (PARTITION BY "instrumentId", date_trunc('week', d) ORDER BY d DESC) AS rn
+        FROM r WHERE adtv45 IS NOT NULL
+      )
+      SELECT "instrumentId", wk, adtv45 FROM ranked WHERE rn = 1`;
+    for (const r of rows) {
+      const wk = new Date(r.wk).toISOString().slice(0, 10);
+      let m = byWeek.get(wk);
+      if (!m) {
+        m = new Map();
+        byWeek.set(wk, m);
+      }
+      m.set(r.instrumentId, Number(r.adtv45));
+    }
+  } catch (err) {
+    console.error("[ml/features] weeklyPitBaskets SQL lỗi (fail-soft → rổ rỗng):", err);
+  }
+  const weekKeys = [...byWeek.keys()].sort();
+  // top-N mỗi tuần → danh sách rổ theo tuần (giữ thứ tự tuần tăng dần)
+  const basketsByWeek: { week: string; ids: Set<string> }[] = weekKeys.map((wk) => {
+    const entries = [...byWeek.get(wk)!.entries()].sort((a, b) => b[1] - a[1]);
+    return { week: wk, ids: new Set(entries.slice(0, topN).map((e) => e[0])) };
+  });
+  // Tra nhanh: weekKey(date) = date − dow ngày; binary search tuần gần nhất ≤
+  const weekOf = (dateStr: string): string => {
+    const d = new Date(`${dateStr}T00:00:00.000Z`);
+    const dow = d.getUTCDay(); // 0=CN..6=T7 — thứ Hai = 1
+    const delta = dow === 0 ? 6 : dow - 1;
+    d.setUTCDate(d.getUTCDate() - delta);
+    return d.toISOString().slice(0, 10);
+  };
+  const unionIds = new Set<string>();
+  for (const b of basketsByWeek) for (const id of b.ids) unionIds.add(id);
+  const value: PitBaskets = {
+    weeks: basketsByWeek.length,
+    inBasket(dateStr: string, instrumentId: string): boolean {
+      const wk = weekOf(dateStr);
+      // tuần của ngày nằm giữa 2 mốc rổ → dùng rổ TRƯỚC (không nhìn tương lai)
+      let lo = 0;
+      let hi = basketsByWeek.length - 1;
+      let ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (basketsByWeek[mid]!.week <= wk) {
+          ans = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      if (ans < 0) return false; // trước cả rổ đầu tiên — không có dữ liệu rổ
+      return basketsByWeek[ans]!.ids.has(instrumentId);
+    },
+    unionIds,
+  };
+  pitBasketCache.set(topN, { at: Date.now(), value });
+  return value;
+}
+
+/** F-11 (#129): nạp chuỗi SymbolSeries cho UNION toàn bộ rổ PIT từng tuần. */
+async function loadPitUnionSeries(topN: number): Promise<SymbolSeries[]> {
+  const baskets = await weeklyPitBaskets(topN);
+  const ids = [...baskets.unionIds];
+  if (ids.length === 0) return [];
+  const instruments = await db.instrument.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, symbol: true },
+  });
+  const symbolById = new Map(instruments.map((i) => [i.id, i.symbol]));
+  const barRows = await db.bar.findMany({
+    where: { instrumentId: { in: ids } },
+    orderBy: [{ instrumentId: "asc" }, { date: "asc" }],
+    select: { instrumentId: true, date: true, close: true, volume: true },
+  });
+  const byId = new Map<string, { date: Date[]; close: number[]; volume: number[] }>();
+  for (const b of barRows) {
+    if (!(b.close > 0)) continue;
+    let e = byId.get(b.instrumentId);
+    if (!e) {
+      e = { date: [], close: [], volume: [] };
+      byId.set(b.instrumentId, e);
+    }
+    e.date.push(b.date);
+    e.close.push(b.close);
+    e.volume.push(b.volume);
+  }
+  const out: SymbolSeries[] = [];
+  for (const [id, e] of byId) {
+    const symbol = symbolById.get(id);
+    if (!symbol) continue;
+    out.push({
+      symbol,
+      instrumentId: id,
+      bars: e.date.map((date, i) => ({ date, close: e.close[i]!, volume: e.volume[i]! })),
+      closes: e.close,
+      volumes: e.volume,
+    });
+  }
+  return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * F-09 (#129) · NHÃN ĐA NHIỆM — hướng + biên độ + biến động
+ * labelAt (hướng) giữ nguyên cho sweep v2; labelRichAt phục vụ task
+ * multitask (backbone dùng chung, 3 đầu ra — Loss CE + 0,3·MSE_mag +
+ * 0,3·MSE_vol theo đặc tả F-09).
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** Scale biên độ: tanh(ret₅ × 25) — ±2,5% → ±0,76 (đưa về (−1,1) ổn định). */
+export const ML_MAG_SCALE = 25;
+/** Scale biến động: std(ret1, 5 phiên tới) / 0,02 — vol ngày 2% → 1,0. */
+export const ML_VOL_SCALE = 0.02;
+
+/** Nhãn giàu cho multitask (F-09). */
+export interface RichLabel {
+  /** 0=DOWN · 1=FLAT · 2=UP (cùng ngưỡng labelAt). */
+  dir: number;
+  /** |biên độ| 5 phiên tới (tanh×scale) — dấu theo hướng. */
+  mag: number;
+  /** realized vol 5 phiên tới (chuẩn hoá). */
+  vol: number;
+}
+
+/** Nhãn đa nhiệm tại t — null khi chưa đủ 5 phiên tương lai (mirror labelAt). */
+export function labelRichAt(r: RollingSeries, t: number): RichLabel | null {
+  const future = t + ML_HORIZON_DAYS;
+  if (future >= r.closes.length) return null;
+  const ret5 = r.closes[future]! / r.closes[t]! - 1;
+  let m = 0;
+  let v = 0;
+  const rets: number[] = [];
+  for (let u = t + 1; u <= future; u++) {
+    rets.push(r.ret1[u] ?? 0);
+  }
+  m = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : 0; // dùng mean thay std khi ít mẫu
+  v = rets.length
+    ? Math.sqrt(rets.reduce((a, b) => a + (b - m) * (b - m), 0) / rets.length)
+    : 0;
+  const dir = ret5 > ML_LABEL_THRESHOLD ? 2 : ret5 < -ML_LABEL_THRESHOLD ? 0 : 1;
+  return {
+    dir,
+    mag: Math.tanh(ret5 * ML_MAG_SCALE),
+    vol: v / ML_VOL_SCALE,
+  };
 }

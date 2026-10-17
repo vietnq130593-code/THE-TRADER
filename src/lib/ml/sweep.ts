@@ -100,7 +100,22 @@ function clampSweepNum(v: number, min: number, max: number): number {
 export async function readSweepConfig(): Promise<SweepConfig> {
   try {
     const row = await db.appSetting.findUnique({ where: { key: SWEEP_SETTING_KEY } });
-    if (!row) return { ...SWEEP_CONFIG_DEFAULT };
+    if (!row) {
+      // F-00 (#129 — mục 4 "khởi tạo setting"): lần chạy đầu tự upsert
+      // AppSetting ml-sweep (enabled) — UI tuning tab + kill-switch engine
+      // hiển thị TRẠNG THÁI THẬT thay vì default ngầm. Idempotent (upsert).
+      await db.appSetting
+        .upsert({
+          where: { key: SWEEP_SETTING_KEY },
+          create: {
+            key: SWEEP_SETTING_KEY,
+            value: JSON.stringify({ ...SWEEP_CONFIG_DEFAULT, updatedAt: new Date().toISOString() }),
+          },
+          update: {},
+        })
+        .catch(() => undefined);
+      return { ...SWEEP_CONFIG_DEFAULT };
+    }
     const parsed = JSON.parse(row.value) as Partial<SweepConfig>;
     return {
       enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : SWEEP_CONFIG_DEFAULT.enabled,
@@ -203,7 +218,9 @@ export function sanitizeSweepConfigInput(input: unknown): SweepConfigSanitizeRes
 /** Pha của ứng viên trong dãy cố định. */
 export type SweepPhase = "coarse" | "refine";
 
-/** Hyper từng ứng viên — mặc định MLP_TUNING_DEFAULT trừ seed = sweepSeed. */
+/** Hyper từng ứng viên — mặc định MLP_TUNING_DEFAULT trừ seed = sweepSeed.
+ *  F-01 (#129): featureSet của ứng viên ("v2-lag16" | "v3-macro") — quyết
+ *  định chiều vào arch (16/24) và tập train tương ứng. */
 export interface SweepHyper {
   epochs: number;
   patience: number;
@@ -212,6 +229,7 @@ export interface SweepHyper {
   l2: number;
   valFraction: number;
   seed: number;
+  featureSet: string;
 }
 
 /** Một ứng viên sweep — thuần dữ liệu, deterministic từ (budget, weights, seed). */
@@ -237,9 +255,10 @@ const COARSE_KERNELS: readonly number[][] = [
   [12, 8],
 ];
 
-/** Chuỗi arch canonical "in-hidden…-out" từ hidden (in luôn 16, out 3). */
-function archStringOf(hidden: readonly number[]): string {
-  return `16-${hidden.join("-")}-3`;
+/** Chuỗi arch canonical "in-hidden…-out" từ hidden — F-01 (#129): in do
+ *  featureSet quyết định (v2-lag16 = 16 · v3-macro = 24). */
+function archStringOf(hidden: readonly number[], inDims = 16): string {
+  return `${inDims}-${hidden.join("-")}-3`;
 }
 
 /** lr phạm vi hợp lệ (một nguồn — MLP_TUNING_FIELDS #94). */
@@ -255,8 +274,9 @@ function clampLossWeights(w: readonly [number, number, number]): [number, number
 }
 
 /** Hyper mặc định của đợt — MLP_TUNING_DEFAULT nhưng seed = sweepSeed (§4.2:
- *  seed sweep riêng, mọi ứng viên cùng seed → cùng điều kiện so sánh). */
-function sweepHyperDefaults(sweepSeed: number): SweepHyper {
+ *  seed sweep riêng, mọi ứng viên cùng seed → cùng điều kiện so sánh).
+ *  F-01 (#129): featureSet mặc định v2-lag16 (tương thích dãy cũ). */
+function sweepHyperDefaults(sweepSeed: number, featureSet: string): SweepHyper {
   return {
     epochs: MLP_TUNING_DEFAULT.epochs,
     patience: MLP_TUNING_DEFAULT.patience,
@@ -265,6 +285,7 @@ function sweepHyperDefaults(sweepSeed: number): SweepHyper {
     l2: MLP_TUNING_DEFAULT.l2,
     valFraction: MLP_TUNING_DEFAULT.valFraction,
     seed: sweepSeed,
+    featureSet,
   };
 }
 
@@ -274,13 +295,15 @@ function sweepHyperDefaults(sweepSeed: number): SweepHyper {
  * trader đang đặt trong AppSetting ml-tuning ("ý người" giữ ở coarse —
  * Q3 §9). Hyper = mặc định #94 trừ seed = sweepSeed. KHÔNG Math.random,
  * KHÔNG Date.now — cùng đầu vào → cùng danh sách từng ứng viên.
+ * F-01 (#129): featureSet quyết định chiều vào arch (16/24).
  */
 export function buildCoarseCandidates(
   traderLossWeights: readonly [number, number, number],
-  sweepSeed: number
+  sweepSeed: number,
+  featureSet: string = ML_FEATURE_SET
 ): SweepCandidate[] {
   const lw = clampLossWeights(traderLossWeights);
-  const hyper = sweepHyperDefaults(sweepSeed);
+  const hyper = sweepHyperDefaults(sweepSeed, featureSet);
   const out: SweepCandidate[] = [];
   let index = 0;
   for (const kernel of COARSE_KERNELS) {
@@ -661,9 +684,14 @@ interface CandidateEval {
 export async function runSweepOnce(opts: {
   force: boolean;
   budgetOverride?: number;
+  /** F-01 (#129): "v3-macro" → ứng viên 24 chiều (8 chiều vĩ mô — đấu
+   *  sweep fair với serving hiện tại qua cùng val block); mặc định v2-lag16. */
+  featureSet?: string;
 }): Promise<SweepRunSummary> {
   const config = await readSweepConfig();
   const budget = clampSweepInt(opts.budgetOverride ?? config.budgetCandidates, 1, 64);
+  const featureSet = opts.featureSet === "v3-macro" ? "v3-macro" : "v2-lag16";
+  const inDims = featureSet === "v3-macro" ? 24 : 16;
 
   // (1) Mutex dùng chung với train route (F2) — busy → route trả 429.
   if (!tryAcquireTrainLock()) {
@@ -682,7 +710,11 @@ export async function runSweepOnce(opts: {
     //     trên chính chuỗi dùng train). Skip-guard A4-style (điều kiện 4/F8):
     //     !force + đợt "done" gần nhất cùng windowHash VÀ featureSet → trả
     //     skip KHÔNG tạo hàng (tuần không có bar mới = $0).
-    const set = await buildTrainingSet(20);
+    //     F-01 (#129): featureSet v3-macro → tập 24 chiều (8 chiều vĩ mô căn
+    //     chỉnh PIT qua loadMacroContexts — cùng seed, cùng cut 80/20).
+    const set = await buildTrainingSet(20, {
+      featureSet: featureSet === "v3-macro" ? "v3-macro" : "v2-lag16",
+    });
     const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
     if (!opts.force) {
       const lastDone = await db.sweepRun.findFirst({
@@ -692,7 +724,7 @@ export async function runSweepOnce(opts: {
       if (
         lastDone &&
         lastDone.windowHash === windowMeta.windowHash &&
-        lastDone.featureSet === ML_FEATURE_SET
+        lastDone.featureSet === featureSet
       ) {
         return {
           ok: true,
@@ -709,7 +741,7 @@ export async function runSweepOnce(opts: {
     const run = await db.sweepRun.create({
       data: {
         windowHash: windowMeta.windowHash,
-        featureSet: ML_FEATURE_SET,
+        featureSet,
         candidates: budget,
         evaluated: 0,
         seed: config.seed,
@@ -764,7 +796,7 @@ export async function runSweepOnce(opts: {
     //     gian" (không train tiếp), đợt ghi status "failed" (§4.6).
     const tuning = await readEffectiveMlTuning();
     const traderLossWeights = tuning.mlp.lossWeights;
-    const coarse = buildCoarseCandidates(traderLossWeights, config.seed);
+    const coarse = buildCoarseCandidates(traderLossWeights, config.seed, featureSet);
     const coarseCount = Math.min(budget, coarse.length);
     const evals: CandidateEval[] = [];
 
@@ -829,7 +861,7 @@ export async function runSweepOnce(opts: {
           entry: {
             i: cand.index,
             tag: cand.tag,
-            arch: archStringOf(cand.hidden),
+            arch: archStringOf(cand.hidden, inDims),
             activations: [...cand.activations],
             lossWeights: [...cand.lossWeights] as [number, number, number],
             ms: Date.now() - t0,
@@ -847,7 +879,7 @@ export async function runSweepOnce(opts: {
         log.push({
           i: c.index,
           tag: c.tag,
-          arch: archStringOf(c.hidden),
+          arch: archStringOf(c.hidden, inDims),
           activations: [...c.activations],
           lossWeights: [...c.lossWeights] as [number, number, number],
           error: "budget thời gian",
@@ -881,7 +913,7 @@ export async function runSweepOnce(opts: {
             log.push({
               i: cand.index,
               tag: cand.tag,
-              arch: archStringOf(cand.hidden),
+              arch: archStringOf(cand.hidden, inDims),
               activations: [...cand.activations],
               lossWeights: [...cand.lossWeights] as [number, number, number],
               error: "budget thời gian",

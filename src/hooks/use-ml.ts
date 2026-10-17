@@ -77,6 +77,11 @@ export interface BanditArm {
   wins: number;
   /** Trung bình posterior Beta(α+1, β+1) — 0..1. */
   posteriorMean: number;
+  /** F-15 (#129): Wilson CI 95% của tỉ lệ thắng (pulls=0 → [0,1]). */
+  wilsonLow?: number;
+  wilsonHigh?: number;
+  /** F-13 (#129): posterior theo regime hiện tại (null = bảng chung). */
+  regimePosteriorMean?: number | null;
 }
 
 export interface MlModelStatus<TMetrics> {

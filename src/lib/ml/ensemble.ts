@@ -34,6 +34,9 @@ import { db } from "@/lib/db";
 import { latestFeatures, latestFeatureWindows, loadTopSeries } from "@/lib/ml/features";
 import { MLP } from "@/lib/ml/nn";
 import { GRU } from "@/lib/ml/gru";
+// F-07/F-08 (#129): trọng số học từ D-LEDGER + isotonic calibration serving.
+import { readEnsembleWeights } from "@/lib/ml/ensemble-learn";
+import { applyCalibration, parseCalibration, type CalibrationSpec } from "@/lib/ml/calibration";
 
 /** Deadband FLAT — |score| < 0,05 (B7 v1.1). */
 export const ML_ENSEMBLE_DEADBAND = 0.05;
@@ -69,13 +72,13 @@ const SHADOW_LOG_CAP = 80;
 export interface MlEnsembleResult {
   direction: "UP" | "DOWN" | "FLAT";
   /** score = 0,7×(pUp−pDown) + 0,3×tanh(z) (hoặc 0,5/0,2/0,3 khi GRU bật);
-   *  null khi fallback linreg thuần. */
+   *  null khi fallback linreg thuần. F-07: hệ số đọc từ trọng số learned nếu có. */
   score: number | null;
   /** z-score của proj₅ (đại lượng linreg) — null khi thiếu dữ liệu chuỗi. */
   z: number | null;
   /** proj₅ phiên cuối của rổ (%) — đại lượng linreg thô. */
   lastProj: number | null;
-  /** Trung bình xác suất MLP trên rổ (Σ=1); null khi fallback. */
+  /** Trung bình xác suất MLP trên rổ (Σ=1) — ĐÃ hiệu chuẩn isotonic F-08; null khi fallback. */
   pUp: number | null;
   pDown: number | null;
   pFlat: number | null;
@@ -89,6 +92,14 @@ export interface MlEnsembleResult {
   note: string;
   /** B3 (#81) — version GRU khi giọng thứ ba đang PHỤC VỤ (null = không có). */
   gruVersion: number | null;
+  /** F-07 (#129): nguồn trọng số đang phục vụ — fixed | learned. */
+  weightsSource: "fixed" | "learned";
+  /** F-07 (#129): trọng số hiệu lực (hiển thị UI + audit). */
+  weightsApplied: { mlp: number; linreg: number; gru: number };
+  /** F-08 (#129): xác suất MLP đã qua isotonic calibration (false = identity). */
+  calibrated: boolean;
+  /** F-01 (#129): featureSet của bản serving đang đọc (v1-lag10/v2-lag16/v3-macro). */
+  servingFeatureSet: string;
 }
 
 /** Hồi quy tuyến tính: slope chuỗi ys (bản nội bộ — không phụ thuộc module khác). */
@@ -171,7 +182,25 @@ const GRU_SETTING_DEFAULT: GruSetting = {
 export async function readGruSetting(): Promise<GruSetting> {
   try {
     const row = await db.appSetting.findUnique({ where: { key: "ml-gru" } });
-    if (!row) return { ...GRU_SETTING_DEFAULT };
+    if (!row) {
+      // F-00 (#129 — mục 4): lần chạy đầu tự upsert AppSetting ml-gru
+      // (enabled=false, shadow-only — đo #128: key CHƯA TỒN TẠI khiến giọng
+      // thứ 3 chưa từng được bật + UI tuning hiện default ngầm). Idempotent.
+      await db.appSetting
+        .upsert({
+          where: { key: "ml-gru" },
+          create: {
+            key: "ml-gru",
+            value: JSON.stringify({
+              ...GRU_SETTING_DEFAULT,
+              updatedAt: new Date().toISOString(),
+            }),
+          },
+          update: {},
+        })
+        .catch(() => undefined);
+      return { ...GRU_SETTING_DEFAULT };
+    }
     const g = JSON.parse(row.value) as Partial<GruSetting>;
     const sh = (g.shadow ?? {}) as Partial<GruSetting["shadow"]>;
     return {
@@ -382,21 +411,45 @@ export async function mlForecastEnsemble(): Promise<MlEnsembleResult | null> {
       ? (lastProj - projMean) / projStd
       : null;
 
-  /* ── 2. Phần MLP: MlModel serving → predictProba rổ top-10 ── */
+  /* ── 2. Phần MLP: MlModel serving → predictProba rổ top-10 ──
+   * F-01 (#129): bản serving featureSet v3-macro → latestFeatures(24)
+   * (16 chiều giá + 8 chiều vĩ mô phiên cuối); v1/v2 → 16 chiều như cũ.
+   * F-08 (#129): xác suất per-sample QUA isotonic calibration từ
+   * MlModel.meta.calibration trước khi lấy trung bình rổ. */
   const model = await db.mlModel.findFirst({
     where: { kind: "dl-mlp", status: "serving" },
-    select: { version: true, weights: true },
+    select: { version: true, weights: true, meta: true },
   });
+  let servingFeatureSet = "v1-lag10";
+  let calibration: CalibrationSpec | null = null;
+  if (model?.meta) {
+    try {
+      const m = JSON.parse(model.meta) as { featureSet?: unknown };
+      if (typeof m.featureSet === "string") servingFeatureSet = m.featureSet;
+    } catch {
+      // meta hỏng → giữ v1-lag10 + identity
+    }
+    calibration = parseCalibration(model.meta);
+  }
+  const featureDims = servingFeatureSet === "v3-macro" ? 24 : 16;
   let pUp: number | null = null;
   let pDown: number | null = null;
   let pFlat: number | null = null;
   let mlpProbs: [number, number, number] | null = null;
+  let calibrated = false;
   if (model) {
     try {
       const mlp = MLP.fromJSON(model.weights);
-      const feats = await latestFeatures();
+      const feats = await latestFeatures(featureDims);
       if (feats.length > 0) {
-        const probs = feats.map((f) => mlp.predictProba(f.x)); // [pUp, pFlat, pDown]
+        const probs = feats.map((f) => {
+          const raw = mlp.predictProba(f.x); // [pUp, pFlat, pDown]
+          if (calibration == null) return raw;
+          // F-08: áp isotonic trên thứ tự class NỘI BỘ [DOWN, FLAT, UP]
+          const calInternal = applyCalibration(calibration, [raw[2], raw[1], raw[0]]);
+          return [calInternal[2]!, calInternal[1]!, calInternal[0]!] as [number, number, number];
+        });
+        calibrated = calibration != null;
         let up = 0;
         let flat = 0;
         let down = 0;
@@ -465,16 +518,24 @@ export async function mlForecastEnsemble(): Promise<MlEnsembleResult | null> {
     }
   }
 
-  /* ── 3. Ensemble score + deadband FLAT ── */
+  /* ── 3. Ensemble score + deadband FLAT ──
+   * F-07 (#129): trọng số học từ D-LEDGER (AppSetting ml-ensemble-weights
+   * source="learned") thay hardcode khi đủ điều kiện — cold-start/kill-switch
+   * xoá key → fixed như cũ (bit-flip tương thích ngược). */
+  const learned = await readEnsembleWeights().catch(() => null);
+  const useLearned = learned != null && learned.source === "learned";
+  const weightsSource: "fixed" | "learned" = useLearned ? "learned" : "fixed";
+  const wMlpFixed = gruActive ? W_MLP_V3 : W_MLP;
+  const wLinFixed = gruActive ? W_LINREG_V3 : W_LINREG;
+  const wMlpEff = useLearned ? (learned as { wMlp: number }).wMlp : wMlpFixed;
+  const wLinEff = useLearned ? (learned as { wLinreg: number }).wLinreg : wLinFixed;
   let score: number | null = null;
   let direction: "UP" | "DOWN" | "FLAT";
   if (pUp != null && pDown != null) {
-    const wMlp = gruActive ? W_MLP_V3 : W_MLP;
-    const wLin = gruActive ? W_LINREG_V3 : W_LINREG;
     score =
-      wMlp * (pUp - pDown) +
+      wMlpEff * (pUp - pDown) +
       (gruActive && gruProbs != null ? W_GRU * (gruProbs[0] - gruProbs[2]) : 0) +
-      (z != null ? wLin * Math.tanh(z) : 0);
+      (z != null ? wLinEff * Math.tanh(z) : 0);
     direction =
       Math.abs(score) < ML_ENSEMBLE_DEADBAND ? "FLAT" : score > 0 ? "UP" : "DOWN";
   } else {
@@ -496,7 +557,7 @@ export async function mlForecastEnsemble(): Promise<MlEnsembleResult | null> {
 
   const parts: string[] = [];
   if (pUp != null && pDown != null) {
-    parts.push(`MLP v${model?.version} pUp ${(pUp * 100).toFixed(1)}% / pDown ${(pDown * 100).toFixed(1)}%`);
+    parts.push(`MLP v${model?.version}${calibrated ? " (isotonic)" : ""} pUp ${(pUp * 100).toFixed(1)}% / pDown ${(pDown * 100).toFixed(1)}%`);
   } else {
     parts.push(`linreg fallback (chưa có MlModel serving)`);
   }
@@ -507,7 +568,11 @@ export async function mlForecastEnsemble(): Promise<MlEnsembleResult | null> {
   }
   if (z != null) parts.push(`z=${z.toFixed(2)}`);
   if (lastProj != null) parts.push(`proj₅ ${lastProj >= 0 ? "+" : ""}${lastProj.toFixed(2)}%`);
-  if (score != null) parts.push(`score ${score >= 0 ? "+" : ""}${score.toFixed(3)} (deadband ±0,05)`);
+  if (score != null) {
+    parts.push(
+      `score ${score >= 0 ? "+" : ""}${score.toFixed(3)} (deadband ±0,05) · trọng số ${weightsSource === "learned" ? `HỌC ${wMlpEff.toFixed(2)}/${wLinEff.toFixed(2)}` : `fixed ${wMlpEff.toFixed(1)}/${wLinEff.toFixed(1)}`}`
+    );
+  }
   const note = `Ensemble MLP+linreg${gruActive ? "+GRU" : ""} top-${usable.length} HOSE: ${parts.join(" · ")} → ${direction === "UP" ? "TĂNG" : direction === "DOWN" ? "GIẢM" : "ĐI NGANG"}`;
 
   return {
@@ -523,5 +588,13 @@ export async function mlForecastEnsemble(): Promise<MlEnsembleResult | null> {
     basketSize: usable.length,
     note,
     gruVersion: gruActive ? gruVersion : null,
+    weightsSource,
+    weightsApplied: {
+      mlp: Number(wMlpEff.toFixed(3)),
+      linreg: Number(wLinEff.toFixed(3)),
+      gru: gruActive ? W_GRU : 0,
+    },
+    calibrated,
+    servingFeatureSet,
   };
 }

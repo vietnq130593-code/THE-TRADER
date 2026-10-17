@@ -6,6 +6,8 @@ import { mlpArchString, normalizeActivations, parseMlpArch, type MlpActivation }
 import { readEffectiveMlTuning } from "@/lib/ml/tuning";
 import { GRU_ARCH } from "@/lib/ml/gru";
 import { ENSEMBLE_WEIGHTS, ML_ENSEMBLE_DEADBAND } from "@/lib/ml/ensemble";
+// F-07/F-08 (#129): nguồn trọng số học từ D-LEDGER + trạng thái calibration.
+import { readEnsembleWeights } from "@/lib/ml/ensemble-learn";
 import { FEATURE_NAMES } from "@/lib/ml/psi";
 import { ML_FEATURE_COUNT, ML_FEATURE_SET, ML_HORIZON_DAYS } from "@/lib/ml/features";
 
@@ -435,6 +437,35 @@ async function buildArchitecture(): Promise<Record<string, unknown>> {
 
   const countOf = (name: string): number | null => (exact == null ? null : (counts.get(name) ?? 0));
 
+  // F-07/F-08 (#129): đọc nguồn trọng số học + calibration bản serving
+  // (fail-soft — 2 giá trị chỉ phục vụ hiển thị trung thực).
+  const ensembleWeights = await readEnsembleWeights().catch(() => null);
+  let servingCalibration = "identity (chưa fit — bản serving trước #129)";
+  try {
+    const serving = await db.mlModel.findFirst({
+      where: { kind: "dl-mlp", status: "serving" },
+      orderBy: { version: "desc" },
+      select: { meta: true },
+    });
+    if (serving?.meta) {
+      const meta = JSON.parse(serving.meta) as {
+        calibration?: {
+          eceBefore?: number | null;
+          eceAfter?: number | null;
+          whyRejected?: string;
+        };
+      };
+      if (meta.calibration) {
+        servingCalibration =
+          meta.calibration.whyRejected != null
+            ? `identity — bị từ chối: ${meta.calibration.whyRejected}`
+            : `isotonic (ECE ${(meta.calibration.eceBefore ?? "?")} → ${(meta.calibration.eceAfter ?? "?")})`;
+      }
+    }
+  } catch {
+    // meta hỏng → giữ nhãn identity trung thực
+  }
+
   const dbPart = {
     totalModels: models.length,
     totalEnums: enumCount,
@@ -535,6 +566,21 @@ async function buildArchitecture(): Promise<Record<string, unknown>> {
           label: "mlForecastEnsemble()",
           value: `2 giọng: 0,7·MLP + 0,3·linreg · 3 giọng (khi GRU bật): 0,5/0,2/0,3`,
         },
+        // F-07 (#129): nguồn trọng số hiệu lực — learned (từ D-LEDGER) hay fixed.
+        {
+          label: "Nguồn trọng số (F-07)",
+          value:
+            ensembleWeights == null
+              ? "fixed 0,7/0,3 (chưa từng học — cold-start)"
+              : ensembleWeights.source === "learned"
+                ? `HỌC TỪ D-LEDGER: wMlp ${ensembleWeights.wMlp} · wLinreg ${ensembleWeights.wLinreg} (valBrier ${ensembleWeights.valBrier} vs fixed ${ensembleWeights.valBrierFixed} · n=${ensembleWeights.nVotes})`
+                : `fixed 0,7/0,3 — learned bị TỪ CHỐI: ${ensembleWeights.whyRejected ?? "chưa thắng deadband"}`,
+        },
+        // F-08 (#129): isotonic calibration của bản serving.
+        {
+          label: "Hiệu chuẩn xác suất (F-08)",
+          value: servingCalibration,
+        },
         { label: "deadband", value: `|điểm| < ${ML_ENSEMBLE_DEADBAND.toString().replace(".", ",")} → Đi ngang` },
         { label: "PSI drift", value: "so histogram đặc trưng 30 phiên — đề xuất train lại khi ≥ 0,25" },
       ],
@@ -577,6 +623,10 @@ async function buildArchitecture(): Promise<Record<string, unknown>> {
       deadband: ML_ENSEMBLE_DEADBAND,
       twoVoice: ENSEMBLE_WEIGHTS.twoVoice,
       threeVoice: ENSEMBLE_WEIGHTS.threeVoice,
+      // F-07 (#129): nguồn trọng số đang phục vụ + AppSetting learned đầy đủ
+      // (nn-tab hiển thị bảng so sánh — "Công khai" đặc tả F-07 mục 5).
+      weightsSource: ensembleWeights?.source === "learned" ? "learned" : "fixed",
+      learned: ensembleWeights,
     },
     pipeline,
     features: {

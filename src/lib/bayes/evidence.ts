@@ -33,6 +33,8 @@ import { aggregateSentiment } from "@/lib/quant/sentiment";
 import { historicalBaseRates, zscore } from "@/lib/quant/statistics";
 import { loadSegmentBaskets, loadTopSeries, latestFeatureSnapshot, type SegmentBasket } from "@/lib/ml/features";
 import { mlForecastEnsemble } from "@/lib/ml/ensemble";
+// F-13 (#129): posterior contextual theo regime thị trường hiện tại.
+import { posteriorByCodeForCycle } from "@/lib/ml/bandit";
 import { buildBasket, parseQTable, policyStance } from "@/lib/ml/rl";
 import type {
   AgentVote,
@@ -231,9 +233,11 @@ export async function buildEvidenceBundle(
   // agent bầu đúng hướng giá thực tế nhiều → posteriorMean cao → tin hơn.
   // B7: đọc LUÔN (kể cả không có phiếu LLM) vì cử tri thứ 6 ml-forecast cần
   // posteriorMean arm của mình (Beta(1,1) → 0,5 khi arm chưa tồn tại).
-  const banditArms = await db.banditArm.findMany().catch(() => []);
-  const posteriorByCode = new Map(
-    banditArms.map((a) => [a.agentCode, (a.alpha + 1) / (a.alpha + a.beta + 2)])
+  // F-13 (#129): posterior CONTEXTUAL — regime hiện tại đủ pulls ở arm thì
+  // dùng posterior regime, ngược lại bảng chung (posteriorByCodeForCycle —
+  // một nguồn sự thật regime-aware, thay map alpha/beta phẳng cũ).
+  const posteriorByCode = await posteriorByCodeForCycle().catch(
+    () => new Map<string, number>()
   );
   const agentVotes: AgentVote[] = [];
   for (const v of votes) {
@@ -296,6 +300,19 @@ export async function buildEvidenceBundle(
       confidence: mlEns.confidence, // = max(pUp,pDown,pFlat) — BanditEvent Brier (B8)
       successRate: statsMl?.successRate ?? 0,
       weight: mlVoteWeight, // B9 — trùng weight bằng chứng (đã điền ở trên)
+      // F-07 (#129): vector giọng nói tại thời điểm cast — settle chép vào
+      // BanditEvent.meta → ensemble-learn học trọng số từ D-LEDGER.
+      meta: {
+        pUp: mlEns.pUp,
+        pDown: mlEns.pDown,
+        pFlat: mlEns.pFlat,
+        z: mlEns.z,
+        score: mlEns.score,
+        weightsSource: mlEns.weightsSource,
+        modelVersion: mlEns.modelVersion,
+        servingFeatureSet: mlEns.servingFeatureSet,
+        calibrated: mlEns.calibrated,
+      },
     });
     marketEvidence.push({
       source: "llm-vote:ml-forecast",

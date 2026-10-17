@@ -9,7 +9,21 @@ import { db } from "@/lib/db";
  * dữ liệu sống.
  */
 
-export type SourceMode = "live" | "real" | "simulated" | "fallback" | "paper";
+// F-02 Pha A (#129-D): nguồn vĩ mô VN có 2 chế độ riêng ngoài 5 chế độ nguồn
+// giá — "extracted" (đã có ≥1 MacroObservation trích từ tin tức, Pha A) và
+// "pending" (đã khai báo chuỗi nhưng chưa trích được số nào). Q13: stale của
+// chuỗi vĩ mô đo THEO TẦN SUẤT (monthly > 45 ngày / quarterly > 120 ngày —
+// xem macroSeriesSnapshot trong src/lib/macro-vn.ts), KHÔNG dùng ngưỡng
+// 30 phút của nguồn giá → staleOf cố tình trả stale=false cho 2 chế độ này
+// (rơi vào nhánh mặc định cuối hàm).
+export type SourceMode =
+  | "live"
+  | "real"
+  | "simulated"
+  | "fallback"
+  | "paper"
+  | "extracted"
+  | "pending";
 
 export interface SourceDef {
   key: string;
@@ -23,6 +37,10 @@ export const SOURCE_DEFS: SourceDef[] = [
   { key: "news", label: "Tin tức thị trường", defaultMode: "fallback" },
   { key: "foreign-flows", label: "Dòng khối ngoại", defaultMode: "simulated" },
   { key: "trading", label: "Khớp lệnh", defaultMode: "paper" },
+  // F-02 Pha A + F-16 (#129-D): chuỗi vĩ mô nội địa VN (CPI/GDP/SBV/…) —
+  // trích xuất có trích dẫn từ tin tức; mode chuyển "extracted" khi ingest
+  // đầu tiên ghi được MacroObservation (markSource trong src/lib/macro-vn.ts).
+  { key: "macro-vn", label: "Chuỗi vĩ mô VN (trích xuất tin tức)", defaultMode: "pending" },
 ];
 
 export interface SourceStatusRow {
@@ -129,7 +147,10 @@ export interface StaleCheck {
  * Quy tắc stale (DATA_SOURCES.md §6):
  * - mode "fallback" → luôn stale (đang dùng cache);
  * - mode "live" nhưng lastSuccessAt quá 30 phút → stale;
- * - mode "simulated"/"paper" → không stale (đã khai báo mô phỏng).
+ * - mode "simulated"/"paper" → không stale (đã khai báo mô phỏng);
+ * - mode "extracted"/"pending" (macro-vn, F-02A #129-D) → không stale theo
+ *   ngưỡng nguồn giá — Q13 đo stale riêng THEO TẦN SUẤT CHUỖI ở
+ *   macroSeriesSnapshot() (monthly > 45 ngày / quarterly > 120 ngày).
  */
 export function staleOf(row: {
   mode: SourceMode;

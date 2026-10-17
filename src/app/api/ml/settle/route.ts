@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { settlePendingRewards } from "@/lib/ml/bandit";
+import { settlePendingRewards, persistMarketRegime } from "@/lib/ml/bandit";
+// F-04 (#129): chuỗi sentiment hằng ngày — job settle ghi AppSetting rolling 90 ngày.
+import { sentimentDailySnapshot } from "@/lib/quant/sentiment-daily";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,6 +42,32 @@ async function runSettle(): Promise<NextResponse> {
   try {
     const result: SettleRun = await settlePendingRewards();
     const durationMs = Date.now() - started;
+    // F-04 (#129 — đặc tả "job trong settle 16:15"): chấm điểm sentiment
+    // mọi NewsItem theo NGÀY → AppSetting "news-sentiment-daily" rolling 90
+    // ngày (dashboard + nguồn cho chiều x[23] v3-macro qua loader chung).
+    // Fail-soft: lỗi sentiment KHÔNG chặn settle (2 việc độc lập).
+    try {
+      const sentDaily = await sentimentDailySnapshot();
+      const payload = JSON.stringify({
+        daily: sentDaily,
+        sent7: sentDaily.length ? sentDaily[sentDaily.length - 1]?.score ?? 0 : 0,
+        updatedAt: new Date().toISOString(),
+      });
+      await db.appSetting.upsert({
+        where: { key: "news-sentiment-daily" },
+        create: { key: "news-sentiment-daily", value: payload },
+        update: { value: payload },
+      });
+    } catch (sentErr) {
+      console.error("[api/ml/settle] F-04 sentimentDailySnapshot lỗi (fail-soft):", sentErr);
+    }
+    // F-13 (#129)(a): nhãn regime hằng ngày → AppSetting "market-regime"
+    // (contextual bandit + narrative/UI). Fail-soft như trên.
+    try {
+      await persistMarketRegime();
+    } catch (regimeErr) {
+      console.error("[api/ml/settle] F-13 persistMarketRegime lỗi (fail-soft):", regimeErr);
+    }
     // Audit mọi lần chạy — kể cả settled=0 (chưa đủ 5 phiên là trung thực,
     // khác với "không chạy"): truy vết lịch A1 đọc thẳng AuditLog.
     try {

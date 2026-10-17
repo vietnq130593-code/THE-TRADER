@@ -11,6 +11,12 @@
  *     learning-rag A13, hoặc nút tay trong UI / POST API).
  *   · Lớp 3 (serving): top quan hệ → khối prompt "QUAN HỆ THỊ TRƯỜNG ĐÃ HỌC"
  *     cho market-analyst · news-sentiment · portfolio-strategist (fail-soft).
+ *   · F-10 #129-B (thêm sau #128): Lớp 1b QUỐC TẾ — lead-lag kênh truyền dẫn
+ *     quốc tế → VN (^GSPC · ^IXIC · DXY · GC · CL · US10Y · ^HSI · Tencent ×
+ *     VNINDEX · VN30) ghép cặp point-in-time theo GIỜ ĐÓNG CỬA (đêm Mỹ tối qua
+ *     → sáng VN nay = lag 0; HK đóng sau close VN cùng ngày nên chỉ lag ≥ 1),
+ *     permutation test + Bonferroni; lưu CÙNG bảng MarketRelation nhưng dưới
+ *     họ sourceKey "intl:*" tách biệt họ trong nước — chi tiết §F-10 bên dưới.
  *
  * Kỷ luật trung thực (blueprint §0): mọi quan hệ kèm obs + cửa sổ dữ liệu;
  * không đủ mẫu → KHÔNG lưu quan hệ (kho tin hiện ngắn → lớp news tự báo
@@ -396,8 +402,11 @@ export async function refreshRelations(): Promise<XrelRefreshResult> {
   const t0 = Date.now();
   const segs = await loadPriceSegments();
   if (segs.length < 2) {
-    // Không đủ segment để học — xoá bảng cũ, trả rỗng trung thực.
-    await db.marketRelation.deleteMany({});
+    // Không đủ segment để học — xoá bảng cũ (CHỈ họ trong nước — F-10 #129-B giữ
+    // nguyên họ "intl:*" có vòng refresh riêng), trả rỗng trung thực.
+    await db.marketRelation.deleteMany({
+      where: { sourceKey: { not: { startsWith: "intl:" } } },
+    });
     return {
       segments: segs.length,
       priceRelations: 0,
@@ -428,9 +437,14 @@ export async function refreshRelations(): Promise<XrelRefreshResult> {
   const newsRes = computeNewsRelations(news, segs, price.windowFrom, price.windowTo);
 
   const rows = [...price.rows, ...newsRes.rows];
-  // Persist: bảng là trạng thái học hiện tại — replace toàn bộ (≤ 60 dòng).
+  // Persist: bảng là trạng thái học hiện tại — replace toàn bộ HỌ TRONG NƯỚC
+  // (≤ 60 dòng). F-10 #129-B: deleteMany scoped `not startsWith "intl:"` —
+  // refresh trong nước KHÔNG xoá quan hệ quốc tế (họ intl: có vòng tính riêng
+  // refreshIntlRelations, cùng bảng, cách nhau bằng prefix key).
   await db.$transaction([
-    db.marketRelation.deleteMany({}),
+    db.marketRelation.deleteMany({
+      where: { sourceKey: { not: { startsWith: "intl:" } } },
+    }),
     ...(rows.length > 0
       ? [db.marketRelation.createMany({ data: rows })]
       : []),
@@ -453,24 +467,634 @@ export async function refreshRelations(): Promise<XrelRefreshResult> {
   };
 }
 
-// ─────────────────────────── Lớp 3 · Serving ───────────────────────────
+// ─────────────── F-10 #129-B · Lớp 1b — XREL quốc tế (lead-lag căn giờ) ───────────────
+//
+// Kênh truyền dẫn quốc tế → VN (AI_ENGINEER_REVIEW_BRAIN v3 §F-10): tính
+// lead-lag giữa 8 nguồn quốc tế và 2 chỉ số VN, lưu MarketRelation (kind
+// "price") dưới họ sourceKey "intl:*" — prefix tách 2 họ trong CÙNG bảng để
+// (a) refresh trong nước không đè quan hệ quốc tế và ngược lại, (b) consumer
+// quốc tế (buildXrelIntlPromptBlock) đọc riêng, consumer trong nước giữ nguyên.
+//
+// QUY TẮC CĂN GIỜ (N4 — point-in-time, quan trọng nhất của F-10):
+//   · Nguyên tắc: bar nguồn phải đóng cửa STRICT TRƯỚC phiên VN phản ứng — mọi
+//     cặp (nguồn d, đích t) chỉ được ghép khi close nguồn xong trước khi phiên
+//     VN t mở cửa 09:00 ICT, tức thông tin nguồn ĐÃ BIẾT khi VN giao dịch t.
+//   · Nhóm US (đóng ~04:00 ICT ngày d+1, TRƯỚC mở VN 09:00 ngày d+1): US(d) ghép
+//     với phiên VN ĐẦU TIÊN sau ngày d — "đêm Mỹ tối qua → sáng VN nay" = LAG 0;
+//     lag L = thêm L phiên VN nữa (US(d) → VN(d+1) là lag 0 theo khung "US lead").
+//   · Nhóm HK (đóng 17:00 ICT ngày d — SAU close VN 15:00 cùng ngày, phiên HK
+//     giao dịch chồng lấn phiên VN cùng ngày): bỏ pairing trực tiếp ngay phiên
+//     kế — HK chỉ dùng LAG ≥ 1 (đích = phiên VN kế của phiên kế sau close HK).
+//   · Thực dụng (theo đúng spec): lịch phiên VN = distinct Bar.date của VNINDEX
+//     (sorted ASC); base(d) = ngày VN giao dịch đầu tiên > d (binary search);
+//     target = base(d) + L phiên VN. Ngày lễ lệch → base tự nhảy sang phiên VN
+//     kế có thật (đúng nguyên tắc point-in-time); hết mảng → bỏ cặp.
+//
+// Thống kê (§F-10.3): Pearson r trên logret daily, tối thiểu 120 cặp ngày
+// chung (obs = overlapDays); permutation test 200 lần xáo trộn chuỗi nguồn
+// (mulberry32 seed cố định — tái lập được, 0 dependency) → p hai phía; hiệu
+// chỉnh Bonferroni × số test đã tính; giữ |r| ≥ 0,25 & p_bonf ≤ 0,05.
 
-/** Đọc quan hệ hiện có (đã xếp theo strength DESC). */
-export async function getRelations(take = 60) {
-  return db.marketRelation.findMany({ orderBy: { strength: "desc" }, take });
+/** F-10 #129-B: ngưỡng số cặp ngày chung tối thiểu để tính 1 tổ hợp. */
+const INTL_MIN_OVERLAP = 120;
+/** F-10 #129-B: số phép xáo trộn cho permutation test (seed cố định). */
+const INTL_PERM_N = 200;
+/** Seed cố định mulberry32 — cùng dữ liệu ⇒ cùng p-value (tái lập được). */
+const INTL_PERM_SEED = 0x129b;
+/** Ngưỡng giữ quan hệ quốc tế: |r| tối thiểu (chặt hơn trong nước 0,15). */
+const INTL_MIN_ABS_CORR = 0.25;
+/** Ngưỡng giữ quan hệ quốc tế: p permutation SAU Bonferroni. */
+const INTL_MAX_P = 0.05;
+/** Số dòng quan hệ quốc tế tiêm khối prompt (kèm diễn giải chiều). */
+const INTL_PROMPT_TOP = 3;
+/** Trần ký tự khối prompt quốc tế (3 dòng giàu diễn giải hơn domestic). */
+const INTL_PROMPT_CHAR_CAP = 1_200;
+/** Cache in-process cho khối prompt quốc tế (đồng nhịp BLOCK_TTL_MS). */
+const INTL_BLOCK_TTL_MS = 60_000;
+
+/** Nguồn quốc tế: symbol DB → key chuẩn hoá (bỏ ký tự đặc biệt) + nhãn tiếng Việt. */
+interface IntlSourceSpec {
+  symbol: string;
+  /** Prefix "intl:" + ký hiệu đã làm sạch (^GSPC → intl:GSPC, 0700.HK → intl:HK0700). */
+  key: string;
+  label: string;
+  /** Nhóm giờ đóng cửa: "US" ≈ 04:00 ICT ngày d+1 · "HK" = 17:00 ICT ngày d. */
+  closeGroup: "US" | "HK";
+  /** Lag được phép: US {0,1,2} · HK {1,2} (bỏ lag 0 — close HK sau close VN). */
+  lags: number[];
 }
 
-/** GET-route: refresh nếu bảng trống hoặc cũ hơn 12h — fail-soft. */
+/** 8 nguồn F-10 #129-B — mọi mã ĐÃ sync 06:15 (Instrument.symbol thật trong DB). */
+const INTL_SOURCES: IntlSourceSpec[] = [
+  { symbol: "^GSPC", key: "intl:GSPC", label: "S&P 500 (Mỹ)", closeGroup: "US", lags: [0, 1, 2] },
+  { symbol: "^IXIC", key: "intl:IXIC", label: "Nasdaq Composite (Mỹ)", closeGroup: "US", lags: [0, 1, 2] },
+  { symbol: "DX-Y.NYB", key: "intl:DXY", label: "Chỉ số Đô la Mỹ (DXY)", closeGroup: "US", lags: [0, 1, 2] },
+  { symbol: "GC=F", key: "intl:GC", label: "Vàng COMEX (Mỹ)", closeGroup: "US", lags: [0, 1, 2] },
+  { symbol: "CL=F", key: "intl:CL", label: "Dầu thô WTI (Mỹ)", closeGroup: "US", lags: [0, 1, 2] },
+  { symbol: "US10Y", key: "intl:US10Y", label: "Lợi suất TPCP Mỹ 10 năm", closeGroup: "US", lags: [0, 1, 2] },
+  { symbol: "^HSI", key: "intl:HSI", label: "Chỉ số Hang Seng (Hồng Kông)", closeGroup: "HK", lags: [1, 2] },
+  { symbol: "0700.HK", key: "intl:HK0700", label: "Tencent (Hồng Kông)", closeGroup: "HK", lags: [1, 2] },
+];
+
+/** Tra nhanh closeGroup theo sourceKey (dùng lại ở serving để diễn giải lag). */
+const INTL_SOURCE_BY_KEY = new Map(INTL_SOURCES.map((s) => [s.key, s]));
+
+/** Đích VN: giữ key chuẩn trong nước (VN30 = "vn30" như segment ETF proxy của
+ * refreshRelations; VNINDEX theo cùng quy ước slug thường — không tách chuẩn). */
+const INTL_TARGETS: { symbol: string; key: string; label: string }[] = [
+  { symbol: "VNINDEX", key: "vnindex", label: "VN-Index" },
+  { symbol: "VN30", key: "vn30", label: "Chỉ số VN30" },
+];
+
+/** 1 dòng quan hệ quốc tế đủ số liệu để persist (shape khớp MarketRelation). */
+interface IntlRelationDraft {
+  sourceKey: string;
+  sourceLabel: string;
+  targetKey: string;
+  targetLabel: string;
+  lag: number;
+  kind: "price";
+  corr: number;
+  condUp: number | null;
+  condDown: number | null;
+  obs: number;
+  shockUpN: number;
+  shockDownN: number;
+  strength: number;
+  windowFrom: Date;
+  windowTo: Date;
+}
+
+/** Kết quả 1 đợt refresh quốc tế — summary trung thực theo spec F-10 #129-B. */
+export interface XrelIntlSkipped {
+  /** "intl:GSPC→vnindex:L0" — định danh tổ hợp (nguồn × đích × lag). */
+  pair: string;
+  reason: string;
+}
+
+export interface XrelIntlRefreshResult {
+  /** Tổng tổ hợp (nguồn × đích × lag) đã duyệt = kept + skipped.length. */
+  pairs: number;
+  /** Số quan hệ đạt CẢ 2 ngưỡng (|r| ≥ 0,25 & p Bonferroni ≤ 0,05) → đã lưu. */
+  kept: number;
+  /** Kích thước họ giả thuyết đã tính p — hệ số Bonferroni của đợt. */
+  tested: number;
+  /** Từng tổ hợp không lưu được + lý do (thiếu mẫu / dưới ngưỡng / lỗi cặp). */
+  skipped: XrelIntlSkipped[];
+  windowFrom: string;
+  windowTo: string;
+  durationMs: number;
+}
+
+/** PRNG mulberry32 (F-10 #129-B — tự viết, 0 dependency, seed cố định). */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return function next(): number {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Fisher–Yates in-place dùng PRNG truyền vào (xáo trộn chuỗi nguồn). */
+function shuffleInPlace<T>(arr: T[], rand: () => number): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+}
+
+/**
+ * Permutation test 2 phía cho Pearson: xáo trộn THỨ TỰ chuỗi nguồn 200 lần,
+ * đếm tỉ lệ |r| xáo trộn ≥ |r| quan sát. Seed cố định mỗi tổ hợp ⇒ p-value tái
+ * lập được giữa các đợt (cùng dữ liệu → cùng kết luận, không nhảy ngẫu nhiên).
+ */
+function intlPermTwoSidedP(xs: number[], ys: number[], rObs: number): number {
+  const rand = mulberry32(INTL_PERM_SEED);
+  const shuffled = xs.slice();
+  const absRObs = Math.abs(rObs);
+  let ge = 0;
+  for (let i = 0; i < INTL_PERM_N; i++) {
+    shuffleInPlace(shuffled, rand);
+    const rp = correlation(shuffled, ys);
+    if (rp != null && Math.abs(rp) >= absRObs) ge++;
+  }
+  return ge / INTL_PERM_N;
+}
+
+/** Nạp chuỗi logret daily của 1 instrument theo symbol (bar ASC theo ngày). */
+async function loadIntlReturns(
+  symbol: string
+): Promise<{ days: string[]; rets: Map<string, number> } | null> {
+  // Instrument.symbol là @unique — findFirst deterministic; giữ filter like
+  // loadPriceSegments để không học trên mã đã deactivate/xoá mềm.
+  const inst = await db.instrument.findFirst({
+    where: { symbol, isActive: true, deletedAt: null },
+    select: { id: true },
+  });
+  if (!inst) return null;
+  const bars = await db.bar.findMany({
+    where: { instrumentId: inst.id },
+    orderBy: { date: "asc" },
+    select: { date: true, close: true },
+  });
+  if (bars.length < 2) return null;
+  const days: string[] = [];
+  const rets = new Map<string, number>();
+  for (let i = 1; i < bars.length; i++) {
+    // Lợi suất log của chính chuỗi nguồn (close phiên trước → close phiên này,
+    // theo lịch phiên CỦA NGUỒN — không dính lịch VN).
+    const r = logRet(bars[i - 1].close, bars[i].close);
+    if (r == null) continue;
+    const day = barDayKey(bars[i].date);
+    days.push(day);
+    rets.set(day, r);
+  }
+  if (days.length === 0) return null;
+  return { days, rets };
+}
+
+/** lower-bound: index ĐẦU TIÊN của mảng ngày ASC có day > key (=== length ⇒ hết). */
+function firstIndexAfter(sortedDays: string[], key: string): number {
+  let lo = 0;
+  let hi = sortedDays.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedDays[mid] <= key) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Ghép cặp point-in-time 1 tổ hợp (nguồn × đích × lag) theo quy tắc căn giờ
+ * §F-10: với mỗi ngày nguồn d có lợi suất, base = phiên VN ĐẦU TIÊN > d (đêm
+ * Mỹ/chiều HK đã đóng trước đó), target = base + L phiên VN. Trả về mảng cặp
+ * (x = logret nguồn, y = logret đích tại target) + biên cửa sổ dữ liệu thực.
+ */
+function pairIntlLag(
+  srcDays: string[],
+  srcRets: Map<string, number>,
+  tgtRets: Map<string, number>,
+  vnCalendar: string[],
+  lag: number
+): {
+  xs: number[];
+  ys: number[];
+  firstSourceDay: string | null;
+  lastTargetDay: string | null;
+} {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  let firstSourceDay: string | null = null;
+  let lastTargetDay: string | null = null;
+  for (const d of srcDays) {
+    const x = srcRets.get(d);
+    if (x == null) continue;
+    const base = firstIndexAfter(vnCalendar, d);
+    if (base >= vnCalendar.length) continue; // không còn phiên VN nào sau d
+    const ti = base + lag;
+    if (ti >= vnCalendar.length) continue; // lag đẩy ra khỏi mảng → bỏ cặp
+    const tDay = vnCalendar[ti];
+    const y = tgtRets.get(tDay);
+    if (y == null) continue; // đích thiếu dữ liệu ngày đó (trung thực: bỏ cặp)
+    xs.push(x);
+    ys.push(y);
+    if (firstSourceDay == null) firstSourceDay = d;
+    lastTargetDay = tDay;
+  }
+  return { xs, ys, firstSourceDay, lastTargetDay };
+}
+
+/**
+ * Chạy toàn bộ engine Lớp 1b quốc tế F-10 #129-B: nạp chuỗi nguồn/đích → ghép
+ * cặp căn giờ point-in-time → Pearson + permutation + Bonferroni → upsert họ
+ * "intl:*" trong MarketRelation (dọn quan hệ cũ không còn đạt ngưỡng — bảng
+ * luôn phản ánh trạng thái học HIỆN TẠI). Fail-soft TỪNG CẶP: 1 tổ hợp lỗi
+ * (thiếu instrument, thiếu bar, exception tính toán) chỉ vào `skipped`, không
+ * giết đợt. Idempotent, an toàn gọi chồng.
+ */
+export async function refreshIntlRelations(): Promise<XrelIntlRefreshResult> {
+  const t0 = Date.now();
+  const skipped: XrelIntlSkipped[] = [];
+
+  // ── Đích VN + lịch phiên VN (neo lịch vào VNINDEX theo spec F-10) ──────────
+  const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  let vnIndex: Awaited<ReturnType<typeof loadIntlReturns>> = null;
+  let vnIndexErr: string | null = null;
+  let vn30: Awaited<ReturnType<typeof loadIntlReturns>> = null;
+  let vn30Err: string | null = null;
+  try {
+    vnIndex = await loadIntlReturns("VNINDEX");
+  } catch (err) {
+    vnIndexErr = errMsg(err);
+  }
+  try {
+    vn30 = await loadIntlReturns("VN30");
+  } catch (err) {
+    vn30Err = errMsg(err);
+  }
+  const vnCalendar = vnIndex?.days ?? null;
+  const targets: {
+    spec: (typeof INTL_TARGETS)[number];
+    data: Awaited<ReturnType<typeof loadIntlReturns>>;
+    err: string | null;
+  }[] = [
+    { spec: INTL_TARGETS[0], data: vnIndex, err: vnIndexErr },
+    { spec: INTL_TARGETS[1], data: vn30, err: vn30Err },
+  ];
+
+  // ── Ghép cặp + thống kê từng tổ hợp (fail-soft từng cặp) ──────────────────
+  // 2 pha: (1) gom tổ hợp ĐỦ MẪU có r hợp lệ → p permutation; (2) Bonferroni
+  // với m = số test đã tính rồi chốt ngưỡng giữ — m phản ánh đúng họ giả thuyết.
+  interface Staged {
+    draft: IntlRelationDraft;
+    pPerm: number;
+  }
+  const staged: Staged[] = [];
+
+  for (const src of INTL_SOURCES) {
+    let srcData: Awaited<ReturnType<typeof loadIntlReturns>> = null;
+    let srcErr: string | null = null;
+    try {
+      srcData = await loadIntlReturns(src.symbol);
+    } catch (err) {
+      srcErr = errMsg(err);
+    }
+    for (const tgt of targets) {
+      for (const lag of src.lags) {
+        const pair = `${src.key}→${tgt.spec.key}:L${lag}`;
+        try {
+          if (srcErr) {
+            skipped.push({ pair, reason: `lỗi nạp bar nguồn ${src.symbol}: ${srcErr}` });
+            continue;
+          }
+          if (!srcData) {
+            skipped.push({ pair, reason: `nguồn ${src.symbol} không có instrument active hoặc không đủ bar trong DB` });
+            continue;
+          }
+          if (!vnCalendar) {
+            skipped.push({
+              pair,
+              reason: `lịch phiên VN không dựng được từ VNINDEX${vnIndexErr ? `: ${vnIndexErr}` : " (không có bar)"}`,
+            });
+            continue;
+          }
+          if (tgt.err) {
+            skipped.push({ pair, reason: `lỗi nạp bar đích ${tgt.spec.symbol}: ${tgt.err}` });
+            continue;
+          }
+          if (!tgt.data) {
+            skipped.push({ pair, reason: `đích ${tgt.spec.symbol} không có instrument active hoặc không đủ bar trong DB` });
+            continue;
+          }
+
+          const { xs, ys, firstSourceDay, lastTargetDay } = pairIntlLag(
+            srcData.days,
+            srcData.rets,
+            tgt.data.rets,
+            vnCalendar,
+            lag
+          );
+          const obs = xs.length; // overlapDays — số cặp ngày chung thực dụng
+          if (obs < INTL_MIN_OVERLAP) {
+            skipped.push({
+              pair,
+              reason: `chưa đủ mẫu: ${obs}/${INTL_MIN_OVERLAP} cặp ngày chung (dữ liệu quốc tế đang tích luỹ)`,
+            });
+            continue;
+          }
+          const corr = correlation(xs, ys);
+          if (corr == null) {
+            skipped.push({ pair, reason: "chuỗi không có phương sai — corr không xác định" });
+            continue;
+          }
+
+          // Cú sốc nguồn (ngưỡng dùng chung SHOCK_PCT với lớp trong nước) — condUp/
+          // condDown KHÔNG bịa khi thiếu mẫu: null nếu số mẫu cú sốc < SHOCK_MIN_N.
+          let shockUpN = 0;
+          let shockUpTargetUp = 0;
+          let shockDownN = 0;
+          let shockDownTargetDown = 0;
+          for (let i = 0; i < obs; i++) {
+            const x = xs[i];
+            const y = ys[i];
+            if (x > SHOCK_PCT) {
+              shockUpN++;
+              if (y > 0) shockUpTargetUp++;
+            } else if (x < -SHOCK_PCT) {
+              shockDownN++;
+              if (y < 0) shockDownTargetDown++;
+            }
+          }
+
+          staged.push({
+            draft: {
+              sourceKey: src.key,
+              sourceLabel: src.label,
+              targetKey: tgt.spec.key,
+              targetLabel: tgt.spec.label,
+              lag,
+              kind: "price",
+              corr,
+              condUp: shockUpN >= SHOCK_MIN_N ? shockUpTargetUp / shockUpN : null,
+              condDown: shockDownN >= SHOCK_MIN_N ? shockDownTargetDown / shockDownN : null,
+              obs,
+              shockUpN,
+              shockDownN,
+              strength: Math.abs(corr) * Math.min(1, obs / 250),
+              // Cửa sổ từ dữ liệu THỰC của chính tổ hợp (ngày nguồn đầu ghép
+              // được → ngày đích cuối ghép được), không phải hằng số.
+              windowFrom: new Date(`${firstSourceDay}T00:00:00.000Z`),
+              windowTo: new Date(`${lastTargetDay}T00:00:00.000Z`),
+            },
+            pPerm: intlPermTwoSidedP(xs, ys, corr),
+          });
+        } catch (err) {
+          skipped.push({ pair, reason: `lỗi tính toán: ${errMsg(err)}` });
+        }
+      }
+    }
+  }
+
+  // ── Bonferroni trên đúng họ đã tính → chốt quan hệ giữ ────────────────────
+  const m = staged.length;
+  const kept: IntlRelationDraft[] = [];
+  for (const { draft, pPerm } of staged) {
+    const pBonf = Math.min(1, pPerm * m);
+    const reasons: string[] = [];
+    if (Math.abs(draft.corr) < INTL_MIN_ABS_CORR) {
+      reasons.push(`|r|=${draft.corr.toFixed(3)} < ${INTL_MIN_ABS_CORR}`);
+    }
+    if (pBonf > INTL_MAX_P) {
+      reasons.push(`p_bonf=${pBonf.toFixed(3)} > ${INTL_MAX_P}`);
+    }
+    if (reasons.length > 0) {
+      skipped.push({
+        pair: `${draft.sourceKey}→${draft.targetKey}:L${draft.lag}`,
+        reason: reasons.join(" · "),
+      });
+      continue;
+    }
+    kept.push(draft);
+  }
+
+  // ── Persist họ "intl:*": upsert tổ hợp đạt ngưỡng + dọn tổ hợp cũ đã rớt ──
+  // (bảng = trạng thái học hiện tại của HỌ intl — mirror semantics replace-all
+  // của lớp trong nước nhưng scoped prefix; unique [sourceKey,targetKey,lag,kind]).
+  const now = new Date();
+  await db.$transaction([
+    db.marketRelation.deleteMany({
+      where:
+        kept.length === 0
+          ? { sourceKey: { startsWith: "intl:" } }
+          : {
+              sourceKey: { startsWith: "intl:" },
+              NOT: {
+                OR: kept.map((k) => ({
+                  sourceKey: k.sourceKey,
+                  targetKey: k.targetKey,
+                  lag: k.lag,
+                  kind: "price",
+                })),
+              },
+            },
+    }),
+    ...kept.map((k) =>
+      db.marketRelation.upsert({
+        where: {
+          sourceKey_targetKey_lag_kind: {
+            sourceKey: k.sourceKey,
+            targetKey: k.targetKey,
+            lag: k.lag,
+            kind: "price",
+          },
+        },
+        create: { ...k, computedAt: now },
+        update: { ...k, computedAt: now },
+      })
+    ),
+  ]);
+
+  const windowFrom = kept.length
+    ? new Date(Math.min(...kept.map((k) => k.windowFrom.getTime())))
+        .toISOString()
+        .slice(0, 10)
+    : "";
+  const windowTo = kept.length
+    ? new Date(Math.max(...kept.map((k) => k.windowTo.getTime())))
+        .toISOString()
+        .slice(0, 10)
+    : "";
+
+  return {
+    pairs: kept.length + skipped.length,
+    kept: kept.length,
+    tested: m,
+    skipped,
+    windowFrom,
+    windowTo,
+    durationMs: Date.now() - t0,
+  };
+}
+
+/** Diễn giải lag quốc tế cho prompt — quy ước căn giờ F-10 #129-B. */
+function intlLagPhrase(sourceKey: string, lag: number): string {
+  // lag 0 (chỉ nhóm US) = phiên VN ĐẦU TIÊN sau đêm nguồn; lag L = L phiên
+  // bổ sung nữa ⇒ phiên VN thứ (L+1) kể từ sau đóng cửa nguồn.
+  if (lag === 0) return "đêm Mỹ tối qua → sáng VN nay (lag 0)";
+  const group = INTL_SOURCE_BY_KEY.get(sourceKey)?.closeGroup;
+  if (group === "HK") return `chiều HK → phiên VN thứ ${lag + 1} sau close HK (lag ${lag})`;
+  if (group === "US") return `đêm Mỹ → phiên VN thứ ${lag + 1} sau (lag ${lag})`;
+  return `phiên VN thứ ${lag + 1} sau đóng cửa nguồn (lag ${lag})`;
+}
+
+/** Dòng quan hệ quốc tế rút gọn + diễn giải chiều cho prompt agents. */
+function intlRelationLine(r: {
+  sourceKey: string;
+  sourceLabel: string;
+  targetLabel: string;
+  lag: number;
+  corr: number;
+  condUp: number | null;
+  condDown: number | null;
+  shockUpN: number;
+  shockDownN: number;
+  obs: number;
+}): string {
+  // Diễn giải chiều (F-10 #129-B): r>0 — nguồn tăng thì VN có xu hướng tăng
+  // phiên phản ứng ("Mỹ tăng đêm qua → VN có xu hướng tăng phiên kế"); r<0 nghịch.
+  const dir =
+    r.corr >= 0
+      ? `${r.sourceLabel} tăng → ${r.targetLabel} có xu hướng TĂNG phiên phản ứng (cùng chiều)`
+      : `${r.sourceLabel} tăng → ${r.targetLabel} có xu hướng GIẢM phiên phản ứng (nghịch chiều)`;
+  const parts = [
+    `${r.sourceLabel} → ${r.targetLabel}`,
+    intlLagPhrase(r.sourceKey, r.lag),
+    `r=${r.corr >= 0 ? "+" : ""}${r.corr.toFixed(2)}`,
+    `n=${r.obs} cặp ngày`,
+    dir,
+  ];
+  if (r.condUp != null) parts.push(`P(VN↑|nguồn↑)=${Math.round(r.condUp * 100)}% (${r.shockUpN} mẫu)`);
+  if (r.condDown != null) parts.push(`P(VN↓|nguồn↓)=${Math.round(r.condDown * 100)}% (${r.shockDownN} mẫu)`);
+  if (r.condUp == null && r.condDown == null) {
+    parts.push("chưa đủ mẫu cú sốc cho xác suất điều kiện");
+  }
+  return parts.join(" · ");
+}
+
+let intlBlockCache: { at: number; block: string | null } | null = null;
+
+/**
+ * Khối prompt "KÊNH TRUYỀN DẪN QUỐC TẾ → VN" (F-10 #129-B — 3 quan hệ mạnh
+ * nhất kèm diễn giải chiều + obs + lag + điều kiện đủ mẫu). Cache 60s trong
+ * process như khối domestic. N2 (trung thực): 0 hàng hoặc < 3 cặp đáng tin →
+ * trả NULL để caller bỏ hẳn khối — KHÔNG bịa quan hệ, KHÔNG hạ ngưỡng.
+ */
+export async function buildXrelIntlPromptBlock(): Promise<string | null> {
+  try {
+    if (intlBlockCache && Date.now() - intlBlockCache.at < INTL_BLOCK_TTL_MS) {
+      return intlBlockCache.block;
+    }
+    const relations = await db.marketRelation.findMany({
+      where: { sourceKey: { startsWith: "intl:" }, kind: "price" },
+      orderBy: { strength: "desc" },
+      take: INTL_PROMPT_TOP,
+    });
+    if (relations.length < INTL_PROMPT_TOP) {
+      intlBlockCache = { at: Date.now(), block: null };
+      return null;
+    }
+    let block =
+      "KÊNH TRUYỀN DẪN QUỐC TẾ → VN (XREL quốc tế — lead-lag có chỉnh múi giờ):\n" +
+      "(quan hệ THỐNG KÊ quá khứ, không phải quan hệ nhân quả — Pearson trên cặp ngày " +
+      "ghép theo giờ đóng cửa: nguồn đóng TRƯỚC phiên VN phản ứng; dùng làm NGỮ CẢNH đối chiếu)";
+    for (const r of relations) {
+      const candidate = `${block}\n· ${intlRelationLine(r)}`;
+      if (candidate.length > INTL_PROMPT_CHAR_CAP) break;
+      block = candidate;
+    }
+    intlBlockCache = { at: Date.now(), block };
+    return block;
+  } catch (err) {
+    console.error("[xrel-intl] buildXrelIntlPromptBlock lỗi (tiêm null):", err);
+    return null;
+  }
+}
+
+// ─────────────────────────── Lớp 3 · Serving ───────────────────────────
+
+/**
+ * Đọc quan hệ hiện có (đã xếp theo strength DESC).
+ * F-10 #129-B: mặc định LOẠI họ quốc tế (sourceKey "intl:*") — consumer trong
+ * nước (khối prompt domestic + Lớp 2 LLM tổng hợp) giữ đúng ngữ cảnh lag
+ * "cùng ngày/ngày kế" như trước F-10; họ intl có khối prompt riêng
+ * buildXrelIntlPromptBlock() với diễn giải múi giờ riêng. Muốn đọc họ intl:
+ * query db.marketRelation trực tiếp (như GET /api/market/relations).
+ */
+export async function getRelations(take = 60) {
+  return db.marketRelation.findMany({
+    where: { sourceKey: { not: { startsWith: "intl:" } } },
+    orderBy: { strength: "desc" },
+    take,
+  });
+}
+
+/** GET-route: refresh nếu bảng quá cũ (trong nước hoặc quốc tế) — fail-soft. */
+
+/**
+ * Mốc (in-process) lần cuối THỬ refresh intl — F-10 #129-B. Khi họ "intl:*"
+ * rỗng dai dẳng (chưa tổ hợp nào đạt ngưỡng — trung thực theo N2), không có
+ * dòng nào mang computedAt để biết "đã thử lúc nào" → không có cooldown này,
+ * MỌI GET route đều trả ~2s phí refresh vô ích. Cooldown này kẹp tần độ thử
+ * lại về đúng nhịp STALE_MS như hành vi lazy-refresh gốc (per-process).
+ */
+let intlLastAttemptAt = 0;
+
 export async function maybeRefreshIfStale(): Promise<boolean> {
   try {
-    const latest = await db.marketRelation.findFirst({
-      orderBy: { computedAt: "desc" },
-      select: { computedAt: true },
-    });
+    // F-10 #129-B: 2 nhịp stale ĐỘC LẬP trên cùng STALE_MS (KHÔNG thêm
+    // scheduler — intl chạy chung nhịp lazy-refresh này là đủ theo spec):
+    //   · trong nước: judge trên các dòng KHÔNG intl: (giữ nguyên hành vi cũ —
+    //     trước F-10 toàn bảng chỉ có dòng trong nước);
+    //   · intl: judge trên riêng họ "intl:*" để lần triển khai đầu tiên (bảng
+    //     trong nước còn tươi, họ intl chưa có dòng) vẫn được tính ngay; họ intl
+    //     rỗng dai dẳng thì cooldown kẹp còn ≤ 1 lần thử mỗi STALE_MS/process.
+    const [latest, latestIntl] = await Promise.all([
+      db.marketRelation.findFirst({
+        where: { sourceKey: { not: { startsWith: "intl:" } } },
+        orderBy: { computedAt: "desc" },
+        select: { computedAt: true },
+      }),
+      db.marketRelation.findFirst({
+        where: { sourceKey: { startsWith: "intl:" } },
+        orderBy: { computedAt: "desc" },
+        select: { computedAt: true },
+      }),
+    ]);
     const stale =
       !latest || Date.now() - latest.computedAt.getTime() > STALE_MS;
-    if (!stale) return false;
-    await refreshRelations();
+    const intlRowsStale =
+      !latestIntl || Date.now() - latestIntl.computedAt.getTime() > STALE_MS;
+    const intlStale =
+      intlRowsStale && Date.now() - intlLastAttemptAt > STALE_MS;
+    if (!stale && !intlStale) return false;
+    if (stale) await refreshRelations();
+    if (intlStale) {
+      // F-10 #129-B: sau refresh trong nước — fail-soft bọc riêng, 1 đợt intl
+      // lỗi KHÔNG làm hỏng kết quả trong nước đã persist ở trên. Đánh dấu mốc
+      // thử TRƯỚC khi chạy để đợt lỗi cũng được kẹp nhịp retry (không spam).
+      intlLastAttemptAt = Date.now();
+      try {
+        await refreshIntlRelations();
+      } catch (err) {
+        console.error("[xrel-intl] refreshIntlRelations lỗi (giữ bản intl cũ):", err);
+      }
+    }
     return true;
   } catch (err) {
     console.error("[xrel] maybeRefreshIfStale lỗi (serve bản cũ):", err);

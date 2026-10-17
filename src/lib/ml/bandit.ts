@@ -19,6 +19,9 @@
 
 import { db } from "@/lib/db";
 import { ROSTER_BY_CODE } from "@/lib/agent-roster";
+// F-13/F-15 (#129): regime classifier + Wilson CI (analytics — một nguồn).
+import { classifyRegime, type MarketRegime } from "@/lib/quant/regime";
+import { wilson } from "@/lib/ml/analytics";
 
 /** 6 arm Thompson sampling = 5 agent LLM có phiếu assessment + ml-forecast (B7). */
 export const BANDIT_ARM_CODES = [
@@ -37,15 +40,25 @@ const SETTLE_SESSIONS = 5;
 const SETTLE_THRESHOLD = 0.005;
 /** Số mã tối thiểu có giá tại 2 mốc thời gian để kết toán. */
 const SETTLE_MIN_SYMBOLS = 3;
-/** Quét N assessment gần nhất khi kết toán (phiếu cũ hơn coi như bỏ quên). */
-const SETTLE_SCAN_LIMIT = 30;
+/** F-15 (#129): quét N assessment gần nhất khi kết toán — TĂNG 30 → 200:
+ *  con trổ backlog thay take-30 quên phiếu cũ (P1-4). ~6 assessment/ngày
+ *  → 200 bản ≈ 1 tháng dư địa cho engine chết dài; settledKeys vẫn idempotent.
+ *  futureDates query kích thước 5×200+20 — vẫn nhẹ (distinct date). */
+const SETTLE_SCAN_LIMIT = 200;
+/** F-13 (#129): số pulls tối thiểum MỘT regime để posterior regime có trọng
+ *  số (đặc tả F-13 gate: "regime nào chưa đủ 10 pulls → fallback bảng chung"). */
+const REGIME_MIN_PULLS = 10;
 
-/** Phiếu bầu của một agent trong assessment (B7: kèm confidence cho Brier B8). */
+/** Phiếu bầu của một agent trong assessment (B7: kèm confidence cho Brier B8).
+ *  F-07 (#129): meta = vector giọng nói (chỉ ml-forecast) — settle chép vào
+ *  BanditEvent.meta làm input cho ensemble-learn meta-learner. */
 interface CastVote {
   code: string;
   direction: "UP" | "DOWN" | "FLAT";
   /** 0..1 — lưu vào BanditEvent.confidence lúc settle (ml-forecast = max(pUp,pDown,pFlat)). */
   confidence?: number;
+  /** F-07 (#129): vector giọng nói khi cast {pUp,pDown,pFlat,z,score,...}. */
+  meta?: Record<string, unknown>;
 }
 
 /** Kết quả một lần kết toán. */
@@ -74,6 +87,27 @@ export async function ensureArms(): Promise<void> {
       })
     )
   );
+  // F-15 (#129)(c): dọn arm mồ côi không nằm trong BANDIT_ARM_CODES (đo
+  // 17/10: arm `portfolio-strategist` pulls=0 — xoá vì không mất gì; pulls>0
+  // thì GIỮ + khai báo — không xoá track record).
+  try {
+    const orphans = await db.banditArm.findMany({
+      where: { agentCode: { notIn: [...BANDIT_ARM_CODES] } },
+      select: { id: true, agentCode: true, pulls: true },
+    });
+    const removable = orphans.filter((o) => o.pulls === 0).map((o) => o.id);
+    if (removable.length > 0) {
+      await db.banditArm.deleteMany({ where: { id: { in: removable } } });
+      console.log(
+        `[ml/bandit] F-15 dọn ${removable.length} arm mồ côi pulls=0 (${orphans
+          .filter((o) => o.pulls === 0)
+          .map((o) => o.agentCode)
+          .join(", ")})`
+      );
+    }
+  } catch (err) {
+    console.error("[ml/bandit] dọn arm mồ côi lỗi (fail-soft):", err);
+  }
   armsEnsured = true;
 }
 
@@ -96,7 +130,7 @@ function parseVotes(detail: string): CastVote[] {
   const votes = parsed.agentVotes;
   if (Array.isArray(votes)) {
     for (const v of votes) {
-      const row = v as { code?: unknown; direction?: unknown; confidence?: unknown };
+      const row = v as { code?: unknown; direction?: unknown; confidence?: unknown; meta?: unknown };
       if (typeof row.code === "string" && isDir(row.direction)) {
         out.push({
           code: row.code,
@@ -105,6 +139,10 @@ function parseVotes(detail: string): CastVote[] {
             typeof row.confidence === "number" && Number.isFinite(row.confidence)
               ? Math.max(0, Math.min(1, row.confidence))
               : undefined,
+          // F-07 (#129): giữ nguyên voice vector cho phiếu ml-forecast.
+          ...(row.meta != null && typeof row.meta === "object" && !Array.isArray(row.meta)
+            ? { meta: row.meta as Record<string, unknown> }
+            : {}),
         });
       }
     }
@@ -258,6 +296,33 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
   let votes = 0;
   const details: NonNullable<SettleResult["details"]> = [];
 
+  // F-13 (#129): chuỗi VNINDEX để gán regime cho mỗi phiếu tại thời điểm cast
+  // (contextual bandit — posterior theo (arm × regime)); đọc 1 lần/tiến trình
+  // (TTL 10 phút — settle 16:15 hằng ngày dùng lại từ nạp đầu trong ngày).
+  const vnindex = await loadVnindexCloses();
+  // F-13: regimeStats các arm — đọc 1 lần, tích luỹ in-memory rồi ghi 1 lần/cuối.
+  const armRows = await db.banditArm.findMany({
+    select: { agentCode: true, regimeStats: true },
+  }).catch(() => [] as { agentCode: string; regimeStats: string | null }[]);
+  const regimeAcc = new Map<string, Map<string, { alpha: number; beta: number; pulls: number }>>();
+  for (const row of armRows) {
+    try {
+      const parsed = row.regimeStats ? (JSON.parse(row.regimeStats) as Record<string, unknown>) : {};
+      const blocks = new Map<string, { alpha: number; beta: number; pulls: number }>();
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value != null && typeof value === "object") {
+          const b = value as { alpha?: unknown; beta?: unknown; pulls?: unknown };
+          if (typeof b.alpha === "number" && typeof b.beta === "number" && typeof b.pulls === "number") {
+            blocks.set(key, { alpha: b.alpha, beta: b.beta, pulls: b.pulls });
+          }
+        }
+      }
+      regimeAcc.set(row.agentCode, blocks);
+    } catch {
+      regimeAcc.set(row.agentCode, new Map());
+    }
+  }
+
   for (const a of pending) {
     const votesForAssessment = votesOf(a).filter(
       (v) => !settledKeys.has(`${a.id}:${v.code}`)
@@ -299,6 +364,12 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
       if (v.direction === "FLAT") reward = realizedDir === "FLAT" ? 0.7 : 0.2;
       else reward = v.direction === realizedDir ? 1 : 0;
 
+      // F-07 (#129): meta phiếu = vector giọng nói (cast) + realizedDir (Q10
+      // point-in-time cho ensemble-learn — phiếu cũ không có meta → cold-start).
+      const metaJson = JSON.stringify({
+        ...(v.meta ?? {}),
+        realizedDir,
+      });
       await db.banditEvent.upsert({
         where: { assessmentId_agentCode: { assessmentId: a.id, agentCode: v.code } },
         update: {
@@ -307,6 +378,7 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
           direction: v.direction,
           // B8 — độ tự tin phiếu khi cast → đầu vào Brier score (nếu có lưu)
           ...(v.confidence != null ? { confidence: v.confidence } : {}),
+          meta: metaJson,
         },
         create: {
           assessmentId: a.id,
@@ -316,6 +388,7 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
           settledAt: new Date(),
           reward,
           ...(v.confidence != null ? { confidence: v.confidence } : {}),
+          meta: metaJson,
         },
       });
       await db.banditArm.update({
@@ -328,6 +401,20 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
           lastRewardAt: new Date(),
         },
       });
+      // F-13 (#129): tích luỹ posterior theo (arm × regime tại thời điểm cast).
+      const regimeKey = regimeOf(vnindex, a.createdAt);
+      if (regimeKey != null) {
+        let blocks = regimeAcc.get(v.code);
+        if (!blocks) {
+          blocks = new Map();
+          regimeAcc.set(v.code, blocks);
+        }
+        const blk = blocks.get(regimeKey) ?? { alpha: 0, beta: 0, pulls: 0 };
+        blk.alpha += reward;
+        blk.beta += 1 - reward;
+        blk.pulls += 1;
+        blocks.set(regimeKey, blk);
+      }
       const roster = ROSTER_BY_CODE.get(v.code);
       details.push({
         agentCode: v.code,
@@ -338,6 +425,25 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
       votes++;
     }
     settled++;
+  }
+
+  // F-13 (#129): ghi lại regimeStats JSON cho mỗi arm có cập nhật (1 write/
+  // arm — không đè alpha/beta cột chung). Fail-soft: lỗi ghi KHÔNG chặn kết
+  // toán (reward đã ghi BanditEvent + arm chung).
+  for (const [code, blocks] of regimeAcc) {
+    if (blocks.size === 0) continue;
+    try {
+      const json: Record<string, { alpha: number; beta: number; pulls: number }> = {};
+      for (const [key, blk] of blocks) {
+        json[key] = { alpha: Number(blk.alpha.toFixed(2)), beta: Number(blk.beta.toFixed(2)), pulls: blk.pulls };
+      }
+      await db.banditArm.update({
+        where: { agentCode: code },
+        data: { regimeStats: JSON.stringify(json) },
+      });
+    } catch (err) {
+      console.error(`[ml/bandit] ghi regimeStats arm ${code} lỗi (fail-soft):`, err);
+    }
   }
 
   // F-65A-02/#65 — settle là WRITE: reset cả 2 TTL cache 15s để mọi read
@@ -373,8 +479,18 @@ async function banditSnapshotRaw(): Promise<{
     pulls: number;
     wins: number;
     posteriorMean: number;
+    /** F-15 (#129): Wilson CI 95% của posteriorMean — UI bandit-block hiển thị
+     *  cạnh posterior + mốc "≥100 pulls = tin khoảng cách". */
+    wilsonLow: number;
+    wilsonHigh: number;
+    /** F-13 (#129): posterior theo regime hiện tại (null = dùng bảng chung). */
+    regimePosteriorMean: number | null;
+    /** F-13 (#129): posterior từng regime đã tích luỹ (parse JSON cột). */
+    regimeStats: Record<string, { alpha: number; beta: number; pulls: number }> | null;
   }[];
   lastSettleAt: Date | null;
+  /** F-13 (#129): regime thị trường hiện tại (ngữ cảnh snapshot). */
+  currentRegime: { regime: MarketRegime; label: string } | null;
 }> {
   await ensureArms();
   // Perf #64 — 2 query độc lập chạy parallel (trước fix tuần tự 2 RTT)
@@ -382,8 +498,44 @@ async function banditSnapshotRaw(): Promise<{
     db.banditArm.findMany(),
     db.banditEvent.aggregate({ _max: { settledAt: true } }),
   ]);
+  // F-13: regime hiện tại — posterior regime chỉ có trọng số khi đủ pulls.
+  const current = await currentMarketRegime().catch(() => null);
   const mapped = arms.map((a) => {
     const roster = ROSTER_BY_CODE.get(a.agentCode);
+    const posteriorMean = (a.alpha + 1) / (a.alpha + a.beta + 2);
+    // F-15: Wilson 95% trên (wins/pulls) — pulls=0 → khoảng [0,1] trung thực
+    // (wilson() ném lỗi khi n ≤ 0 — guard trước, không nuốt silent).
+    let ciLow = 0;
+    let ciHigh = 1;
+    if (a.pulls > 0) {
+      try {
+        const ci = wilson(Math.max(0, Math.min(1, a.wins / a.pulls)), a.pulls);
+        ciLow = ci.lo;
+        ciHigh = ci.hi;
+      } catch {
+        ciLow = 0;
+        ciHigh = 1;
+      }
+    }
+    let regimeStats: Record<string, { alpha: number; beta: number; pulls: number }> | null = null;
+    if (a.regimeStats) {
+      try {
+        regimeStats = JSON.parse(a.regimeStats) as Record<string, {
+          alpha: number;
+          beta: number;
+          pulls: number;
+        }>;
+      } catch {
+        regimeStats = null;
+      }
+    }
+    let regimePosteriorMean: number | null = null;
+    if (current && regimeStats) {
+      const blk = regimeStats[current.regime];
+      if (blk && blk.pulls >= REGIME_MIN_PULLS) {
+        regimePosteriorMean = Number(((blk.alpha + 1) / (blk.alpha + blk.beta + 2)).toFixed(4));
+      }
+    }
     return {
       agentCode: a.agentCode,
       name: roster?.name ?? a.agentCode,
@@ -391,11 +543,19 @@ async function banditSnapshotRaw(): Promise<{
       beta: a.beta,
       pulls: a.pulls,
       wins: a.wins,
-      posteriorMean: Number(((a.alpha + 1) / (a.alpha + a.beta + 2)).toFixed(4)),
+      posteriorMean: Number(posteriorMean.toFixed(4)),
+      wilsonLow: Number(ciLow.toFixed(4)),
+      wilsonHigh: Number(ciHigh.toFixed(4)),
+      regimePosteriorMean,
+      regimeStats,
     };
   });
   mapped.sort((x, y) => y.posteriorMean - x.posteriorMean);
-  return { arms: mapped, lastSettleAt: agg._max.settledAt };
+  return {
+    arms: mapped,
+    lastSettleAt: agg._max.settledAt,
+    currentRegime: current ? { regime: current.regime, label: current.label } : null,
+  };
 }
 
 /** Số phiếu bầu LLM chờ tới phiên thứ 5 (chưa settle) — 30 assessment gần nhất.
@@ -432,4 +592,155 @@ export async function pendingSettleCount(): Promise<number> {
   }
   pendingCountCache = { at: Date.now(), value: pending };
   return pending;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * F-13 (#129 — AI_ENGINEER_REVIEW_BRAIN §3 F-13) · REGIME + CONTEXTUAL
+ * Nhãn chế độ hằng ngày từ VNINDEX (classifyRegime chuẩn hoá có sẵn);
+ * contextual bandit: posterior theo (arm × regime) — regime nào chưa đủ
+ * REGIME_MIN_PULLS pulls → fallback bảng chung (khai báo UI trung thực).
+ * AppSetting "market-regime" rolling ghi hằng ngày trong job settle.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/** Cache chuỗi VNINDEX (TTL 10 phút — settle + evidence + snapshot dùng chung). */
+let vnindexCache: { at: number; dates: Date[]; closes: number[] } | null = null;
+const VNINDEX_CACHE_TTL_MS = 10 * 60_000;
+
+async function loadVnindexCloses(): Promise<{ dates: Date[]; closes: number[] }> {
+  if (vnindexCache && Date.now() - vnindexCache.at < VNINDEX_CACHE_TTL_MS) {
+    return vnindexCache;
+  }
+  try {
+    const inst = await db.instrument.findFirst({
+      where: { symbol: "VNINDEX", isActive: true },
+      select: { id: true },
+    });
+    if (!inst) return { dates: [], closes: [] };
+    const bars = await db.bar.findMany({
+      where: { instrumentId: inst.id },
+      orderBy: { date: "asc" },
+      select: { date: true, close: true },
+    });
+    const out = {
+      dates: bars.map((b) => b.date),
+      closes: bars.map((b) => b.close).filter((c) => c > 0),
+    };
+    vnindexCache = { at: Date.now(), ...out };
+    return out;
+  } catch (err) {
+    console.error("[ml/bandit] loadVnindexCloses lỗi (fail-soft):", err);
+    return { dates: [], closes: [] };
+  }
+}
+
+/** Regime tại thời điểm cast (dùng closes VNINDEX ≤ castAt — PIT N4). */
+function regimeOf(
+  vnindex: { dates: Date[]; closes: number[] },
+  at: Date
+): MarketRegime | null {
+  if (vnindex.closes.length < 21 || vnindex.dates.length !== vnindex.closes.length) return null;
+  let idx = -1;
+  for (let i = vnindex.dates.length - 1; i >= 0; i--) {
+    if (vnindex.dates[i]!.getTime() <= at.getTime()) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 20) return null;
+  return classifyRegime(vnindex.closes.slice(0, idx + 1)).regime;
+}
+
+/** F-13 (#129): regime thị trường HIỆN TẠI (phiên cuối VNINDEX). */
+export async function currentMarketRegime(): Promise<{
+  regime: MarketRegime;
+  label: string;
+  asOf: string | null;
+} | null> {
+  const vnindex = await loadVnindexCloses();
+  if (vnindex.closes.length < 21) return null;
+  const result = classifyRegime(vnindex.closes);
+  const lastDate = vnindex.dates[vnindex.dates.length - 1] ?? null;
+  return {
+    regime: result.regime,
+    label: result.label,
+    asOf: lastDate ? lastDate.toISOString().slice(0, 10) : null,
+  };
+}
+
+/**
+ * F-13 (#129): posterior contextual cho chu kỳ — regime hiện tại đủ pulls
+ * (≥ REGIME_MIN_PULLS) ở arm → dùng posterior regime; ngược lại bảng chung
+ * (fallback khai báo — không bịa ngữ cảnh). evidence.ts thay thế map
+ * posteriorByCode cũ bằng hàm này (một nguồn sự thật regime-aware).
+ */
+export async function posteriorByCodeForCycle(): Promise<Map<string, number>> {
+  const arms = await db.banditArm.findMany().catch(() => []);
+  const current = await currentMarketRegime().catch(() => null);
+  const out = new Map<string, number>();
+  for (const a of arms) {
+    let mean = (a.alpha + 1) / (a.alpha + a.beta + 2);
+    if (current && a.regimeStats) {
+      try {
+        const blocks = JSON.parse(a.regimeStats) as Record<
+          string,
+          { alpha?: unknown; beta?: unknown; pulls?: unknown }
+        >;
+        const blk = blocks[current.regime];
+        if (
+          blk &&
+          typeof blk.alpha === "number" &&
+          typeof blk.beta === "number" &&
+          typeof blk.pulls === "number" &&
+          blk.pulls >= REGIME_MIN_PULLS
+        ) {
+          mean = (blk.alpha + 1) / (blk.alpha + blk.beta + 2);
+        }
+      } catch {
+        // regimeStats hỏng → bảng chung (fail-soft)
+      }
+    }
+    out.set(a.agentCode, mean);
+  }
+  return out;
+}
+
+/**
+ * F-13 (#129)(a): ghi AppSetting "market-regime" rolling (job settle 16:15
+ * hằng ngày gọi) — {regime, label, asOf, vol20} cho UI/narrative.
+ */
+export async function persistMarketRegime(): Promise<{
+  regime: MarketRegime;
+  label: string;
+} | null> {
+  const vnindex = await loadVnindexCloses();
+  if (vnindex.closes.length < 21) return null;
+  const result = classifyRegime(vnindex.closes);
+  const lastDate = vnindex.dates[vnindex.dates.length - 1] ?? null;
+  try {
+    await db.appSetting.upsert({
+      where: { key: "market-regime" },
+      create: {
+        key: "market-regime",
+        value: JSON.stringify({
+          regime: result.regime,
+          label: result.label,
+          asOf: lastDate ? lastDate.toISOString().slice(0, 10) : null,
+          vol20: Number(result.vol20.toFixed(4)),
+          updatedAt: new Date().toISOString(),
+        }),
+      },
+      update: {
+        value: JSON.stringify({
+          regime: result.regime,
+          label: result.label,
+          asOf: lastDate ? lastDate.toISOString().slice(0, 10) : null,
+          vol20: Number(result.vol20.toFixed(4)),
+          updatedAt: new Date().toISOString(),
+        }),
+      },
+    });
+  } catch (err) {
+    console.error("[ml/bandit] persistMarketRegime lỗi (fail-soft):", err);
+  }
+  return { regime: result.regime, label: result.label };
 }

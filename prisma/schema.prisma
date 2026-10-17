@@ -784,6 +784,49 @@ model RetrievalLog {
   @@index([usedInPrompt, createdAt])
 }
 
+// F-02 (#129 — AI_ENGINEER_REVIEW_BRAIN §3 F-02) — chuỗi vĩ mô nội địa VN
+// (lớp 2 của khung top-down 3 lớp): CPI/GDP/SBV/tín dụng/M2/PMI/TPCP VN/
+// liên ngân hàng/XNK/FDI. Chu kỳ tháng/quý ≠ nhịp phiên → model riêng kèm
+// metadata công bố. Q10-Q13 (F-16): releaseAt chống look-ahead (N4) ·
+// unit khai báo 1 chỗ (N5) · dedupe (seriesId, periodLabel) · stale theo
+// tần suất (monthly > 45 ngày không kỳ mới → DataSourceStatus stale).
+model MacroSeries {
+  id               String    @id @default(cuid())
+  key              String    @unique // CPI_YOY | GDP_YOY | SBV_REFI_RATE | CREDIT_YOY | M2_YOY | PMI_MANU | VNGB_10Y | INTERBANK_OVN | TRADE_BAL | FDI_DISB
+  name             String // tên hiển thị tiếng Việt
+  unit             String // "%" | "tỷ VND" | "lần" — nguồn sự thật đơn vị (N5/Q11)
+  frequency        String // monthly | quarterly | irregular
+  source           String @default("news-extract") // gso | sbv | news-extract | manual-csv
+  meta             String    @default("{}") // JSON: releaseLagDays, note — lịch công bố Q13/F-16
+  latestObservedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  observations MacroObservation[]
+}
+
+// Một kỳ quan sát của chuỗi vĩ mô — mode real > manual > extracted khi trùng
+// kỳ (Q12: bản real/manual đè extracted qua superseded=true); số bị sửa →
+// giữ releaseAt gốc + flag revised trong meta (lịch sử feature KHÔNG viết lại).
+model MacroObservation {
+  id            String     @id @default(cuid())
+  seriesId      String
+  series        MacroSeries @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  periodLabel   String // "2026-09" | "Q3-2026" | "2026-10-24"
+  periodStart   DateTime
+  value         Float
+  releaseAt     DateTime // N4/Q10: chỉ hợp lệ cho feature/prompt khi releaseAt ≤ asOf
+  mode          String // real | extracted | manual
+  superseded    Boolean    @default(false) // kỳ có bản real/manual → bản extracted cũ chuyển true (Q12)
+  revised       Boolean    @default(false) // số bị sửa hồi cứu (GSO revise) — lịch sử không viết lại
+  sourceUrl     String? // bắt buộc khi mode=extracted (N2 chống bịa)
+  quoteVerbatim String? // câu gốc chứa con số — chống bịa (N2)
+  createdAt     DateTime   @default(now())
+
+  @@unique([seriesId, periodLabel])
+  @@index([seriesId, periodStart])
+}
+
 // Cánh tay Thompson sampling — 6 arms = 5 LLM research agents
 // (market-analyst, fair-value, news-sentiment, liquidity, risk-manager)
 // + ml-forecast (B7 — cử tri thứ 6, ensemble MLP+linreg).
@@ -797,6 +840,10 @@ model BanditArm {
   wins         Float     @default(0)
   lastRewardAt DateTime?
   updatedAt    DateTime  @updatedAt
+  // F-13 (#129): posterior theo (arm × regime) — JSON {BULL_TREND: {alpha, beta,
+  // pulls}, BEAR_TREND: {...}, SIDEWAYS: {...}}; null = dùng bảng chung
+  // (tương thích toàn bộ arm hiện có — chưa đủ 10 pulls/regime thì fallback).
+  regimeStats  String?
 }
 
 // Phiếu bầu chờ settle + kết quả: mỗi phiếu LLM trong MarketAssessment
@@ -812,6 +859,10 @@ model BanditEvent {
   reward       Float?
   /** B8 — độ tự tin phiếu khi cast (0..1) để tính Brier score; MLP = max(pUp,pDown,pFlat). */
   confidence   Float?
+  /** F-07 (#129 — meta-learner từ D-LEDGER): vector giọng nói tại thời điểm cast —
+   *  JSON {pUpMlp, pDownMlp, zLinreg, pUpGru?, pDownGru?, score} — input cho
+   *  ensemble-learn.ts học trọng số (phiếu cũ không có meta → cold-start fixed). */
+  meta         String    @default("{}")
   createdAt    DateTime @default(now())
 
   @@unique([assessmentId, agentCode])
@@ -867,6 +918,12 @@ enum CorporateEventKind {
   BONUS // cổ thưởng / chia tách làm giá giảm (f < 1 — phổ biến VN 1,2/1,3/1,5)
   DIVIDEND // cổ tức tiền mặt (Yahoo dividends — không đổi hệ số giá)
   RESTATE // điều chỉnh lại số liệu (dự phòng — chưa có nguồn tự động)
+  // F-06 (#129 — AI_ENGINEER_REVIEW_BRAIN E8): lịch sự kiện tương lai từ RSS
+  // CafeF + trích xuất LLM có trích dẫn — ratio=0, status="scheduled",
+  // source="news-extract", detail JSON chứa title/URL/ex-date.
+  EARNINGS // công bố kết quả kinh doanh (quý/bán niên/năm)
+  AGM // đại hội đồng cổ đông thường niên
+  DIVIDEND_RECORD // ngày chốt danh sách cổ tức (ex-date / cuối sổ)
 }
 
 model CorporateEvent {

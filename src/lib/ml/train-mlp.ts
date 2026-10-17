@@ -41,6 +41,8 @@ import {
 } from "@/lib/ml/features";
 import { MLP, mlpArchString, type MlpActivation, type MlpArch } from "@/lib/ml/nn";
 import { readEffectiveMlTuning, type MlpTuning } from "@/lib/ml/tuning";
+// F-08 (#129): isotonic calibration fit trên val split — persist meta.calibration.
+import { CALIBRATION_MIN_PER_CLASS, fitCalibration } from "@/lib/ml/calibration";
 
 /* ─────────────────── Mutex + cooldown dùng chung (F-612R-06 → C1/F2) ─────────────────── */
 
@@ -140,6 +142,16 @@ export interface MlModelMeta extends TrainingWindowMeta {
   sweepRunId?: string;
   /** C1 (#99) — vị trí ứng viên trong dãy deterministic của đợt. */
   sweepIndex?: number;
+  /** F-08 (#129) — isotonic calibration fit trên val split lần train này
+   *  (curves null = identity / whyRejected khi ECE không giảm ≥ 20%). */
+  calibration?: {
+    curves: unknown[];
+    fitted: number;
+    eceBefore: number | null;
+    eceAfter: number | null;
+    whyRejected?: string;
+    fittedAt: string;
+  };
 }
 
 /** Metrics dl-mlp trả về FE — khớp DlMlpMetrics trong src/hooks/use-ml.ts. */
@@ -186,12 +198,16 @@ function quantileSorted(sorted: number[], q: number): number {
 
 /** A3 (#79) — featureHist từ đặc trưng RAW của TRAIN split (80% đầu theo thời
  *  gian, cùng cut với nn.ts). Bucket j: (edges[j-1], edges[j]] — giá trị bằng
- *  điểm cắt rơi bucket dưới; bucket cuối (edges[8], +∞). Tỷ lệ tổng = 1 đúng. */
-export function computeFeatureHist(X: number[][]): { edges: number[][]; train: number[][] } {
+ *  điểm cắt rơi bucket dưới; bucket cuối (edges[8], +∞). Tỷ lệ tổng = 1 đúng.
+ *  F-01 (#129): dims tuỳ theo featureSet (16 v2-lag16 · 24 v3-macro). */
+export function computeFeatureHist(
+  X: number[][],
+  dims: number = ML_FEATURE_COUNT
+): { edges: number[][]; train: number[][] } {
   const nTrain = Math.floor(X.length * TRAIN_FRACTION);
   const edges: number[][] = [];
   const train: number[][] = [];
-  for (let d = 0; d < ML_FEATURE_COUNT; d++) {
+  for (let d = 0; d < dims; d++) {
     const vals: number[] = [];
     for (let i = 0; i < nTrain; i++) vals.push(X[i][d]);
     vals.sort((a, b) => a - b);
@@ -413,9 +429,14 @@ export async function trainDlMlp(
   if (set.X.length < 600) {
     throw new Error(`chỉ có ${set.X.length} mẫu huấn luyện (cần ≥ 600) — kiểm tra dữ liệu EOD`);
   }
-  if (set.X.length > 0 && set.X[0].length !== ML_FEATURE_COUNT) {
+  // F-01 (#129): số chiều do featureSet của tập quyết định — v2-lag16 = 16,
+  // v3-macro = 24 (tập build qua buildTrainingSet(20, {featureSet})).
+  const dims = set.X.length > 0 ? set.X[0].length : ML_FEATURE_COUNT;
+  const featureSetLabel = set.featureSet ?? ML_FEATURE_SET;
+  const expectedDims = featureSetLabel === "v3-macro" ? 24 : 16;
+  if (dims !== expectedDims) {
     throw new Error(
-      `tập train ${set.X[0].length} chiều ≠ ML_FEATURE_COUNT ${ML_FEATURE_COUNT} (featureSet lệch)`
+      `tập train ${dims} chiều ≠ featureSet ${featureSetLabel} (${expectedDims} chiều)`
     );
   }
   // P1-2 — digest cửa sổ train TRÊN CHÍNH chuỗi dữ liệu vừa dùng (tái lập PIT).
@@ -425,7 +446,7 @@ export async function trainDlMlp(
   // xây ra). B1 (#81): hash trên bar — KHÔNG đổi khi đổi bộ đặc trưng.
   const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
   // A3 (#79) — histogram đặc trưng RAW của TRAIN split (đồng bộ meta PSI)
-  const featureHist = computeFeatureHist(set.X);
+  const featureHist = computeFeatureHist(set.X, dims);
   const { mean, std, Xstd } = standardize(set.X);
   // #89 → #94 — arch + activations + hyper từ AppSetting ml-tuning (fail-soft:
   // không có key → đúng MLP_ARCH_V2 16-24-12-3 relu×2 + lr 0,01/batch 32/60
@@ -436,7 +457,8 @@ export async function trainDlMlp(
   const effectiveMlp = opts?.tuning ?? (await readEffectiveMlTuning()).mlp;
   const candidate = normalizeCandidateTuning(effectiveMlp);
   const arch: MlpArch = {
-    in: ML_FEATURE_COUNT,
+    // F-01 (#129): chiều vào do featureSet quyết định (24 cho v3-macro).
+    in: dims,
     hidden: candidate.hidden,
     out: 3,
   };
@@ -492,9 +514,52 @@ export async function trainDlMlp(
     trainLoss: fit.trainLoss,
     valLoss: fit.valLoss,
     horizonDays: ML_HORIZON_DAYS,
-    features: ML_FEATURE_COUNT,
+    features: dims,
     topSymbols,
   };
+
+  // F-08 (#129) — isotonic calibration fit trên VAL split (block cuối 20%,
+  // cùng cut TRAIN_FRACTION): per-sample probs từ preds đã tính (predictProba
+  // = [pUp, pFlat, pDown] → đảo về class nội bộ [DOWN, FLAT, UP]). Gate giữ
+  // calibration: ECE sau ≤ 80% ECE trước (giảm ≥ 20% tương đối — đặc tả F-08)
+  // — không đạt → curves null + whyRejected (ensemble chạy identity).
+  let calibrationMeta: MlModelMeta["calibration"] | undefined;
+  try {
+    const nTotal = set.X.length;
+    const nTrainSplit = Math.floor(nTotal * TRAIN_FRACTION);
+    const valIdx: number[] = [];
+    for (let i = nTrainSplit; i < nTotal; i++) valIdx.push(i);
+    if (valIdx.length >= CALIBRATION_MIN_PER_CLASS) {
+      const valProbs = valIdx.map((i) => {
+        const p = preds[i]; // [pUp, pFlat, pDown]
+        return [p[2], p[1], p[0]] as [number, number, number]; // class nội bộ
+      });
+      const valLabels = valIdx.map((i) => set.y[i]!);
+      const cal = fitCalibration(valProbs, valLabels);
+      const improves =
+        cal.eceBefore != null && cal.eceAfter != null && cal.eceAfter <= 0.8 * cal.eceBefore;
+      if (improves) {
+        calibrationMeta = {
+          curves: cal.curves,
+          fitted: cal.fitted,
+          eceBefore: cal.eceBefore,
+          eceAfter: cal.eceAfter,
+          fittedAt: cal.fittedAt,
+        };
+      } else if (cal.eceBefore != null) {
+        calibrationMeta = {
+          curves: [null, null, null],
+          fitted: cal.fitted,
+          eceBefore: cal.eceBefore,
+          eceAfter: cal.eceAfter,
+          whyRejected: `ECE sau ${cal.eceAfter} không giảm ≥ 20% so trước ${cal.eceBefore} — giữ identity`,
+          fittedAt: cal.fittedAt,
+        };
+      }
+    }
+  } catch (calErr) {
+    console.error("[ml/train-mlp] fitCalibration lỗi (fail-soft → identity):", calErr);
+  }
 
   // C1 (#99) — đường sweep (promote=false): lưu archived, KHÔNG đọc serving
   // swap guard (tiết kiệm 1 query/ứng viên; sweep tự so cả 4 điều kiện §4.4
@@ -508,8 +573,9 @@ export async function trainDlMlp(
       {
         ...windowMeta,
         featureHist,
-        featureSet: ML_FEATURE_SET,
+        featureSet: featureSetLabel,
         tuning: appliedTuning,
+        ...(calibrationMeta ? { calibration: calibrationMeta } : {}),
         ...(opts.extraMeta ?? {}),
       },
       { promote: false }
@@ -545,7 +611,7 @@ export async function trainDlMlp(
   // (featureSetOf(null) = "v1-lag10" ≠ "v2-lag16") + gate chưa đo → promoted
   // vĩnh viễn false, mâu thuẫn doc comment "Không có bản serving trước đó →
   // promote" của route. 1 nhánh — bản ĐẦU TIÊN luôn lên serving.
-  const sameSet = servingRow == null || servingFeatureSet === ML_FEATURE_SET;
+  const sameSet = servingRow == null || servingFeatureSet === featureSetLabel;
   const beatsValAcc = servingValAcc == null || fit.valAcc >= servingValAcc;
   const promoted = beatsValAcc && (sameSet || gate.verdict === "PASS");
   // F-B811-01 (#81 Fixbug-B) — lý do THẬT cho toast/FE (không đoán từ số):
@@ -561,7 +627,13 @@ export async function trainDlMlp(
     mlp.toJSON(),
     JSON.stringify({ mean, std }),
     { ...metrics },
-    { ...windowMeta, featureHist, featureSet: ML_FEATURE_SET, tuning: appliedTuning },
+    {
+      ...windowMeta,
+      featureHist,
+      featureSet: featureSetLabel,
+      tuning: appliedTuning,
+      ...(calibrationMeta ? { calibration: calibrationMeta } : {}),
+    },
     { promote: promoted }
   );
   return {

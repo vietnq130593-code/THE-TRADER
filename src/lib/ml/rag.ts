@@ -5,6 +5,9 @@
  * + truy xuất theo thời gian). Bản này lấp đúng khoảng trống đó:
  *   1. Tokenizer tiếng Việt: lowercase, bỏ dấu câu, tách khoảng trắng (KHÔNG
  *      stemming — tin tài chính VN ngắn, stemming dễ sai nghĩa).
+ *   1b. F-12a (#129-A): từ điển đồng nghĩa vĩ mô MACRO_SYNONYMS — mở rộng
+ *      query TRƯỚC khi chấm BM25 ("lạm phát" trúng doc chỉ chứa "CPI"):
+ *      chi phí 0, không đổi index; bit-flip khi query không có từ khoá vĩ mô.
  *   2. Corpus: 500 AgentMessage broadcast gần nhất (memoryWindow A13) + 200
  *      NewsItem gần nhất — index in-process đếm df(t) khi build (≤700 docs,
  *      tính <50ms, không cần index DB).
@@ -98,6 +101,111 @@ export function tokenize(text: string): string[] {
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter((t) => t.length >= 2); // bỏ token 1 ký tự (nhiễu "a", "v"...)
+}
+
+// ─────────────────────────── 1b. Từ điển đồng nghĩa vĩ mô — mở rộng query (F-12a #129-A) ───────────────────────────
+
+/**
+ * F-12a (#129-A — AI_ENGINEER_REVIEW_BRAIN §F-12, giai đoạn GĐ0): BM25
+ * tokenizer tiếng Việt giữ dấu nên query "lạm phát" KHÔNG trúng doc chỉ chứa
+ * "CPI". Lấp bằng MỞ RỘNG QUERY (query expansion) TRƯỚC khi chấm BM25 — chi
+ * phí 0, không đổi index (token đồng nghĩa chỉ thêm PHÍA QUERY; corpus và
+ * tf/df giữ nguyên như cũ).
+ *
+ * Nhóm 2 CHIỀU: mọi thành viên tra ra nhau ("lạm phát" ↔ "cpi" ↔ "inflation"
+ * ↔ "chỉ số giá"). Mục 1 CHIỀU: chỉ map khi hướng ngữ nghĩa rõ (PMI cao ≈
+ * sản xuất mở rộng, nhưng "sản xuất" chưa chắc nói PMI; GSO là nguồn thống
+ * kê). Key là cụm TIỀN chuẩn hoá cùng tokenize() (lowercase, giữ dấu, mỗi
+ * token ≥2 ký tự), dài 1..4 token — "lãi suất", "xuất nhập khẩu", "đầu tư
+ * trực tiếp"; "lãi suất điều hành" khớp nhờ bigram "lãi suất" nằm bên trong.
+ */
+const MACRO_SYNONYM_GROUPS: readonly (readonly string[])[] = [
+  ["lạm phát", "cpi", "inflation", "chỉ số giá"],
+  ["lãi suất", "rate", "sbv"],
+  ["tín dụng", "credit"],
+  ["tăng trưởng", "gdp"],
+  ["tỷ giá", "fx", "usd", "vnd"],
+  ["trái phiếu", "bond", "tpcp"],
+  ["thanh khoản", "liquidity"],
+  ["dự trữ", "reserve"],
+  ["thất nghiệp", "việc làm", "unemployment"],
+  ["xnk", "xuất nhập khẩu", "trade"],
+  ["fdi", "đầu tư trực tiếp"],
+];
+
+/** Mục 1 chiều — chỉ from → to, không đảo ngược (chống nhiễu ngược). */
+const MACRO_SYNONYM_ONE_WAY: readonly { from: string; to: readonly string[] }[] = [
+  { from: "pmi", to: ["sản xuất"] },
+  { from: "gso", to: ["thống kê"] },
+  { from: "m2", to: ["tiền tệ"] },
+];
+
+/** Gộp nhóm 2 chiều + mục 1 chiều thành 1 map phẳng — tra O(1) khi mở rộng. */
+function buildMacroSynonyms(): ReadonlyMap<string, readonly string[]> {
+  const map = new Map<string, string[]>();
+  const add = (key: string, values: readonly string[]) => {
+    const list = map.get(key) ?? [];
+    for (const v of values) if (!list.includes(v)) list.push(v);
+    map.set(key, list);
+  };
+  for (const group of MACRO_SYNONYM_GROUPS) {
+    for (const member of group) {
+      add(member, group.filter((m) => m !== member));
+    }
+  }
+  for (const oneWay of MACRO_SYNONYM_ONE_WAY) add(oneWay.from, oneWay.to);
+  return map;
+}
+
+/**
+ * Từ điển đồng nghĩa vĩ mô 2 chiều (F-12a #129-A) — export cho test/tái sử
+ * dụng. Key: cụm chuẩn hoá ("lạm phát", "tỷ giá", "xuất nhập khẩu"…). Value:
+ * danh sách cụm đồng nghĩa (chưa tách token — nơi dùng sẽ tokenize cùng chuẩn).
+ */
+export const MACRO_SYNONYMS: ReadonlyMap<string, readonly string[]> =
+  buildMacroSynonyms();
+
+/** Cụm dài nhất trong từ điển (hiện "đầu tư trực tiếp" = 4 token) — trần cửa sổ n-gram khi tra cụm. */
+const MACRO_MAX_PHRASE_TOKENS = [...MACRO_SYNONYMS.keys()].reduce(
+  (max, key) => Math.max(max, key.split(" ").length),
+  1
+);
+
+/**
+ * Mở rộng token truy vấn bằng đồng nghĩa vĩ mô (F-12a #129-A). Input = output
+ * của tokenize() (đã lowercase, giữ dấu tiếng Việt):
+ *   - Token đơn: tra trực tiếp ("cpi" → "lạm phát" + "inflation" + "chỉ số giá").
+ *   - CỤM liền kề: tại mỗi vị trí quét n-gram dài→ngắn (2..MACRO_MAX_PHRASE_
+ *     TOKENS token) — "lãi suất điều hành" chứa bigram "lãi suất" → "rate" +
+ *     "sbv"; "xuất nhập khẩu" (3 từ) → "xnk" + "trade"; "đầu tư trực tiếp"
+ *     (4 từ) → "fdi".
+ *   - Token mở rộng LUÔN qua tokenize() cùng chuẩn (bỏ dấu câu, lọc 1 ký tự),
+ *     dedupe bằng Set, append CUỐI mảng — thứ tự token gốc không đổi.
+ * Bit-flip: query không chứa từ khoá vĩ mô nào → trả NGUYÊN mảng đầu vào
+ * (hành vi trước F-12a giữ tuyệt đối — caller không thấy khác biệt).
+ */
+export function expandQueryTokens(tokens: string[]): string[] {
+  if (tokens.length === 0) return tokens;
+  const found: string[] = []; // cụm đồng nghĩa bắt được (chưa tokenize)
+  const collect = (phrase: string) => {
+    const synonyms = MACRO_SYNONYMS.get(phrase);
+    if (synonyms) found.push(...synonyms);
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    // Cụm dài ưu tiên trước — "xuất nhập khẩu" thắng bigram rơi rác bên trong.
+    for (let n = MACRO_MAX_PHRASE_TOKENS; n >= 2; n--) {
+      if (i + n <= tokens.length) collect(tokens.slice(i, i + n).join(" "));
+    }
+    // Token đơn tại cùng vị trí — từ điển hiện không có unigram nào nằm trong
+    // cụm key nên không xung đột nhóm (Set chống trùng cho chắc nếu thêm sau này).
+    collect(tokens[i]);
+  }
+  if (found.length === 0) return tokens; // bit-flip: không khớp từ điển → y nguyên
+  const out = new Set<string>(tokens); // Set giữ thứ tự chèn → token gốc đứng trước
+  for (const phrase of found) {
+    for (const t of tokenize(phrase)) out.add(t);
+  }
+  return [...out];
 }
 
 // ─────────────────────────── 2. Corpus (index in-process) ───────────────────────────
@@ -346,11 +454,11 @@ export function formatRagBlock(hits: RagHit[], now = Date.now()): string | null 
 // ─────────────────────────── 5. Query từ ngữ cảnh chu kỳ ───────────────────────────
 
 /**
- * Query = [symbol liên quan, từ khoá, "signal", "veto", "rủi ro"] sinh từ
- * ngữ cảnh chu kỳ hiện tại (blueprint §2 L1.3): mã trong tín hiệu MỞ + top
- * mover phiên (|changePct| lớn nhất). Fail-soft từng nguồn (lỗi → bỏ nguồn).
+ * Query GỐC từ ngữ cảnh chu kỳ (CHƯA mở rộng đồng nghĩa) — phần dựng query
+ * cũ của buildCycleQueryTokens (blueprint §2 L1.3), tách riêng từ F-12a
+ * (#129-A) để retrieveForCycle giữ được cả query gốc lẫn bản đã mở rộng.
  */
-export async function buildCycleQueryTokens(): Promise<string[]> {
+async function buildCycleQueryTokensRaw(): Promise<string[]> {
   const tokens = new Set<string>();
   const addText = (s: string) => {
     for (const t of tokenize(s)) tokens.add(t);
@@ -389,13 +497,28 @@ export async function buildCycleQueryTokens(): Promise<string[]> {
   return [...tokens];
 }
 
+/**
+ * Query = [symbol liên quan, từ khoá, "signal", "veto", "rủi ro"] sinh từ
+ * ngữ cảnh chu kỳ hiện tại (blueprint §2 L1.3): mã trong tín hiệu MỞ + top
+ * mover phiên (|changePct| lớn nhất). Fail-soft từng nguồn (lỗi → bỏ nguồn).
+ * F-12a (#129-A): mở rộng đồng nghĩa vĩ mô TRƯỚC khi return — caller nào
+ * dùng query này (test/tái sử dụng) cũng được hưởng expansion chi phí 0;
+ * bit-flip: query không chứa từ khoá vĩ mô → mảng trả về y như trước F-12a.
+ */
+export async function buildCycleQueryTokens(): Promise<string[]> {
+  return expandQueryTokens([...(await buildCycleQueryTokensRaw())]);
+}
+
 // ─────────────────────────── 6. Entry chính + RetrievalLog ───────────────────────────
 
 export interface RagRetrieval {
   /** Khối prompt tiêm (null = không có gì liên quan / lỗi fail-soft). */
   block: string | null;
   hits: RagHit[];
+  /** Query GỐC từ ngữ cảnh chu kỳ — chưa mở rộng đồng nghĩa (giữ nghĩa cũ). */
   queryTokens: string[];
+  /** Query ĐÃ mở rộng đồng nghĩa vĩ mô — input thật của rankRag + RetrievalLog.query (F-12a #129-A, additive). */
+  queryTokensExpanded: string[];
   /** Id dòng RetrievalLog vừa ghi (null khi DB lỗi — không chặn chu kỳ). */
   logId: string | null;
   corpusSize: number;
@@ -406,16 +529,22 @@ export interface RagRetrieval {
  * ghi RetrievalLog (query, top-K id + điểm, usedInPrompt). Caller tiêm block
  * vào prompt 5 agent nghiên cứu + Chủ tịch; `usedInPrompt` = block đã vào ≥1
  * prompt (caller truyền true khi block !== null — route luôn append khi có).
+ * F-12a (#129-A): query được MỞ RỘNG đồng nghĩa vĩ mô trước khi rank —
+ * rankRag + RetrievalLog.query dùng bản mở rộng; payload giữ cả query gốc
+ * (queryTokens) lẫn bản mở rộng (queryTokensExpanded).
  */
 export async function retrieveForCycle(
   usedInPrompt: boolean
 ): Promise<RagRetrieval> {
   const index = await loadRagCorpus();
-  const queryTokens = await buildCycleQueryTokens();
+  // F-12a (#129-A): giữ query gốc cho payload; bản MỞ RỘNG đồng nghĩa vĩ mô
+  // mới vào rankRag + RetrievalLog.query ("lạm phát" trúng doc chỉ có "CPI").
+  const queryTokens = await buildCycleQueryTokensRaw();
+  const queryTokensExpanded = expandQueryTokens([...queryTokens]);
   // #89 — tham số RAG từ AppSetting ml-tuning (fail-soft → mặc định module).
   const tuning = await readMlTuning();
   const ragTuning = tuning.rag as Partial<RagTuning> | undefined;
-  const hits = rankRag(index, queryTokens, {
+  const hits = rankRag(index, queryTokensExpanded, {
     topK: ragTuning?.topK,
     k1: ragTuning?.k1,
     b: ragTuning?.b,
@@ -426,7 +555,9 @@ export async function retrieveForCycle(
   try {
     const row = await db.retrievalLog.create({
       data: {
-        query: queryTokens,
+        // #129-A: ghi mảng ĐÃ mở rộng — token gốc đứng đầu nên 1 trường Json
+        // đọc được cả query gốc lẫn phần expansion.
+        query: queryTokensExpanded,
         topK: ragTuning?.topK ?? RAG_TOP_K,
         results: hits.map((h) => ({
           refTable: h.refTable,
@@ -441,7 +572,7 @@ export async function retrieveForCycle(
   } catch {
     // Log fail → chu kỳ vẫn chạy (fail-soft) — chỉ mất đo lường lần này.
   }
-  return { block, hits, queryTokens, logId, corpusSize: index.docs.length };
+  return { block, hits, queryTokens, queryTokensExpanded, logId, corpusSize: index.docs.length };
 }
 
 // ─────────────────────────── 7. Thống kê cho A13 + ml/status ───────────────────────────

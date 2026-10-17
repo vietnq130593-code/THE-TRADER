@@ -56,6 +56,10 @@ export interface AgentVote {
   /** B9 — trọng số tally cổng đồng thuận = clamp(healthScore/100 × posteriorMean
    *  bandit, 0.3, 1) — TRÙNG công thức weight bằng chứng llm-vote (evidence.ts điền). */
   weight?: number;
+  /** F-07 (#129) — vector giọng nói tại thời điểm cast (chỉ ml-forecast:
+   *  {pUp, pDown, pFlat, z, score, weightsSource}) — bandit settle chép vào
+   *  BanditEvent.meta làm input cho ensemble-learn meta-learner. */
+  meta?: Record<string, unknown>;
 }
 
 /** Tiên nghiệm base-rate lịch sử (Bậc 0). */

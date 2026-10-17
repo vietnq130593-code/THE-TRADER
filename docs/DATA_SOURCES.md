@@ -290,6 +290,10 @@ Nguyên tắc chung: **mọi dữ liệu thị trường phải qua validate §5
 | Q7 | **Lịch giao dịch** | Thứ 2–thứ 6 + **lịch nghỉ lễ VN 2026 ước lượng** (Tết Dương lịch, Tết Bính Ngọ, Giỗ Tổ, 30/4–1/5, Quốc khánh) đã cài trong `src/lib/market-session.ts`; lịch chính thức từng năm — roadmap; ngoài phiên → không sinh quote mới |
 | Q8 | **Phiên HOSE** | ATO 09:00–09:15 · liên tục **09:15–11:30** · liên tục **13:00–14:45** · ATC 14:45–15:00 — logic "in-session" dùng cho scheduler & stale marking |
 | Q9 | **Số nguyên VND** | Không nhận giá tiền dạng thập phân; quy đổi tại ingest nếu nguồn trả decimal (xem [DB_SCHEMA.md §3](./DB_SCHEMA.md)) |
+| Q10 | **Point-in-time release (vĩ mô)** | `MacroObservation` chỉ hợp lệ cho feature/prompt khi `releaseAt ≤ asOf` — mọi loader bắt buộc kiểm (N4 chống look-ahead; #129 F-16) |
+| Q11 | **Đơn vị khai báo 1 chỗ** | `MacroSeries.unit` là nguồn sự thật duy nhất; format hiển thị theo unit (`formatMacroValue`); cấm heuristic tầng tiêu thụ (#129 F-16) |
+| Q12 | **Dedupe kỳ + sửa số** | upsert `(seriesId, periodLabel)`; bản `real`/`manual` đè `extracted` (superseded); số bị sửa → flag `revised`, lịch sử feature KHÔNG viết lại (chống survivorship con số — #129 F-16) |
+| Q13 | **Stale theo tần suất** | monthly > 45 ngày / quarterly > 120 ngày không kỳ mới → snapshot `macro-vn` stale + cảnh báo (không dùng ngưỡng 30 phút của nguồn giá — #129 F-16) |
 
 ---
 
