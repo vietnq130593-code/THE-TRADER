@@ -37,10 +37,14 @@ import * as React from "react";
 import {
   AlertTriangle,
   Brain,
+  ChevronRight,
+  Gauge,
   GitCompareArrows,
+  Globe,
   Info,
   Layers,
   Loader2,
+  Lock,
   Minus,
   Network,
   Plus,
@@ -70,8 +74,9 @@ import {
   useTrainMl,
   type MlActivation,
   type MlArchDraft,
-  type MlMlpArchInfo,
   type MlGruArchInfo,
+  type MlMlpArchInfo,
+  type MlStatusResponse,
 } from "@/hooks/use-ml";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -939,6 +944,202 @@ function ArchEditor({
   );
 }
 
+/* ─────────────────── F-22 (#136): Vai trò & giá trị vận hành ───────────────────
+ * Trả lời câu hỏi chủ sở hữu "các mạng thần kinh có lợi ích, giá trị gì đối
+ * với đội agent và toàn hệ thống THE TRADER?" — bằng chứng từ code + DB
+ * (scripts/p136-nn-value-evidence.ts): mỗi mạng nêu VAI TRÒ trong chuỗi
+ * quyết định + số liệu sống (bandit posterior · valAcc · stance · cổng B2).
+ * Số tĩnh ghi rõ mốc review; số sống cập nhật theo /api/ml/status. */
+
+function ValueChainCard({ status }: { status: MlStatusResponse | undefined }) {
+  const vi = (x: number | null | undefined, d = 1) =>
+    x == null || !Number.isFinite(x) ? "—" : `${(100 * x).toFixed(d).replace(".", ",")}%`;
+  const nfr = (x: number | null | undefined, d = 2) =>
+    x == null || !Number.isFinite(x) ? "—" : x.toFixed(d).replace(".", ",");
+  const bandit = status?.bandit?.arms.find((a) => a.agentCode === "ml-forecast");
+  const dl = status?.dlMlp ?? null;
+  const rl = status?.rlQ ?? null;
+  const gate = status?.gate?.available === true ? status.gate : null;
+  const gruTrained = status?.gru != null;
+  const flow = [
+    "MLP serving",
+    "ensemble 2 giọng",
+    "phiếu ml-forecast (1/7 cử tri)",
+    "cổng đồng thuận 80%",
+    "Chủ tịch ra Signal",
+    "thực thi qua VETO",
+  ];
+
+  return (
+    <section
+      aria-labelledby="nn-value-heading"
+      className="flex flex-col gap-3 rounded-lg border bg-muted/20 px-3 py-3 sm:px-4"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 id="nn-value-heading" className="flex items-center gap-2 text-sm font-semibold">
+          <Network className="size-4 text-muted-foreground" aria-hidden="true" />
+          Vai trò &amp; giá trị vận hành trong THE TRADER
+        </h3>
+        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          review 18-10
+        </Badge>
+      </div>
+
+      {/* Chuỗi tiêu thụ — đầu ra mạng NN đi tới đâu */}
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 text-[11px] leading-relaxed">
+        {flow.map((step, i) => (
+          <span key={step} className="flex items-center gap-1">
+            {i > 0 && (
+              <ChevronRight
+                className="size-3.5 shrink-0 text-muted-foreground/70"
+                aria-hidden="true"
+              />
+            )}
+            <span
+              className={cn(
+                "rounded-md border px-1.5 py-0.5",
+                i === 0
+                  ? "border-emerald-500/40 bg-emerald-500/10 font-medium"
+                  : i === 2
+                    ? "border-primary/40 bg-primary/10 font-medium"
+                    : "bg-background/60"
+              )}
+            >
+              {step}
+            </span>
+          </span>
+        ))}
+      </div>
+
+      {/* 4 mạng — vai trò + số liệu */}
+      <div className="grid gap-2.5 md:grid-cols-2">
+        {/* MLP serving */}
+        <div className="flex flex-col gap-1.5 rounded-lg border bg-background/60 px-3 py-2.5">
+          <p className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+            <Brain className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+            MLP serving {dl ? `· v${dl.version}` : ""}
+            <Badge variant="outline" className="ml-auto font-mono text-[10px]">
+              valAcc {vi(dl?.metrics.valAcc)}
+            </Badge>
+          </p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Cử tri thứ 6 của hội đồng 7 giọng (Bộ tổng hợp Bayes) — giọng duy nhất
+            <strong> không dùng LLM</strong>, chỉ dùng xác suất đo được.
+          </p>
+          <div className="mt-0.5 grid gap-0.5 font-mono text-[11px] tabular-nums">
+            <p>
+              phiếu đã kết toán <strong>{bandit?.pulls ?? "—"}</strong> · đúng{" "}
+              <strong>{vi(bandit && bandit.pulls > 0 ? bandit.wins / bandit.pulls : null)}</strong>
+              {bandit?.wilsonLow != null && bandit?.wilsonHigh != null && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  (Wilson CI {vi(bandit.wilsonLow)}–{vi(bandit.wilsonHigh)})
+                </span>
+              )}
+            </p>
+            <p>
+              bandit posterior <strong>{vi(bandit?.posteriorMean)}</strong> → trọng số phiếu ≈{" "}
+              {nfr(bandit?.posteriorMean)} — <strong>cao nhất hội đồng</strong> (các cử tri LLM
+              0,45–0,54; tính tới 18-10)
+            </p>
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            Quỹ đạo: v1 34,2% → nay {vi(dl?.metrics.valAcc)} (+8,7 điểm %) qua 73 thế hệ train
+            Chủ nhật + NAS champion C5 (24-48-24-12-3) qua cổng 4 điều kiện.
+          </p>
+        </div>
+
+        {/* Q-learning */}
+        <div className="flex flex-col gap-1.5 rounded-lg border bg-background/60 px-3 py-2.5">
+          <p className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+            <Gauge className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+            Q-learning (rl-q) {rl ? `· v${rl.version}` : ""}
+            <Badge variant="outline" className="ml-auto font-mono text-[10px]">
+              {rl ? `${rl.metrics.states} trạng thái` : "—"}
+            </Badge>
+          </p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Giọng định lượng <strong>rl-policy (A16)</strong> — evidence trọng số 0,5 trong Bayes,
+            khuyến nghị tăng/giữ/giảm phơi nhiễm.
+          </p>
+          <div className="mt-0.5 grid gap-0.5 font-mono text-[11px] tabular-nums">
+            <p>
+              stance <strong>{rl?.metrics.stance ?? "—"}</strong> · exposure{" "}
+              <strong>{nfr(rl?.metrics.exposure)}</strong> · avgReward₅₀{" "}
+              {nfr(rl?.metrics.avgRewardLast50)}
+            </p>
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            Học 300 episode mỗi Chủ nhật trên 96 trạng thái × 3 hành động —{" "}
+            <strong>không trực tiếp điều khiển</strong> exposure, chỉ góp tiếng nói.
+          </p>
+        </div>
+
+        {/* GRU */}
+        <div className="flex flex-col gap-1.5 rounded-lg border bg-background/60 px-3 py-2.5">
+          <p className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+            <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            GRU-24 · dự bị bị khoá cổng
+            <Badge variant="outline" className="ml-auto font-mono text-[10px]">
+              {gruTrained ? `v${status?.gru?.version}` : "chưa từng train"}
+            </Badge>
+          </p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Cổng bằng chứng <strong>B2</strong> verdict{" "}
+            <strong className={gate?.verdict === "PASS" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}>
+              {gate?.verdict ?? "chưa đo"}
+            </strong>
+            {gate && (
+              <span>
+                {" "}
+                (ΔBrier CI95 [{nfr(gate.deltaBrier.ciLow, 3)}; {nfr(gate.deltaBrier.ciHigh, 3)}] —
+                chứa 0 nên chưa chứng minh giá trị thêm, đo {formatDateTime(gate.measuredAt)})
+              </span>
+            )}
+            .
+          </p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            0 tác động hiện tại: train bị route chặn 400, giọng thứ ba chỉ mở sau shadow 60 phiên
+            Brier ≤ MLP — thiết kế &ldquo;không nhận máy mù&rdquo;.
+          </p>
+        </div>
+
+        {/* macro-mlp */}
+        <div className="flex flex-col gap-1.5 rounded-lg border bg-background/60 px-3 py-2.5">
+          <p className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+            <Globe className="size-3.5 shrink-0 text-cyan-600 dark:text-cyan-400" aria-hidden="true" />
+            macro-mlp · 8 tài sản
+            <Badge variant="outline" className="ml-auto font-mono text-[10px]">
+              edge gate Brier60 &lt; 2/3
+            </Badge>
+          </p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Dự báo vĩ mô 5 phiên (US10Y · VNINDEX · US30Y · DXY · vàng…) đưa{" "}
+            <strong>thẳng vào prompt Chủ tịch</strong> khi tài sản có edge.
+          </p>
+          <p className="mt-0.5 font-mono text-[11px] tabular-nums">
+            8 mô hình 14 đặc trưng · US10Y valAcc <strong>67,5%</strong> (tính tới 17-10)
+          </p>
+        </div>
+      </div>
+
+      {/* Trung thực */}
+      <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+        <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+        <span>
+          Sống chung với giới hạn thật: MLP gần như luôn bỏ phiếu{" "}
+          <strong>ĐI NGANG</strong> khi không có biên (deadband 0,05 — 19/20 chu kỳ gần nhất:
+          không phóng đo khi không có tín hiệu) · trọng số ensemble 0,7/0,3 vẫn cố định chờ F-07
+          đủ 60 phiếu meta · giá trị cốt lõi của các mạng là{" "}
+          <strong>cử tri có track record đo được</strong> (settle 5 phiên → bandit → trọng số)
+          và mọi thay đổi serving phải qua cổng — kỷ luật ra quyết định, không phải bảo đảm lợi
+          nhuận. Số tĩnh tính tới đợt review 18-10; số còn lại cập nhật theo API.
+        </span>
+      </p>
+    </section>
+  );
+}
+
 /* ─────────────────── Tab ─────────────────── */
 
 export function NnTab() {
@@ -1253,6 +1454,10 @@ export function NnTab() {
           </div>
         </section>
       )}
+
+      {/* F-22 (#136): giá trị vận hành — tổng kết review "mạng NN có ích gì
+          cho đội agent & hệ thống" bằng chuỗi tiêu thụ + số liệu sống. */}
+      <ValueChainCard status={status.data} />
     </div>
   );
 }
