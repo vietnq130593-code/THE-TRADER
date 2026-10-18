@@ -6,12 +6,15 @@
  * từng đầu ra, siêu tham số khối train…".
  *
  * HAI khối chính:
- *  (1) SƠ ĐỒ DARK HACKER TOPOLOGY ĐỒNG DẠNG (F-20 #134 — nn-viz.tsx):
- *      MLP serving · ANN nháp · GRU-24 cùng một engine — nền tối terminal +
- *      scanline CRT, hạt tín hiệu SMIL chuyển động giữa các nơ-rôn theo lớp:
- *      lục = lan truyền tiến (x → ŷ — "não vận hành"), hồng = lan truyền
- *      ngược (gradient ∂L — "não học"), hổ = dòng đệ quy GRU; 3 chế độ bấm
- *      được (tiến · ngược · chu kỳ huấn luyện), tôn trọng
+ *  (1) SƠ ĐỒ DARK HACKER TOPOLOGY ĐỒNG DẠNG (F-20 #134 → F-21 #135 —
+ *      nn-viz.tsx): MLP serving · ANN nháp · GRU-24 cùng một engine — nền tối
+ *      terminal + scanline CRT. HẠT TÍN HIỆU (#135) chỉ xuất hiện khi mạng
+ *      đang HOẠT ĐỘNG: nảy ra từ ĐÚNG tâm nơ-rôn nguồn, hạ cánh ĐÚNG tâm
+ *      nơ-rôn đích (bản #134 hạt bị lệch tọa độ gấp đôi); chạy THEO SÓNG TỪNG
+ *      LỚP trong một lượt mô phỏng (▸ suy luận · ◂ gradient · ⟳ 1 epoch) rồi
+ *      TỰ VỀ nhàn rỗi — mặc định mạng tĩnh vì bản serving chỉ suy luận theo
+ *      yêu cầu. Nơ-rôn sáng = hoạt động mạnh (chuẩn trọng số vào từ trọng số
+ *      thật); lớp đang nhận tín hiệu pulse theo nhịp. Tôn trọng
  *      prefers-reduced-motion. Mỗi cạnh MLP vẫn = 1 trọng số W THẬT (tooltip
  *      W[i,j]/bias, dày/mảnh theo |w|, lục dương · hồng âm, subsample
  *      EDGE_CAP có ghi chú trung thực).
@@ -87,17 +90,20 @@ import {
   nodePositions,
   buildEdges,
   subsample,
-  useVizMode,
+  defaultHops,
+  gruHops,
+  useVizActivity,
   usePrefersReducedMotion,
   VizShell,
   TypologyNet,
   GruNet,
   LegendDot,
   LegendLine,
-  ModeLegendText,
+  ActivityStatusText,
   VIZ_PALETTE,
   type EdgeSpec,
   type VizColumn,
+  type VizHopSpec,
 } from "./nn-viz";
 
 /* ─────────────────── Giới hạn trình chỉnh sửa ─────────────────── */
@@ -135,7 +141,6 @@ const DEFAULT_LOSS_WEIGHTS: [number, number, number] = [1, 1, 1];
 /* ─────────────────── Sơ đồ MLP serving — dark hacker typology (#134) ─────────────────── */
 
 function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
-  const { mode, toolbar } = useVizMode();
   const reduced = usePrefersReducedMotion();
   const { arch, activations, featureNames, weights, outputLabels } = mlp;
   const outLabels = React.useMemo(
@@ -176,6 +181,69 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
     };
   }, [arch, activations, weights, featureNames, outLabels]);
 
+  /**
+   * F-21 (#135) — mức hoạt động từng nơ-rôn, tính từ TRỌNG SỐ THẬT bản serving:
+   * nơ-rôn ẩn/ra = chuẩn L2 hàng W (tổng "độ mạnh" trọng số vào); nơ-rôn vào =
+   * chuẩn L2 cột W1 (đặc trưng ảnh hưởng mạnh tới lớp ẩn đầu). Chuẩn hoá 0..1
+   * trong mỗi cột + sàn 0,25 (nơ-rôn yếu tối hơn nhưng không tắt hẳn — vẫn là
+   * một phần của mạng). Không có weights → trung tính 0,6.
+   */
+  const acts = React.useMemo(() => {
+    const sizes = geometry.sizes;
+    const blocks = weights?.blocks;
+    return sizes.map((units, ci) => {
+      if (ci === 0) {
+        const from = sizes[0]!;
+        const rows = sizes[1] ?? 0;
+        const W = blocks?.[0]?.W;
+        if (!W || rows === 0 || W.length !== rows * from) return Array.from({ length: units }, () => 0.6);
+        const colNorm = Array.from({ length: from }, (_, k) => {
+          let s = 0;
+          for (let j = 0; j < rows; j++) {
+            const v = W[j * from + k] ?? 0;
+            s += v * v;
+          }
+          return Math.sqrt(s);
+        });
+        const mx = Math.max(...colNorm, 1e-9);
+        return colNorm.map((v) => 0.25 + 0.75 * (v / mx));
+      }
+      const from = sizes[ci - 1]!;
+      const W = blocks?.[ci - 1]?.W;
+      if (!W || W.length !== units * from) return Array.from({ length: units }, () => 0.6);
+      const rowNorm = Array.from({ length: units }, (_, j) => {
+        let s = 0;
+        for (let k = 0; k < from; k++) {
+          const v = W[j * from + k] ?? 0;
+          s += v * v;
+        }
+        return Math.sqrt(s);
+      });
+      const mx = Math.max(...rowNorm, 1e-9);
+      return rowNorm.map((v) => 0.25 + 0.75 * (v / mx));
+    });
+  }, [geometry, weights]);
+
+  const hops = React.useMemo(
+    () => defaultHops(geometry.sizes.length, geometry.heads),
+    [geometry]
+  );
+  const activity = useVizActivity(hops, { reduced });
+
+  // Tự chạy ĐÚNG 1 lượt mô phỏng suy luận khi mở tab (minh hoạ — có nhãn
+  // "MÔ PHỎNG" ngay trên chip), xong tự về nhàn rỗi. Không chạy khi
+  // prefers-reduced-motion.
+  const autoRan = React.useRef(false);
+  const activityRef = React.useRef(activity);
+  React.useEffect(() => {
+    activityRef.current = activity;
+  });
+  React.useEffect(() => {
+    if (autoRan.current || reduced) return;
+    autoRan.current = true;
+    window.setTimeout(() => activityRef.current.run("fwd"), 450);
+  }, [reduced]);
+
   const cap = Math.max(180, Math.floor(EDGE_CAP / geometry.groups.length));
   const sampled = geometry.groups.map((g) => subsample(g, cap));
   const totalEdges = geometry.groups.reduce((s, g) => s + g.length, 0);
@@ -192,6 +260,7 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
       label: geometry.heads[ci],
       sub: `${units} nơ-rôn`,
       kind: isInput ? "input" : isOutput ? "output" : "hidden",
+      act: acts[ci],
       sideLabel: isInput
         ? (j) => (featureNames[j] ?? `x[${j}]`).slice(0, 22)
         : isOutput
@@ -211,34 +280,45 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
     <div className="flex flex-col gap-1.5">
       <VizShell
         title={`MLP ${mlp.archString} · serving v${mlp.version}`}
-        toolbar={toolbar}
+        toolbar={activity.controls}
         legend={
           <>
             <LegendDot color={VIZ_PALETTE.fwd} label="hạt lục — lan truyền tiến (x → ŷ)" />
             <LegendDot color={VIZ_PALETTE.bwd} label="hạt hồng — lan truyền ngược (gradient ∂L)" />
             <LegendLine color={VIZ_PALETTE.wPos} label="trọng số dương" />
             <LegendLine color={VIZ_PALETTE.wNeg} label="trọng số âm" />
-            <ModeLegendText mode={mode} reduced={reduced} />
+            <span>nơ-rôn sáng = hoạt động mạnh (chuẩn trọng số vào — tính từ trọng số thật bản serving)</span>
+            <ActivityStatusText
+              activity={activity}
+              autoNote="bản serving chỉ tính khi có yêu cầu dự báo 5 phiên hoặc train theo lịch"
+            />
           </>
         }
       >
         <TypologyNet
           columns={columns}
           edgeGroups={sampled.map((g) => g.items)}
+          hops={hops}
+          activity={activity}
           viewW={geometry.vbW}
           viewH={400}
-          mode={mode}
-          reduced={reduced}
-          ariaLabel={`Sơ đồ typology mạng MLP ${mlp.archString} — ${geometry.sizes.length} cột, trọng số thật bản serving v${mlp.version}, hạt tín hiệu lan truyền tiến và ngược`}
+          ariaLabel={`Sơ đồ typology mạng MLP ${mlp.archString} — ${geometry.sizes.length} cột, trọng số thật bản serving v${mlp.version}, hạt tín hiệu chỉ chạy khi mạng hoạt động`}
         />
       </VizShell>
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         Mỗi cạnh = 1 trọng số thật của bản serving (di chuột lên nơ-rôn/cạnh để
         xem giá trị) —{" "}
         <span className="text-emerald-600 dark:text-emerald-400">lục: trọng số dương</span>{" · "}
-        <span className="text-rose-600 dark:text-rose-400">hồng: âm</span> · dày = |trọng số| lớn ·
-        hạt lục chạy tiến (suy luận) · hạt hồng chạy ngược (học) — bấm nút
-        tiến/ngược/chu kỳ trên sơ đồ để đổi cơ chế đang hiển thị.
+        <span className="text-rose-600 dark:text-rose-400">hồng: âm</span> · dày = |trọng số| lớn.
+        Nơ-rôn càng sáng = chuẩn trọng số vào càng lớn (vai trò mạnh trong mạng —
+        nơ-rôn tối gần như im lặng). Hạt tín hiệu{" "}
+        <strong>không chạy liên tục</strong>: mặc định mạng nhàn rỗi (tĩnh) —
+        hạt chỉ xuất hiện trong một lượt{" "}
+        <span className="text-emerald-600 dark:text-emerald-400">▸ suy luận</span> /{" "}
+        <span className="text-rose-600 dark:text-rose-400">◂ gradient</span> /{" "}
+        <span className="text-cyan-600 dark:text-cyan-400">⟳ 1 epoch</span> bấm trên sơ đồ,
+        chạy theo sóng từng lớp rồi tự dừng; lượt mô phỏng đầu tiên tự chạy một
+        lần khi mở tab để minh hoạ.
         {drawn < totalEdges
           ? ` Mạng lớn — vẽ ${nf0.format(drawn)}/${nf0.format(totalEdges)} cạnh đại diện (cấu trúc đúng 100%).`
           : ` Đủ ${nf0.format(totalEdges)} cạnh.`}
@@ -247,15 +327,18 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
   );
 }
 
-/* ─────────────────── Sơ đồ GRU — typology cổng + đệ quy (#134) ─────────────────── */
+/* ─────────────────── Sơ đồ GRU — typology cổng + đệ quy (#134 → #135) ─────────────────── */
 
 function GruDiagram({ gru }: { gru: MlGruArchInfo }) {
-  const { mode, toolbar } = useVizMode();
   const reduced = usePrefersReducedMotion();
+  const hops = React.useMemo<VizHopSpec[]>(() => gruHops(), []);
+  // GRU CHƯA TỪNG TRAIN → trung thực: KHÔNG tự chạy lượt nào khi mở tab —
+  // mạng này thực sự chưa bao giờ hoạt động; hạt chỉ khi chủ sở hữu bấm.
+  const activity = useVizActivity(hops, { reduced });
   return (
     <VizShell
       title={`GRU-${gru.arch.h} · ${gru.arch.in}→${gru.arch.h}→${gru.arch.d}→${gru.arch.out}`}
-      toolbar={toolbar}
+      toolbar={activity.controls}
       legend={
         <>
           <LegendDot color={VIZ_PALETTE.fwd} label="hạt lục — lan truyền tiến" />
@@ -264,11 +347,14 @@ function GruDiagram({ gru }: { gru: MlGruArchInfo }) {
           <LegendDot color={VIZ_PALETTE.gate} label="cổng sigmoid r·z" />
           <LegendDot color={VIZ_PALETTE.cand} label="h̃ tanh" />
           <LegendDot color={VIZ_PALETTE.state} label="trạng thái hₜ" />
-          <ModeLegendText mode={mode} reduced={reduced} />
+          <ActivityStatusText
+            activity={activity}
+            autoNote="GRU chưa từng huấn luyện — cường độ nơ-rôn trung tính (chưa có trọng số thật)"
+          />
         </>
       }
     >
-      <GruNet arch={gru.arch} mode={mode} reduced={reduced} />
+      <GruNet arch={gru.arch} hops={hops} activity={activity} />
     </VizShell>
   );
 }
@@ -284,7 +370,6 @@ function DraftDiagram({
   hidden: number[];
   activations: MlActivation[];
 }) {
-  const { mode, toolbar } = useVizMode();
   const reduced = usePrefersReducedMotion();
   const geometry = React.useMemo(() => {
     const sizes = [inUnits, ...hidden, 3];
@@ -308,6 +393,18 @@ function DraftDiagram({
   const cap = Math.max(120, Math.floor(DRAFT_EDGE_CAP / geometry.groups.length));
   const sampled = geometry.groups.map((g) => subsample(g, cap));
 
+  // Bản nháp là CẤU HÌNH cho lần train kế tiếp — chưa từng chạy thật: không
+  // tự chạy lượt nào; hạt chỉ khi bấm (mô phỏng cấu trúc đang soạn).
+  const hops = React.useMemo(
+    () =>
+      defaultHops(
+        geometry.sizes.length,
+        geometry.sizes.map((_, i) => (i === 0 ? "lớp vào" : `lớp ${i}`))
+      ),
+    [geometry]
+  );
+  const activity = useVizActivity(hops, { reduced });
+
   const columns: VizColumn[] = geometry.sizes.map((u, i) => {
     const isLast = i === geometry.sizes.length - 1;
     return {
@@ -322,28 +419,31 @@ function DraftDiagram({
   return (
     <VizShell
       title="ANN — bản nháp trình chỉnh sửa"
-      toolbar={toolbar}
+      toolbar={activity.controls}
       legend={
         <>
           <LegendDot color={VIZ_PALETTE.fwd} label="hạt lục — lan truyền tiến" />
           <LegendDot color={VIZ_PALETTE.bwd} label="hạt hồng — lan truyền ngược" />
           <span>cạnh cấu trúc — chưa có trọng số (sẽ có sau lần train)</span>
-          <ModeLegendText mode={mode} reduced={reduced} />
+          <ActivityStatusText
+            activity={activity}
+            autoNote="bản nháp chỉ là cấu hình cho lần train kế tiếp — chưa từng chạy thật"
+          />
         </>
       }
     >
       <TypologyNet
         columns={columns}
         edgeGroups={sampled.map((g) => g.items)}
+        hops={hops}
+        activity={activity}
         viewW={geometry.vbW}
         viewH={176}
-        mode={mode}
-        reduced={reduced}
         structural
         flowArrows={false}
         headersAt={[14, 26]}
         minW={geometry.sizes.length > 4 ? 560 : 420}
-        ariaLabel={`Sơ đồ nháp kiến trúc ANN: ${inUnits} vào → ${hidden.join(" → ")} → 3 ra, hạt tín hiệu lan truyền`}
+        ariaLabel={`Sơ đồ nháp kiến trúc ANN: ${inUnits} vào → ${hidden.join(" → ")} → 3 ra, hạt tín hiệu chỉ chạy khi bấm mô phỏng`}
       />
     </VizShell>
   );
@@ -1084,14 +1184,20 @@ export function NnTab() {
           <GruDiagram gru={gru} />
           <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
             <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-            Sơ đồ typology: hiển thị đại diện ({Math.min(gru.arch.in, 10)}/{gru.arch.in} đặc
-            trưng · {Math.min(gru.arch.h, 12)}/{gru.arch.h} nơ-rôn mỗi cổng) — công thức từng
-            cổng giữ nguyên trong tooltip, cấu trúc đúng 100%. Kiến trúc GRU{" "}
-            <strong>CỐ ĐỊNH trong code</strong> (GRU_ARCH {gru.arch.in}→{gru.arch.h}→
-            {gru.arch.d}→{gru.arch.out} · window {gru.arch.window} phiên) —{" "}
-            <strong>không nằm trong không gian tìm kiếm</strong> của tab Tự động tìm kiếm
-            (NAS-Lite chỉ tìm kiến trúc MLP/ANN + hyper đi kèm); GRU lên giọng thứ ba qua
-            cổng bằng chứng B2 (shadow 60 phiên · Brier ≤ MLP), không qua champion board.
+            <span>
+              Sơ đồ typology: hiển thị đại diện ({Math.min(gru.arch.in, 10)}/{gru.arch.in} đặc
+              trưng · {Math.min(gru.arch.h, 12)}/{gru.arch.h} nơ-rôn mỗi cổng) — công thức từng
+              cổng giữ nguyên trong tooltip, cấu trúc đúng 100%; vòng đệ quy hₜ₋₁ nối đúng từ tâm
+              nơ-rôn trạng thái dưới cùng về tâm nơ-rôn cổng dưới cùng. Hạt tín hiệu{" "}
+              <strong>chỉ chạy khi bấm ▸/◂/⟳</strong> (mô phỏng) — GRU{" "}
+              <strong>chưa từng huấn luyện</strong> nên mặc định tĩnh và cường độ nơ-rôn trung
+              tính. Kiến trúc GRU <strong>CỐ ĐỊNH trong code</strong> (GRU_ARCH{" "}
+              {gru.arch.in}→{gru.arch.h}→
+              {gru.arch.d}→{gru.arch.out} · window {gru.arch.window} phiên) —{" "}
+              <strong>không nằm trong không gian tìm kiếm</strong> của tab Tự động tìm kiếm
+              (NAS-Lite chỉ tìm kiến trúc MLP/ANN + hyper đi kèm); GRU lên giọng thứ ba qua
+              cổng bằng chứng B2 (shadow 60 phiên · Brier ≤ MLP), không qua champion board.
+            </span>
           </p>
         </section>
       )}

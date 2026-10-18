@@ -226,3 +226,50 @@
     transparent 3px
   );
 }
+
+/* F-21 (#135) — HẠT TÍN HIỆU chỉ chạy khi mạng HOẠT ĐỘNG (#135):
+ * hạt là <circle cx=0 cy=0> dịch chuyển bằng CSS transform — đi từ ĐÚNG tâm
+ * nơ-rôn nguồn (--sx1/--sy1) đến ĐÚNG tâm nơ-rôn đích (--sx2/--sy2);
+ * mờ dần ở 2 đầu để "nảy ra từ nơ-rôn" và "hạ cánh xuống nơ-rôn".
+ * fill-mode both: trước delay hạt nằm tại nguồn (opacity 0) — không bao giờ
+ * xuất hiện giữa chừng ở nơi không có nơ-rôn. */
+@keyframes nn-sig {
+  0% {
+    transform: translate(var(--sx1), var(--sy1));
+    opacity: 0;
+  }
+  12% {
+    opacity: var(--sig-op, 0.95);
+  }
+  86% {
+    opacity: var(--sig-op, 0.95);
+  }
+  100% {
+    transform: translate(var(--sx2), var(--sy2));
+    opacity: 0;
+  }
+}
+
+/* Nơ-rôn — transform quanh tâm riêng (transform-box: fill-box) để pulse
+ * khi LỚP ĐANG NHẬN TÍN HIỆU; cường độ pulse theo --amp (hoạt động thật
+ * của nơ-rôn: chuẩn trọng số vào càng lớn → càng sáng). */
+.nn-neuron {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    fill-opacity 0.3s ease,
+    stroke-opacity 0.3s ease;
+}
+.nn-neuron-hot {
+  animation: nn-hot 0.65s ease-in-out 2 both;
+  filter: drop-shadow(0 0 3.5px var(--hot, #34d399));
+}
+@keyframes nn-hot {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(calc(1 + var(--amp, 0.3)));
+  }
+}
