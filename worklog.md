@@ -4556,3 +4556,22 @@ Stage Summary:
 - TRẢ LỜI CÂU HỎI GIÁ TRỊ (bằng chứng code+DB): MLP serving là CỬ TRI THỨ 6/7 của Bộ tổng hợp Bayes — giọng duy nhất không dùng LLM, hiện là cử tri CÓ TRACK RECORD TỐT NHẤT (62,7% sau 30 phiếu settle, 12 thắng liên tiếp, posterior 61,9%, trọng số phiếu 0,6118 cao nhất hội đồng sau đợt settle 17-10); chuỗi giá trị: train Chủ nhật → sweep NAS (5 đợt, champion C5 swap v61) → forecast mỗi chu kỳ 4h (58 run) → phiếu+cổng 80% → Chủ tịch → Signal → lệnh qua VETO; quỹ đạo valAcc v1→v73 +8,7 điểm %. Q-learning = giọng evidence phơi nhiễm (96 trạng thái, stance tăng). GRU = dự bị 0 tác động (B2 FAIL trung thực). macro-mlp = 8 dự báo vĩ mô vào prompt Chủ tịch (US10Y 67,5%)
 - GIỚI HẠN TRUNG THỰC nêu rõ: 19/20 chu kỳ gần nhất MLP phiếu FLAT (deadband — không phóng đo khi không có biên) · F-07 trọng số học còn cold-start (0,7/0,3 cố định chờ 60 phiếu meta) · 60 tín hiệu gần nhất WIN17/LOSS25/NEUTRAL6 — giá trị NN = kỷ luật đo được + cổng, KHÔNG phải bảo đảm lợi nhuận
 - Sản phẩm: 2 file (scripts/p136-nn-value-evidence.ts mới + nn-tab.tsx +ValueChainCard) · lint/tsc sạch · E2E desktop+mobile 0 lỗi
+
+---
+Task ID: 137
+Agent: main-orchestrator (Z.ai Code)
+Task: F-23 AUDIT TOÀN DIỆN — chủ sở hữu yêu cầu "vào vai kỹ sư AI chuyên gia lập trình lâu năm, tìm kiếm các lỗi, vấn đề thiếu sót của THE TRADER rồi báo cáo"
+
+Work Log:
+- Phát động 4 subagent audit song song (read-only, mỗi agent tự chống false-positive bằng đọc ≥30 dòng ngữ cảnh + grep call-site + mô phỏng tay + numerical check + đối chứng DB sống): A đội agent & council · B pipeline ML/NN (gradient-check MLP 9,6e-10 PASS · GRU BPTT 1,6e-7 PASS · multitask FAIL · enumeration RL FAIL) · C thực thi & rủi ro (mô phỏng TWAP/fee/state-machine + DB Supabase) · D frontend & data layer
+- Lượt đối chứng CÁ NHÂN toàn bộ findings CRITICAL/HIGH trước khi công bố: đọc trực tiếp engine.ts:389-409 (C1 ✓ không lọc thế giới) · reconciliation.ts:99-122 vs 194-207 (C2 ✓ trades mọi tài khoản vs ledger paper-only) · rl.ts:166-168 (B2 ✓ thiếu ngoặt, enumeration 96→36 index, 60 va chạm) · train-mlp.ts:460 + nn.ts:366-371 (B1 ✓ standardize toàn dãy trước khi fit cắt 80/20) · agent-service-runs.ts:1087-1091 (A1 ✓ so object identity) · footer.tsx:130 + grep refetchInterval (D1 ✓ tooltip khai polling không tồn tại) · glob error.tsx = 0 file (D3 ✓) · committed.ts:79-102 (C3 ✓)
+- Baseline tĩnh: bun run lint 0 lỗi 0 cảnh cáo · tsc --noEmit chỉ lỗi BigInt/typing có sẵn trong scripts/auto-decide-verify.ts + skills/ (không liên quan src/)
+- Tổng hợp báo cáo chính thức docs/AUDIT_137.md (40 findings: 1 CRITICAL · 3 HIGH · ~15 MEDIUM · ~21 LOW + 4 danh mục nợ kỹ thuật + ~50 mục đã-kiểm-tra-và-SẠCH + lộ trình khuyến nghị F-23 P0-P4) + 4 phụ lục thô docs/audit/137-{a,b,c,d}-raw.md
+- Audit read-only: 0 file sản phẩm bị sửa trong quá trình rà soát — commit chỉ chứa báo cáo + phụ lục
+
+Stage Summary:
+- CRITICAL C1: risk engine + scenario engine không lọc thế giới tài khoản — NAV/VaR/HHI/ngưỡng VETO động của paper đang chạy trên 3 vị thế sandbox (DB khớp 100%: nav=29.720.000 proxy=false, topPosPct 72,34% > dynMax 28,43%, risk-quant-limits Beta nhiễm α:10 β:128) — cần world-context + reset prior
+- HIGH: B1 lookahead chuẩn hoá (valAcc 42,9% lạc quan hệ thống, 3 call-site) · B2 Q-learning "96 trạng thái" thực 36 (60 va chạm index, cần retrain) · C2 reconciliation trộn trade sandbox → 2 MISMATCH giả đã nổ thật trong production (14-10 & 16-10) + RiskAlert EXEC_RECONCILE_MISMATCH
+- MEDIUM nổi bật: A1 đếm kép episodes · A2 cửa sổ reward bandit lệch 1 phiên sau giờ chốt · A3 VETO fail-open khi control-agent crash · A4 watchdog chồng chu kỳ >5' · C3 committedBuyingPower paper âm vì lệnh PENDING sandbox · C4 lệnh thật VIC 22,6% NAV thay vì 5% (min-lot ép 100) · C5 reset không reset checkpoint · C6 fill không guard cash + marginUsed không writer · D1 bảng giá đóng băng khi WS chết (tooltip khai polling giả) · D3 0 error boundary toàn app
+- SẠCH được kiểm chứng: backprop MLP/GRU (numerical check) · lag/PIT offset · state machine Order + claim atomic (mô phỏng double-execution thua 409) · TWAP Σ chính xác không timer leak · timezone phiên VN · phí/thuế 1 nguồn · Wilson/Murphy/Brier · cleanup hook/component 100% · BigInt/Date serde
+- Khuyến nghị F-23: P0 world-context risk/exec (C1+C2+C3+C5+C10 + reset risk-quant-limits) → P1 vệ sinh ML (B1+B2+A1+A5) → P2 fail-safe (A3+A4+D3+C4) → P3 realtime UX (D1+D4+D7) → P4 dọn dẹp (A2+B3/B4/B5/B6+B7+LOW)
