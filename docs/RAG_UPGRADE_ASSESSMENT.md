@@ -5,9 +5,13 @@
 > cho tôi biết có thể nâng cấp từ RAG thành lightRAG hoặc GraphRAG không, nếu nâng
 > cấp thì giữa LightRAG và GraphRAG loại nào phù hợp hơn?”*
 >
+> **Cập nhật Task 141 (cùng ngày):** chủ sở hữu cung cấp API key NVIDIA NIM để
+> gỡ ràng buộc lõi embed §4.1 — đo thật và cập nhật toàn bộ phán quyết ở **§9**.
+>
 > Bằng chứng: `scripts/p140-rag-data-volume.ts` (SELECT-only + 3 cuộc gọi LLM thật
-> glm-4.6 để đo chi phí trích xuất thực thể). Toàn bộ số liệu dưới đây đo trên DB
-> Supabase sống ngày 2026-10-18.
+> glm-4.6 để đo chi phí trích xuất thực thể) + `scripts/p141-nim-embed-test.ts`
+> (kiểm tra key NIM, đo dim/latency/chất lượng ngữ nghĩa tiếng Việt). Toàn bộ số
+> liệu dưới đây đo trên DB Supabase sống + API NIM thật ngày 2026-10-18.
 
 ---
 
@@ -15,9 +19,10 @@
 
 | Câu hỏi | Trả lời |
 |---|---|
-| **Có thể nâng cấp không?** | **CÓ, về mặt kỹ thuật** — LLM glm-4.6 trích xuất thực thể/quan hệ tiếng Việt chạy tốt (micro-test §3). Nhưng có 3 ràng buộc thật: SDK không có endpoint embeddings (§4.1), độ trễ 7-15s/cuộc trích xuất (§4.2), và corpus hiện tại 62% là telemetry vận hành chứ không phải tri thức thị trường (§2.3). |
-| **LightRAG hay GraphRAG?** | **LightRAG — thắng tuyệt đối ở quy mô và kiến trúc hiện tại.** GraphRAG chỉ hợp khi corpus lớn gấp 20-50×, có embedding endpoint thật, và use case đổi từ “tiêm ngữ cảnh” sang “hỏi tổng quan chủ đề” (§5, §7). |
+| **Có thể nâng cấp không?** | **CÓ, về mặt kỹ thuật** — LLM glm-4.6 trích xuất thực thể/quan hệ tiếng Việt chạy tốt (micro-test §3). Sau Task 141 còn 2 ràng buộc thật: độ trễ 7-15s/cuộc trích xuất → indexing phải chạy nền (§4.2), và corpus hiện tại 62% là telemetry vận hành chứ không phải tri thức thị trường (§2). Ràng buộc thứ ba (không có lõi embed) **đã được gỡ bằng NVIDIA NIM** (§9). |
+| **LightRAG hay GraphRAG?** | **LightRAG — thắng tuyệt đối ở quy mô và kiến trúc hiện tại.** GraphRAG chỉ hợp khi corpus lớn gấp 20-50×, và use case đổi từ “tiêm ngữ cảnh” sang “hỏi tổng quan chủ đề” (§5, §7). Có lõi embed NIM (§9) không đổi phán quyết này — embeddings chỉ là 1 trong 7 tiêu chí. |
 | **Khuyến nghị thực tế** | Đừng “thay máy” L1 BM25. Nâng cấp đúng nghĩa = **thêm lớp L2 tri thức dài hạn kiểu LightRAG** trên corpus được tuyển lọc, bootstrap từ dữ liệu ĐÃ CÓ (104 mã Instrument, MACRO_SYNONYMS, 40 cạnh MarketRelation đo được) — giữ L1 BM25 làm lớp nóng (§6). |
+| **Lõi embed NVIDIA NIM (141)** | **DÙNG ĐƯỢC**: key hợp lệ, egress thông, 2 model sống đều **2.048 dim** (đúng trí nhớ của chủ sở hữu) — `nemotron-3-embed-1b` tách nghĩa tiếng Việt tài chính xuất sắc: doc cùng nghĩa 0,55 vs doc ngoài đề 0,06 (biên 9×). L2 nên chạy hybrid BM25 + vector ngay từ đầu, fail-soft về BM25 (§9). |
 
 ---
 
@@ -124,6 +129,13 @@ Supabase có pgvector, nhưng không có model sinh embedding trong sandbox →
 vector phải tự tính local (TF-IDF/SVD) → mất gần hết lợi ích “ngữ nghĩa” mà
 đi lên graph-RAG nhằm tìm.
 
+> **CẬP NHẬT TASK 141:** ràng buộc trên **ĐÃ ĐƯỢC GỠ** — chủ sở hữu cung cấp
+> API key NVIDIA NIM (`integrate.api.nvidia.com/v1`); đo thật từ sandbox: key
+> hợp lệ, egress thông, 2 model embedding sống được đều 2.048 dim, chất lượng
+> ngữ nghĩa tiếng Việt tài chính tốt — chi tiết + tác động đến từng kết luận
+> ở **§9**. SDK z-ai vẫn không có embeddings, nhưng NIM là lõi embed BÊN NGOÀI
+> hợp lệ về mặt kiến trúc (giống các adapter Yahoo/Frankfurter đã có).
+
 ### 4.2 Độ trễ LLM 7-15s/cuộc trích xuất
 Index toàn bộ 2.291 chunk × 2 cuộc = **~15 giờ LLM nối tiếp** (4 luồng song song
 ≈ 3,8h) — chỉ chấp nhận được như task nền Chủ nhật (đúng nhịp learning-rag A13
@@ -159,7 +171,7 @@ agent, kèm guardrail “dữ liệu quá khứ dùng ĐỐI CHIẾU, không tha
 | Quy mô corpus hợp lý | 10²-10⁴ docs (đúng 2.291) | ≥10⁴-10⁶ docs | §1.2 |
 | Chi phí index (đo) | $5,38 | $9,47 + tái phân cụm | §4.3 |
 | Chi phí/truy vấn | 0-1 cuộc LLM (tách từ khoá; hoặc 0 dùng BM25 query sẵn) | 10-30 cuộc (global) / cần embedding (local) | §4.1, §4.4 |
-| Không có embeddings | Chịu được (keyword mode + đồ thị) | Gãy local search | §4.1 |
+| Lõi embed (cập nhật 141) | **CÓ**: NIM `nemotron-3-embed-1b` 2.048 dim đo thật (§9) | Cũng có — nhưng vẫn thua 6 tiêu chí còn lại | §4.1, §9 |
 | Cập nhật tăng dần (+185 doc/ngày) | Insert incremental — thực thể gộp dần | Cần tái phân cụm cộng đồng | §4.3 |
 | Khớp kiến trúc tiêm khối ngữ cảnh | Đúng 1:1 | Không khớp (sinh câu trả lời) | §4.4 |
 | Đồ thị đủ sâu để phân cụm cộng đồng có nghĩa? | Không cần cộng đồng | **Chưa đủ**: ~2.291 doc ngắn → ~500-1.500 thực thể sau gộp — cộng đồng Leiden sẽ nông/trivial | §1.2 |
@@ -193,17 +205,23 @@ chưa có dữ liệu đủ lớn lẫn use case tiêu thụ (§7).
 3. **Kiến trúc mini-service nền**: indexing tăng dần trong nhiệm vụ learning-rag
    A13 (Chủ nhật) + hàng đêm ~30 phút; lưu đồ thị ở bảng Postgres mới
    (KnowledgeEntity/KnowledgeEdge/KnowledgeChunk — không cần neo4j, 2.291 chunk
-  Postgres xử lý nhẹ nhàng); nhớ `created_at` mỗi cạnh để **lọc thời gian khi
+   Postgres xử lý nhẹ nhàng); nhớ `created_at` mỗi cạnh để **lọc thời gian khi
    truy hồi** (bài toán half-life 72h của domain — đồ thị tri thức phải biết
-   mình cũ ở đâu).
-4. **Truy vấn không tốn LLM**: giữ query-builder BM25 + MACRO_SYNONYMS sẵn có
+   mình cũ ở đâu). Vector 2048 dim (§9) lưu cùng chunk dạng JSONB/bytea —
+   2.291 doc × 2.048 float ≈ 19MB RAM, quét cosine in-memory <50ms; **pgvector
+   chỉ cần khi kho vượt ~50k doc** (đúng ngưỡng reconsider GraphRAG §7).
+4. **Truy vấn hybrid BM25 + vector NIM (cập nhật Task 141)**: giữ query-builder
+   BM25 + MACRO_SYNONYMS sẵn có làm đường từ khoá; THÊM embedding query qua NIM
+   `nemotron-3-embed-1b` (2.048 dim, ~0,6s, §9) xếp hạng NGỮ NGHĨA top-K chunk
    → ánh xạ token vào thực thể đồ thị → duyệt 1-2 bước láng giềng → top-K cạnh
-  /snippet kèm mốc thời gian → đóng khối “TRI THỨC DÀI HẠN (L2)” tách khỏi khối
-   L1 hiện tại. RetrievalLog thêm `layer: "L1"|"L2"` để đo cổng.
+   /snippet kèm mốc thời gian → đóng khối “TRI THỨC DÀI HẠN (L2)” tách khỏi khối
+   L1 hiện tại. Fail-soft 2 tầng: NIM lỗi/quá hạn/key hết credit → rơi về BM25
+   thuần, chu kỳ không bao giờ bị phá (nguyên tắc §6 giữ tuyệt đối).
+   RetrievalLog thêm `layer: "L1"|"L2"` để đo cổng.
 5. **Cổng quyết định theo văn hoá THE TRADER**: sau ≥30 ngày chạy song song, so
    (a) tỉ lệ L2 hit có thực thể liên quan đúng, (b) thay đổi chất lượng phiếu
-   hội đồng (nếu có), (c) chi phí — rồi mới cân nhắc bật embedding thật /
-   mở rộng corpus toàn văn bài báo.
+   hội đồng (nếu có), (c) chi phí — rồi mới cân nhắc mở rộng corpus toàn văn
+   bài báo / bật pgvector / nâng tỉ trọng vector trong hybrid.
 
 ## §7 — KHI NÀO CÂN NHẮC LẠI GRAPHRAG
 
@@ -211,11 +229,15 @@ Cả 3 điều kiện phải đồng thời đạt:
 1. **Corpus ≥ 50-100k doc** — ví dụ ingest toàn văn bài báo (hiện chỉ title +
    summary ~250-315 ký tự, quá mỏng để trích quan hệ giàu); ở nhịp +185
    doc/ngày cần ~1-1,5 năm, hoặc chủ động bật crawler toàn văn.
-2. **Có endpoint embeddings thật** (SDK bổ sung / model local đủ tốt cho tiếng
-   Việt tài chính).
+2. **Có endpoint embeddings thật** — ~~chưa có~~ **ĐÃ ĐẠT từ Task 141** (NIM
+   `nemotron-3-embed-1b`, §9); điều này còn giúp GraphRAG local search chạy
+   được về mặt kỹ thuật.
 3. **Use case đổi sang “hỏi tổng quan”** — vd. báo cáo tuần cho chủ sở hữu
    “5 chủ đề lớn tác động VN30 tháng này” — lúc đó global search map-reduce
    chính là sản phẩm, chạy 1 lần/tuần (không phải mỗi chu kỳ).
+
+→ Sau Task 141, GraphRAG chỉ còn bị chặn bởi **điều kiện 1 và 3** — đều là bài
+  toán dữ liệu/use case, không phải hạ tầng.
 
 ## §8 — GIỚI HẠN CỦA BẢN ĐÁNH GIÁ
 
@@ -229,7 +251,91 @@ Cả 3 điều kiện phải đồng thời đạt:
 - Số liệu AgentMessage chỉ phủ 13 ngày (DB epoch hiện tại 06/10→18/10) — corpus
   sẽ lớn dần; §7 đã nêu ngưỡng reconsider.
 
+## §9 — CẬP NHẬT TASK 141: LÕI EMBED NVIDIA NIM (đo thật với key của chủ sở hữu)
+
+Chủ sở hữu hỏi: *"endpoint embeddings ở đây là lõi embed phải không, nếu dùng 1
+lõi embed của NVIDIA NIM được không — tôi nhớ NIM có lõi 2048 dim"*. Trả lời
+bằng số đo từ `scripts/p141-nim-embed-test.ts` (chạy thật từ sandbox, key đặt
+trong `.env.local` — không in key ra log):
+
+### 9.1 Xác nhận thuật ngữ + kết nối + quyền
+- **Thuật ngữ:** đúng — "endpoint embeddings" = **lõi embed** (model nhúng văn
+  bản): biến đoạn text → vector sao cho *văn gần nghĩa → vector gần nhau*. Thiếu
+  nó thì graph-RAG chỉ tìm theo CHỮ (BM25/keyword), không theo NGHĨA.
+- **Egress sandbox → `integrate.api.nvidia.com/v1`: THÔNG** (169-173ms).
+- **Key HỢP LỆ.** Catalogue: 81 model, trong đó 7 model embedding; 0 rerank.
+- **Trí nhớ "2048 dim" ĐÚNG:** cả 2 model chạy được đều trả **2.048 chiều**.
+- Lưu ý catalogue đã đổi đời: 4 tên model đời cũ (`llama-3.2-nv-embedqa-1b-v2`,
+  `nv-embedqa-e5-v5`, `baai/bge-m3`, `nv-embed-v1`) giờ **HTTP 410 Gone (EOL)**;
+  5/7 model còn lại **HTTP 404 "Function not found for account"** (bị chặn theo
+  tài khoản, không phải EOL).
+
+### 9.2 Hai model sống được — dim / latency / token
+
+| Model | Dim | Độ trễ query | Độ trễ batch 3 doc | Token in |
+|---|---|---|---|---|
+| **nvidia/nemotron-3-embed-1b** ⭐ khuyến nghị | **2.048** | 572ms | 789ms | 22 / 120 |
+| nvidia/llama-nemotron-embed-vl-1b-v2 | 2.048 | 783ms | 980ms | 21 / 127 |
+
+Batch-nhiều-text-trong-1-request hoạt động → index 2.291 doc chỉ ~25-50 request.
+Độ trễ ~0,6s/cuộc query chấp nhận được cho pipeline truy hồi chu kỳ (đang tốn
+200-400ms chỉ đọc DB).
+
+### 9.3 Chất lượng ngữ nghĩa tiếng Việt tài chính (cosine, cao = gần nghĩa)
+
+Query: *"lạm phát CPI tháng 9 tăng nóng, dư địa lãi suất điều hành"*
+
+| Model | Doc CPI tiếng Việt | Doc CPI tiếng Anh | Doc bóng đá | Biên tách nghĩa |
+|---|---|---|---|---|
+| **nemotron-3-embed-1b** | **0,548** | 0,455 | **0,059** | **0,489 (~9×)** |
+| llama-nemotron-embed-vl-1b-v2 | 0,499 | 0,362 | 0,086 | 0,413 |
+
+Đọc đúng cách: với bài toán RAG, điều quyết định là **biên xếp hạng related-vs-
+unrelated**, không phải trị tuyệt đối — `nemotron-3-embed-1b` tách doc cùng nghĩa
+vs doc hoàn toàn ngoài đề với biên 0,489 (tỉ lệ ~9×) → xuất sắc cho top-K
+ranking; cross-lingual 0,455 dùng tốt cho tin tiếng Anh (US10Y, Fed…). Đây chính
+là thứ BM25 thuần lexical KHÔNG làm được (điểm yếu §2-a) — và là lý do L2 nên
+chạy hybrid ngay từ đầu.
+
+### 9.4 Tác động đến từng kết luận của Task 140
+
+| Mục | Trước (Task 140) | Sau (Task 141) |
+|---|---|---|
+| Ràng buộc lõi embed §4.1 | SDK không có → keyword mode | **ĐÃ GỠ** — NIM 2 model 2.048 dim sống, latency query ~0,6s |
+| Đề xuất truy vấn §6.4 | BM25 + đồ thị thực thể (0 LLM) | **Hybrid BM25 + vector NIM** — fail-soft về BM25 khi NIM lỗi/hết credit |
+| LightRAG vs GraphRAG §5 | LightRAG 7/7 | **LightRAG 6/7 tiêu chí còn lại** — lõi embed chỉ là 1/7; corpus 2.291 doc vẫn là đất LightRAG |
+| Điều kiện GraphRAG §7 | 3 điều kiện | Điều kiện 2 **đã đạt**; còn chặn ở corpus ≥50-100k doc + use case hỏi tổng quan |
+
+### 9.5 Chi phí embedding (từ token đo được — cần đối chiếu bảng giá/credit NIM)
+- Corpus tuyển §6.1 (~1.550 chunk ≈ 240k token): one-time embed **$0,005-0,02**
+  nếu giá kiểu OpenAI (~$0,02-0,10/MTok) — hoặc **~$5-7** nếu NIM tính
+  ~$0,02/1K token. Toàn kho 2.291 doc (~353k token) tương ứng $0,007-0,04 /
+  $7.
+- Incremental ~185 doc/ngày ≈ 15k token/ngày: không đáng kể ở cả hai mức giá;
+  query 1 chu kỳ ~50 token.
+- **Nghiệm vụ cho chủ sở hữu:** xem số dư credit + đơn giá chính xác của key
+  `nvapi-cld-…` tại build.nvidia.com (credit dev thường được tặng — số dư quyết
+  định chuyện này gần như miễn phí hay $5-10/tháng).
+
+### 9.6 Bảo mật key
+- Key nằm trong **`.env.local`** (bị git ignore) — KHÔNG trong `.env` (file này
+  đang được track theo #113 để khôi phục cấu hình sau sandbox reset). Lần đầu
+  append nhầm vào `.env` đã revert sạch trước khi commit (đối chiếu `git diff
+  .env` = 0 dòng).
+- Key từng dán trong hội thoại chat — nếu hội thoại được chia sẻ rộng, nên
+  **rotate** tại build.nvidia.com.
+- Riêng tư dữ liệu: nội dung gửi ra NIM là tin tức công khai + nhận định thị
+  trường nội bộ (không PII) — nêu rõ để chủ sở hữu quyết định chủ động.
+- Kiến trúc khi triển khai: lib `nim-embed.ts` gọi backend-only, key không lộ về
+  client, timeout 30s + fail-soft về BM25 thuần.
+
+**Kết luận §9: NVIDIA NIM gỡ đúng ràng buộc lớn nhất của Task 140 và xác nhận
+trí nhớ 2.048 dim của chủ sở hữu. Lộ trình L2 (§6) chuyển sang hybrid BM25 +
+vector NIM (`nemotron-3-embed-1b`) ngay từ đầu. Phán quyết LightRAG vs GraphRAG
+KHÔNG ĐẢO — corpus vẫn quá nhỏ cho GraphRAG.**
+
 ---
 
 *Tài liệu liên quan: `docs/ML_LEARNING_BLUEPRINT.md` (L1-L3), `docs/AUDIT_137.md`
-(văn hoá trung thực số liệu), script bằng chứng `scripts/p140-rag-data-volume.ts`.*
+(văn hoá trung thực số liệu), script bằng chứng `scripts/p140-rag-data-volume.ts`
++ `scripts/p141-nim-embed-test.ts`.*

@@ -4755,3 +4755,23 @@ Stage Summary:
 - KHUYẾN NGHỊ: không thay L1 BM25 — THÊM lớp L2 tri thức dài hạn kiểu LightRAG trên corpus tuyển (research+executive+macro news+MarketAssessment narrative+DecisionEvaluation ~1.500 doc ~$3-4 index) · bootstrap đồ thị từ 104 Instrument + MACRO_SYNONYMS + 40 cạnh MarketRelation đo được · LLM chỉ trích phần văn bản · giữ fail-soft + cổng đo RetrievalLog theo layer
 - GraphRAG chỉ reconsider khi đủ đồng thời 3 điều: corpus ≥50-100k doc (ingest toàn văn bài báo), có embedding endpoint thật, use case đổi sang hỏi tổng quan chủ đề 1 lần/tuần
 - Artifacts: docs/RAG_UPGRADE_ASSESSMENT.md + scripts/p140-rag-data-volume.ts (giữ lại tái sử dụng) · read-only với DB · 0 file src/ bị đụng
+
+---
+Task ID: 141
+Agent: main-orchestrator (Z.ai Code)
+Task: F-24 follow-up — chủ sở hữu hỏi "endpoint embeddings ở đây là lõi embed phải không, nếu dùng 1 lõi embed của NVIDIA NIM được không" + cung cấp API key nvapi-cld_… + nhớ NIM có lõi 2048 dim
+
+Work Log:
+- Xác nhận thuật ngữ: endpoint embeddings = lõi embed (text → vector, văn gần nghĩa → vector gần nhau) — thứ LightRAG/GraphRAG cần để tìm theo NGHĨA thay vì CHỮ
+- BẢO MẬT (quan trọng): .env đang ĐƯỢC TRACK trong git (#113 khôi phục cấu hình) — append key nhầm vào .env lần đầu, đã revert sạch (git diff .env = 0 dòng, verify 2 lần) → chuyển key vào .env.local (bị ignore qua pattern .env.*) + verify bun tự nạp .env.local
+- Viết scripts/p141-nim-embed-test.ts (0 DB, 0 file sản phẩm): GET /v1/models kiểm egress+key → POST /v1/embeddings đo dim/latency/token trên model ứng viên → test ngữ nghĩa tiếng Việt tài chính (query "lạm phát CPI…" ↔ doc CPI VN / doc CPI EN / doc bóng đá) bằng cosine → ước chi phí L2
+- Kết quả đo thật: egress THÔNG 169-173ms · key HỢP LỆ · catalogue 81 model / 7 embedding / 0 rerank · 4 model đời cũ (llama-3.2-nv-embedqa-1b-v2, e5-v5, bge-m3, nv-embed-v1) HTTP 410 EOL · 5/7 bị chặn theo account (404 Function not found) · 2 MODEL SỐNG: nvidia/nemotron-3-embed-1b (2048 dim · query 572ms · batch 3-doc 789ms · token 22/120) + nvidia/llama-nemotron-embed-vl-1b-v2 (2048 dim · 783/980ms) — TRÍ NHỚ "2048 dim" CỦA CHỦ SỞ HỮU ĐÚNG
+- Chất lượng tiếng Việt tài chính (nemotron-3-embed-1b): doc CPI VN 0,548 · doc CPI EN 0,455 (cross-lingual tốt) · doc bóng đá 0,059 → BIÊN TÁCH NGHĨA 0,489 (~9×) — xuất sắc cho top-K ranking, đúng thứ BM25 lexical thiếu
+- Cập nhật docs/RAG_UPGRADE_ASSESSMENT.md: header + §0 TL;DR (thêm hàng NIM) + §4.1 amendment ĐÃ GỠ + §5 đổi hàng "Lõi embed" + §6.3 vector 2048 lưu JSONB/cosine in-memory 19MB <50ms (pgvector chỉ cần >50k doc) + §6.4 truy vấn hybrid BM25+vector NIM fail-soft 2 tầng + §7 điều kiện 2 đã đạt (GraphRAG còn chặn điều kiện 1+3) + §9 MỚI đầy đủ bằng chứng (9.1-9.6: thuật ngữ/kết nối/quyền, dim/latency/token, cosine matrix, tác động từng kết luận, chi phí 2 kịch bản giá, bảo mật key + khuyến nghị rotate)
+- Nghiệm thu: bun run lint 0 lỗi · git status chỉ 3 file (doc + script + worklog), .env.local KHÔNG xuất hiện (ignored), .env diff = 0
+
+Stage Summary:
+- TRẢ LỜI: (1) Đúng — endpoint embeddings chính là lõi embed; (2) DÙNG NVIDIA NIM ĐƯỢC — key hợp lệ, egress thông, 2 model sống đều 2048 dim đúng trí nhớ chủ sở hữu, nemotron-3-embed-1b khuyến nghị (tách nghĩa tiếng Việt 9×, query 0,6s, batch hoạt động); (3) KHÔNG ĐẢO phán quyết LightRAG — lõi embed chỉ là 1/7 tiêu chí, corpus 2.291 doc vẫn là đất LightRAG; GraphRAG giờ hết cớ hạ tầng nhưng vẫn chặn ở corpus ≥50-100k + use case hỏi tổng quan
+- Lộ trình L2 (§6) nâng cấp: hybrid BM25 + vector NIM ngay từ đầu, fail-soft về BM25 khi NIM lỗi/hết credit; vector lưu JSONB + cosine in-memory (19MB, <50ms) — chưa cần pgvector
+- Việc cho chủ sở hữu: đối chiếu số dư credit + đơn giá key nvapi-cld-… tại build.nvidia.com (quyết định chi phí $0,005-0,04 hay ~$7 một lần embed) + cân nhắc rotate key vì đã dán trong chat
+- Artifacts: scripts/p141-nim-embed-test.ts + docs/RAG_UPGRADE_ASSESSMENT.md §9 + .env.local (KHÔNG commit) · 0 dòng src/ bị đụng
