@@ -153,6 +153,40 @@ export function Footer() {
             Realtime
           </Badge>
 
+          {/* FIXBUG #143 — scheduler market-engine: WS connected KHÔNG đồng nghĩa
+              scheduler sống (zombie 18-10: socket.io vẫn connected + /health vẫn
+              trả lời trong khi toàn bộ timer chết 8,5h — Realtime badge xanh
+              đánh lừa). Probe thật qua /api/system/status → engine. */}
+          {status?.engine && (
+            <Badge
+              variant="outline"
+              className="gap-1.5 px-2 py-0.5 text-[10px]"
+              title={
+                status.engine.reachable
+                  ? `Scheduler market-engine: ${status.engine.ticks ?? "?"} tick · tick cuối ${status.engine.lastTickAt ? new Date(status.engine.lastTickAt).toLocaleTimeString("vi-VN") : "chưa từng"} · ${status.engine.clients ?? 0} client WS${status.engine.stale ? " · CẢNH BÁO: scheduler treo — tick giá/chu kỳ agent không chạy (pm2 restart market-engine)" : ""}`
+                  : "Không gọi được market-engine :3003/health (2.5s timeout) — tick giá/chu kỳ agent/sync EOD không chạy. Kiểm tra pm2 (market-engine)."
+              }
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  status.engine.reachable
+                    ? status.engine.stale
+                      ? "bg-flat"
+                      : "bg-up"
+                    : "bg-down"
+                )}
+                aria-hidden="true"
+              />
+              Engine{" "}
+              {!status.engine.reachable
+                ? "mất kết nối"
+                : status.engine.stale
+                  ? "scheduler treo"
+                  : "sống"}
+            </Badge>
+          )}
+
           {/* PHASE3 B3 §5.5 — chi phí vận hành đội AI lũy kế */}
           {aiCost && (
             <Badge

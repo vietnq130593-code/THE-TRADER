@@ -2,9 +2,9 @@
   "name": "market-engine",
   "version": "0.1.0",
   "private": true,
-  "description": "The Trader — realtime market engine: WebSocket broadcast + scheduler (tick giá, nạp tin RSS, chu kỳ agent tùy chọn)",
+  "description": "The Trader — realtime market engine: WebSocket broadcast + scheduler (tick giá, nạp tin RSS, chu kỳ agent tùy chọn). FIXBUG #143: KHÔNG dùng bun --hot cho service này — sau 1 lần edit file đi qua trạng thái gãy syntax, bun --hot giết TOÀN BỘ timer của process (engine zombie 8,5h 18-10) — edit file xong cần pm2 restart market-engine (hoặc bật PM2 --watch)",
   "scripts": {
-    "dev": "bun --hot index.ts",
+    "dev": "bun index.ts",
     "start": "bun index.ts"
   },
   "dependencies": {

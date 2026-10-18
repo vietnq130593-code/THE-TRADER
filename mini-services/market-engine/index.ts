@@ -79,6 +79,21 @@ const PORT = 3003;
 // (kill + double-fork). AUDIT 137 D7: từ nay scheduler cũ TỰ ĐƯỢC DỌN qua guard
 // __traderEngineTimers bên dưới (clearInterval trước khi đăng ký bộ mới) — cảnh
 // báo console giữ nguyên để operator vẫn biết module vừa re-evaluate.
+//
+// FIXBUG #143 (18-10, đo thật + tái hiện sandbox 5 lần): bun --hot CÓ BUG CHẾT
+// NGƯỜI với scheduler — khi 1 lần edit file đi qua trạng thái GÃY SYNTAX giữa
+// chừng (lưu dở, re-evaluate fail parse → Bun giữ module cũ chạy), lần edit HOÀN
+// CHỈNH sau đó re-evaluate module MỚI nhưng Bun GIẾT TOÀN BỘ timer của process:
+//   • timer incarnation mới đăng ký cấp module: KHÔNG BAO GIỜ fire
+//   • timer incarnation cũ chưa kịp clear: cũng chết
+//   • timer đăng ký từ IO callback (request handler): cũng chết
+//   • IO (HTTP/socket.io) vẫn chạy → /health vẫn trả lời, WS vẫn connected
+// → engine ZOMBIE 8,5h (ticks=0, k2Checks=0, 3 chu kỳ agent lỡ, tick giá đứng
+//   im) mà mọi chỉ báo ngoài vẫn XANH. Đo trên engine thật 18-10 09:29-09:32
+//   (8 re-evaluate + 2 syntax error trong PM2 log) + tái hiện sạch trong sandbox.
+// NGĂN CHẶN GỐC: dev script BỎ --hot (bun thường — PM2 autorestart lo crash,
+// PM2 --watch restart sạch mỗi lần edit file). Guard D7 + cảnh báo RELOAD dưới
+// giữ lại làm phòng hoả nếu ai re-enable --hot.
 const gEngine = globalThis as { __traderEngineEvalAt?: number };
 if (gEngine.__traderEngineEvalAt) {
   console.error(
@@ -1360,17 +1375,33 @@ function reprobeDue(): boolean {
   );
 }
 
-http.listen(PORT, () => {
-  log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL}`);
+http.on("error", (err) => {
+  // FIXBUG #143 — listen fail phải LOUD: trước đây EADDRINUSE không có handler
+  // → stderr im lặng (đo sandbox: không error event reachable từ callback, lỗi
+  // bị Bun nuốt) → không ai biết scheduler đã đăng ký nhưng server chưa từng
+  // lắng nghe. Log ỒNG để operator thấy ngay qua PM2 log.
+  log(
+    "boot",
+    `LỖI HTTP server cổng ${PORT}: ${err instanceof Error ? err.message : String(err)} — scheduler đã đăng ký cấp module nhưng server CHƯA lắng nghe (cổng bị tiến trình khác giữ?) — kiểm tra pm2`
+  );
+});
+
+/** FIXBUG #143 — log lịch boot (dùng chung cold boot + chẩn đoán). */
+function logBootSchedule(): void {
   log(
     "boot",
     `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
-  // P0-5 (phiên #57): hydrate state từ DB TRƯỚC khi chạy boot-sync — restart
-  // không quên "hôm nay đã sync EOD" (nghiệm thu: kill engine → restart →
-  // KHÔNG refetch EOD đã xong hôm đó) và không quên backoff intl.
+}
+
+/** P0-5 (phiên #57): hydrate state từ DB TRƯỚC khi chạy boot-sync — restart
+ * không quên "hôm nay đã sync EOD" (nghiệm thu: kill engine → restart →
+ * KHÔNG refetch EOD đã xong hôm đó) và không quên backoff intl.
+ * FIXBUG #143 — tách ra hàm riêng: hydrate chạy ở CẤP MODULE, không phụ thuộc
+ * http.listen callback (callback không chạy khi listen fail âm thầm). */
+function bootHydrateAndSync(): void {
   void hydrateEngineState().then(() => {
     // Chạy ngay một vòng lúc khởi động để client có dữ liệu sớm — boot
     // top-up EOD chỉ khi hôm nay CHƯA sync xong (state từ DB); môi trường
@@ -1384,59 +1415,76 @@ http.listen(PORT, () => {
     // thời thì bỏ qua im lặng — job 06:15 ICT ngày mai tự phục hồi)
     if (intlSyncDue()) void syncIntlAndBroadcast();
   });
-  enqueueTick();
-  void ingestNewsAndBroadcast();
-  // AUDIT 137 D7 — mọi interval đăng ký qua mảng global để re-evaluate dọn được
-  engineTimers.push(setInterval(enqueueTick, TICK_MS));
-  engineTimers.push(setInterval(ingestNewsAndBroadcast, NEWS_MS));
-  // Try/catch quanh cả khối due-check: một due-check hỏng (bug cấu hình,
-  // null schedule…) không được phép giết event loop của cả engine — bug #42
-  // đã làm engine chết lặng ~2h vì TypeError không được bắt trong callback này.
-  // AUDIT 137 D7 — interval due-check 60s cũng vào mảng global (guard hot-reload)
-  const dueCheckTimer = setInterval(() => {
-    try {
-      if (eodSyncDue()) void syncEodAndBroadcast();
-      if (intlSyncDue()) void syncIntlAndBroadcast();
-      if (reprobeDue()) void reprobeAndBroadcast();
-      // A1/A4 (#79) — lịch settle 16:15 ICT hằng ngày + retrain CN 04:00 ICT
-      // (due-check mới nhất trong try/catch chung — lỗi 1 lịch không giết cả khối)
-      if (settleDue()) void settleAndBroadcast();
-      if (mlTrainDue()) void mlTrainAndBroadcast();
-      // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): sweep AutoML L1 CN 04:15 ICT
-      // (sau A4 04:00 — cùng try/catch chung, lỗi 1 lịch không giết cả khối)
-      if (mlSweepDue()) void mlSweepAndBroadcast();
-      // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
-      // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
-      if (k1EquityDue()) void k1EquityAndBroadcast();
-      // #129 (F-02A + F-03a) — macro VN 06:35 (gate intl đã sync) + flow 16:05
-      // (gate eod đã sync) — cùng try/catch chung, lỗi 1 lịch không giết khối.
-      if (macroVnDue()) void macroVnAndBroadcast();
-      if (flowSyncDue()) void flowSyncAndBroadcast();
-      // #106 — COUNCIL_STEWARDSHIP_BLUEPRINT §6: mark thí nghiệm 16:35 → đánh giá
-      // quyết định 16:45 → hội nghị phân bổ LLM CN 05:50 (cùng try/catch chung)
-      if (councilEvalDue()) void councilEvalAndBroadcast();
-      // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chạy liên tục —
-      // async + .catch bổ sung theo nguyên tắc vàng Fixbug #2 (timer callback
-      // không được phép ném uncaught exception giết event loop).
-      void k2CheckAndRun().catch((err) => {
-        log("k2", `LỖI k2CheckAndRun: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      // K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.3): due-check nhiệm vụ định kỳ —
-      // cùng try/catch chung + .catch riêng (lỗi 1 lịch không giết cả khối;
-      // engine chỉ đôn đốc, kết quả do route ghi trên AgentTask).
-      void k3TaskDueCheck().catch((err) => {
-        log("k3", `LỖI k3TaskDueCheck: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    } catch (err) {
-      log("sched", `LỖI scheduler 60s: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, 60_000);
-  engineTimers.push(dueCheckTimer);
-  if (AGENT_CYCLE_MINUTES > 0) {
-    engineTimers.push(
-      setInterval(runAgentCycleAndBroadcast, AGENT_CYCLE_MINUTES * 60_000)
-    );
+}
+
+/* ═══ FIXBUG #143 — ĐĂNG KÝ SCHEDULER Ở CẤP MODULE ═══
+ * Trước đây toàn bộ setInterval nằm trong callback http.listen — mọi phụ thuộc
+ * vào việc listen THÀNH CÔNG. Đo thật (zombie 8,5h 18-10) + sandbox: khi cổng
+ * bị incarnation trước giữ, listen fail ÂM THẦM (không error event) → callback
+ * không chạy → 0 scheduler. Giờ đăng ký ngay cấp module — scheduler sống độc
+ * lập với trạng thái listen; callback chỉ còn việc LOG. */
+enqueueTick();
+void ingestNewsAndBroadcast();
+// AUDIT 137 D7 — mọi interval đăng ký qua mảng global để re-evaluate dọn được
+engineTimers.push(setInterval(enqueueTick, TICK_MS));
+engineTimers.push(setInterval(ingestNewsAndBroadcast, NEWS_MS));
+// Try/catch quanh cả khối due-check: một due-check hỏng (bug cấu hình,
+// null schedule…) không được phép giết event loop của cả engine — bug #42
+// đã làm engine chết lặng ~2h vì TypeError không được bắt trong callback này.
+// AUDIT 137 D7 — interval due-check 60s cũng vào mảng global (guard hot-reload)
+const dueCheckTimer = setInterval(() => {
+  try {
+    if (eodSyncDue()) void syncEodAndBroadcast();
+    if (intlSyncDue()) void syncIntlAndBroadcast();
+    if (reprobeDue()) void reprobeAndBroadcast();
+    // A1/A4 (#79) — lịch settle 16:15 ICT hằng ngày + retrain CN 04:00 ICT
+    // (due-check mới nhất trong try/catch chung — lỗi 1 lịch không giết cả khối)
+    if (settleDue()) void settleAndBroadcast();
+    if (mlTrainDue()) void mlTrainAndBroadcast();
+    // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): sweep AutoML L1 CN 04:15 ICT
+    // (sau A4 04:00 — cùng try/catch chung, lỗi 1 lịch không giết cả khối)
+    if (mlSweepDue()) void mlSweepAndBroadcast();
+    // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
+    // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
+    if (k1EquityDue()) void k1EquityAndBroadcast();
+    // #129 (F-02A + F-03a) — macro VN 06:35 (gate intl đã sync) + flow 16:05
+    // (gate eod đã sync) — cùng try/catch chung, lỗi 1 lịch không giết khối.
+    if (macroVnDue()) void macroVnAndBroadcast();
+    if (flowSyncDue()) void flowSyncAndBroadcast();
+    // #106 — COUNCIL_STEWARDSHIP_BLUEPRINT §6: mark thí nghiệm 16:35 → đánh giá
+    // quyết định 16:45 → hội nghị phân bổ LLM CN 05:50 (cùng try/catch chung)
+    if (councilEvalDue()) void councilEvalAndBroadcast();
+    // K2 (#86 — AUTONOMY_BLUEPRINT v1.1 §4.3): due-check chạy liên tục —
+    // async + .catch bổ sung theo nguyên tắc vàng Fixbug #2 (timer callback
+    // không được phép ném uncaught exception giết event loop).
+    void k2CheckAndRun().catch((err) => {
+      log("k2", `LỖI k2CheckAndRun: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    // K3 (#94 — AUTONOMY_BLUEPRINT v1.1 §6.3): due-check nhiệm vụ định kỳ —
+    // cùng try/catch chung + .catch riêng (lỗi 1 lịch không giết cả khối;
+    // engine chỉ đôn đốc, kết quả do route ghi trên AgentTask).
+    void k3TaskDueCheck().catch((err) => {
+      log("k3", `LỖI k3TaskDueCheck: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  } catch (err) {
+    log("sched", `LỖI scheduler 60s: ${err instanceof Error ? err.message : String(err)}`);
   }
+}, 60_000);
+engineTimers.push(dueCheckTimer);
+if (AGENT_CYCLE_MINUTES > 0) {
+  engineTimers.push(
+    setInterval(runAgentCycleAndBroadcast, AGENT_CYCLE_MINUTES * 60_000)
+  );
+}
+
+// FIXBUG #143 — hydrate + boot-sync CŨNG cấp module (không nằm trong listen
+// callback nữa — xem bootHydrateAndSync).
+bootHydrateAndSync();
+
+// FIXBUG #143 — callback chỉ còn LOG; scheduler đã sống từ cấp module trên.
+http.listen(PORT, () => {
+  log("boot", `market-engine lắng nghe cổng ${PORT} → app ${APP_URL} — scheduler đã đăng ký cấp module (fixbug #143)`);
+  logBootSchedule();
 });
 
 process.on("SIGINT", () => {

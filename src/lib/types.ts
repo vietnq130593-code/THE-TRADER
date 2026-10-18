@@ -861,6 +861,16 @@ export interface SystemStatusResponse {
     orders: number;
     agentMessages: number;
   };
+  /** FIXBUG #143 — sức khoẻ scheduler market-engine (probe :3003/health qua
+   *  /api/system/status; optional — footer cũ bỏ qua khi backend chưa có). */
+  engine?: {
+    reachable: boolean;
+    ticks: number | null;
+    lastTickAt: string | null;
+    stale: boolean;
+    clients: number | null;
+    alertCreated: boolean;
+  };
   escalatedAlerts: number;
   serverTime: string;
 }

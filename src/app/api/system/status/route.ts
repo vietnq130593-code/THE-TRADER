@@ -85,6 +85,99 @@ async function mlCycleHealth(): Promise<{
 }
 
 /**
+ * FIXBUG #143 (18-10) — probe sức khoẻ scheduler market-engine (GET :3003/health).
+ *
+ * Bài học zombie 8,5h: bun --hot sau 1 chu kỳ edit-gãy-syntax→sửa lại giết toàn
+ * bộ timer của engine process, nhưng IO (HTTP/socket.io) vẫn sống → /health vẫn
+ * trả lời, WS vẫn connected → mọi chỉ báo ngoài XANH trong khi tick giá/chu kỳ
+ * agent/sync đứng im từ 09:32Z. Footer poll route này mỗi 60s — đây là nhịp
+ * heartbeat lý tưởng để phát hiện trạng thái "engine sống mà scheduler chết".
+ *
+ * Ngưỡng: tick 10s/lần → quá 75s không tick = stale (7+ tick lỡ). ticks=0 +
+ * process sống >2 phút = zombie (boot xong không tick nổi lần nào). Tạo
+ * RiskAlert WARNING ENGINE_SCHEDULER_STALE (dedupe 7 ngày, cùng khuôn F-00
+ * ML_CYCLE_STALLED) để cảnh báo tồn tại trong DB + panel alert, không chỉ footer.
+ */
+async function engineHealth(): Promise<{
+  reachable: boolean;
+  ticks: number | null;
+  lastTickAt: string | null;
+  stale: boolean;
+  clients: number | null;
+  alertCreated: boolean;
+}> {
+  const result = {
+    reachable: false,
+    ticks: null as number | null,
+    lastTickAt: null as string | null,
+    stale: false,
+    clients: null as number | null,
+    alertCreated: false,
+  };
+  try {
+    const res = await fetch(`${process.env.ENGINE_URL ?? "http://127.0.0.1:3003"}/health`, {
+      signal: AbortSignal.timeout(2_500),
+      cache: "no-store",
+    });
+    if (!res.ok) return result;
+    const h = (await res.json()) as {
+      ticks?: number;
+      lastTickAt?: string | null;
+      clients?: number;
+      startedAt?: string;
+    };
+    result.reachable = true;
+    result.ticks = typeof h.ticks === "number" ? h.ticks : null;
+    result.lastTickAt = h.lastTickAt ?? null;
+    result.clients = typeof h.clients === "number" ? h.clients : null;
+    const lastTickMs = h.lastTickAt ? Date.parse(h.lastTickAt) : NaN;
+    const ageStale =
+      Number.isFinite(lastTickMs) && Date.now() - lastTickMs > 75_000;
+    const bootMs = h.startedAt ? Date.parse(h.startedAt) : NaN;
+    const zombie =
+      (h.ticks ?? 0) === 0 && Number.isFinite(bootMs) && Date.now() - bootMs > 120_000;
+    result.stale = ageStale || zombie;
+  } catch {
+    return result; // engine không phản hồi trong 2.5s — coi như không reachable
+  }
+  if (result.stale) {
+    try {
+      const since = new Date(Date.now() - 7 * 86_400_000);
+      const dup = await db.riskAlert.findFirst({
+        where: { code: "ENGINE_SCHEDULER_STALE", createdAt: { gte: since } },
+        select: { id: true },
+      });
+      if (!dup) {
+        const alert = await db.riskAlert.create({
+          data: {
+            severity: "WARNING",
+            code: "ENGINE_SCHEDULER_STALE",
+            message: `Scheduler market-engine chết lặng (tick cuối ${result.lastTickAt ?? "chưa từng tick"}, tổng ${result.ticks ?? 0} tick) — chu kỳ agent/sync EOD/tick giá không chạy. Restart: pm2 restart market-engine (fixbug #143 — bun --hot giết timer sau edit gãy syntax).`,
+            metricKey: "engine.scheduler.stale",
+            metricValue: result.ticks ?? 0,
+            threshold: 0,
+          },
+        });
+        await db.auditLog
+          .create({
+            data: {
+              action: "RISK_ALERT_RAISED",
+              entity: "RiskAlert",
+              entityId: alert.id,
+              after: JSON.stringify({ code: alert.code, ticks: result.ticks }),
+            },
+          })
+          .catch(() => undefined);
+        result.alertCreated = true;
+      }
+    } catch {
+      /* alert fail-soft — badge footer vẫn hiển thị */
+    }
+  }
+  return result;
+}
+
+/**
  * GET /api/system/status — tổng hợp trạng thái toàn hệ thống cho footer
  * và panel monitoring (S4 stale marking + S3 trading mode):
  *   - sources[]: mỗi nguồn → mode + stale + tuổi lần thành công cuối
@@ -98,7 +191,7 @@ export async function GET() {
     // Perf #64 — getEffectiveMode ĐỘC LẬP với escalate/readSources (chỉ đọc
     // AppSetting) nên ghép vào cùng Promise.all (trước fix chạy tuần tự sau
     // nhóm — phí thêm 1 RTT WAN ~100ms mỗi lần footer poll).
-    const [sources, newsCount, signalCount, orderCount, messageCount, eff, mlCycle] =
+    const [sources, newsCount, signalCount, orderCount, messageCount, eff, mlCycle, engine] =
       await Promise.all([
         readSources(),
         db.newsItem.count(),
@@ -107,6 +200,7 @@ export async function GET() {
         db.agentMessage.count(),
         getEffectiveMode(),
         mlCycleHealth(),
+        engineHealth(),
       ]);
 
     const trading = getTradingMode();
@@ -149,6 +243,9 @@ export async function GET() {
       // F-00 (#129): sức khoẻ vòng tự học Chủ nhật (ml-train 04:00 + ml-sweep
       // 04:15) — footer/monitoring hiển thị cùng các nguồn dữ liệu.
       mlCycle,
+      // FIXBUG #143 — sức khoẻ scheduler market-engine (probe :3003/health,
+      // phát hiện zombie "IO sống mà timer chết" — bài học 8,5h 18-10).
+      engine,
       escalatedAlerts: escalated,
       serverTime: new Date().toISOString(),
     });
