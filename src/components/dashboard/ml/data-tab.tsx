@@ -287,6 +287,7 @@ export function DataTab() {
   const status = useMlStatus();
   const rag = status.data?.rag ?? null;
   const intraday = status.data?.intraday ?? null;
+  const l2 = status.data?.l2 ?? null;
   const newsGate = status.data?.newsGate ?? null;
 
   if (arch.isLoading) {
@@ -347,7 +348,7 @@ export function DataTab() {
 
       {/* RAG + Intraday (#83) */}
       <section aria-label="Tri thức truy hồi và chuỗi 5 phút" className="flex flex-col gap-3">
-        <RagIntradayBlock rag={rag} intraday={intraday} />
+        <RagIntradayBlock rag={rag} intraday={intraday} l2={l2} />
       </section>
 
       {/* C2-pipeline (#99) — cổng dữ liệu tin tức → đặc trưng */}

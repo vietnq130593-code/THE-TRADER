@@ -20,6 +20,7 @@ import {
 // L1 (#83 — ML_LEARNING_BLUEPRINT §2): BM25 RAG cho single-run của 5 agent
 // nghiên cứu + Chủ tịch (chu kỳ tiêm ở api/agents/run — cùng 1 thư viện).
 import { retrieveForCycle } from "@/lib/ml/rag";
+import { retrieveForCycleL2 } from "@/lib/ml/l2";
 // M2 (#103 — M2_RELATION_BLUEPRINT, cơ chế số 2): quan hệ thị trường đã học
 // (lead-lag + xác suất điều kiện trên 750 phiên) tiêm cho 3 agent nghiên cứu
 // trọng tâm quan hệ liên thị trường — fail-soft như RAG L1.
@@ -1194,6 +1195,14 @@ export async function buildSingleRunPrompt(
   // RetrievalLog). Fail-soft: lỗi → block null → prompt y như trước L1.
   const rag = await retrieveForCycle(true).catch(() => null);
   const ragBlock = rag?.block ?? null;
+  // L2 (Task 142 · F-24 §6 — RAG_UPGRADE_ASSESSMENT): TRI THỨC DÀI HẠN —
+  // corpus tuyển (research/executive/tin vĩ mô/nhận định chu kỳ/bài học
+  // WIN-LOSS) xếp hạng hybrid BM25 + vector NIM 2048 dim + đồ thị thực thể,
+  // mốc thời gian từng dòng (tuần/tháng trước — đối chiếu phương pháp luận).
+  // retrieveForCycleL2 KHÔNG ném (fail-soft 2 tầng bên trong: NIM lỗi → BM25
+  // thuần; DB lỗi → null) — prompt y như trước L2 khi mọi thứ lỗi.
+  const l2 = await retrieveForCycleL2(true).catch(() => null);
+  const l2Block = l2?.block ?? null;
   // M2 (#103): quan hệ thị trường đã học cho market-analyst · news-sentiment
   // · portfolio-strategist — fail-soft, cache in-process 60s.
   const xrelBlock = await buildXrelPromptBlock().catch(() => null);
@@ -1202,22 +1211,22 @@ export async function buildSingleRunPrompt(
     case "risk-manager":
       return {
         system: role.system,
-        user: [market.block, flows, ...(ragBlock ? [ragBlock] : []), ...(code === "market-analyst" && xrelBlock ? [xrelBlock] : [])].join("\n\n"),
+        user: [market.block, flows, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(code === "market-analyst" && xrelBlock ? [xrelBlock] : [])].join("\n\n"),
       };
     case "news-sentiment":
       return {
         system: role.system,
-        user: [market.block, news, flows, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : [])].join("\n\n"),
+        user: [market.block, news, flows, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(xrelBlock ? [xrelBlock] : [])].join("\n\n"),
       };
     case "fair-value":
       return {
         system: role.system,
-        user: [market.block, valuation, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+        user: [market.block, valuation, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : [])].join("\n\n"),
       };
     case "liquidity":
       return {
         system: role.system,
-        user: [market.block, liquidity, ...(ragBlock ? [ragBlock] : [])].join("\n\n"),
+        user: [market.block, liquidity, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : [])].join("\n\n"),
       };
     case "macro-economist": {
       // A20 (#126): bảng điều khiển vĩ mô 3 lớp + dòng khối ngoại + XREL
@@ -1229,7 +1238,7 @@ export async function buildSingleRunPrompt(
       ]);
       return {
         system: role.system,
-        user: [macro, macroFlows, ...(ragBlock ? [ragBlock] : []), ...(macroXrel ? [macroXrel] : [])].join("\n\n"),
+        user: [macro, macroFlows, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(macroXrel ? [macroXrel] : [])].join("\n\n"),
       };
     }
     case "portfolio-strategist": {
@@ -1252,6 +1261,7 @@ export async function buildSingleRunPrompt(
           liquidity,
           `TÍN HIỆU ĐANG MỞ:\n${openSignals}`,
           ...(ragBlock ? [ragBlock] : []),
+          ...(l2Block ? [l2Block] : []),
           ...(xrelBlock ? [xrelBlock] : []),
           ...(intlReference ? ["", intlReference] : []),
           ...(weights ? ["", weights] : []),

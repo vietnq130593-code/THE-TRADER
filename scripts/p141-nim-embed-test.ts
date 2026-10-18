@@ -15,6 +15,10 @@
  * READ-ONLY: 0 truy cập DB, 0 file sản phẩm bị sửa. Key không in ra log.
  * Chạy: bun scripts/p141-nim-embed-test.ts (bun tự nạp .env.local)
  */
+// "export {}" — đánh dấu đây là module (không phải global script:
+// tsc gộp scope các script không-import → main() đụng main() file khác).
+export {};
+
 const KEY = process.env.NVIDIA_NIM_API_KEY ?? "";
 const BASE = "https://integrate.api.nvidia.com/v1";
 

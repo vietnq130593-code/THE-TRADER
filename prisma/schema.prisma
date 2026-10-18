@@ -782,12 +782,88 @@ model RetrievalLog {
   cycleAt      DateTime @default(now()) // mốc chu kỳ gọi truy hồi
   query        Json // string[] — token truy vấn (symbols + từ khoá ngữ cảnh)
   topK         Int
-  results      Json // [{refTable: "AgentMessage"|"NewsItem", refId, score}]
+  results      Json // [{refTable, refId, score}] — L1: AgentMessage|NewsItem · L2: + MarketAssessment|Signal|DecisionEvaluation|RelationInsight
   usedInPrompt Boolean // true khi block được tiêm ≥1 prompt agent
+  // Task 142 (F-24 §6.4): "L1" = BM25 nóng (mặc định cho hàng cũ) · "L2" =
+  // tri thức dài hạn hybrid BM25+vector+đồ thị — cổng đo theo từng lớp.
+  layer        String   @default("L1")
   createdAt    DateTime @default(now())
 
   @@index([createdAt])
   @@index([usedInPrompt, createdAt])
+  @@index([layer, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 13. L2 TRI THỨC DÀI HẠN (Task 142 · F-24 — RAG_UPGRADE_ASSESSMENT §6)
+//    LightRAG-style viết tay theo đúng triết lý dự án (0 dependency ngoài
+//    stack): corpus TUYỂN (research+executive+tin vĩ mô+nhận định chu kỳ+
+//    bài học WIN/LOSS — §6.1) · vector NVIDIA NIM 2048 dim (nemotron-3-embed-
+//    1b, đo thật Task 141) · đồ thị thực thể TỪ ĐIỂN HOÁ bootstrap từ dữ liệu
+//    đã có (104 Instrument + MACRO_SYNONYMS + MarketRelation đo được — §6.2,
+//    LLM chỉ BỔ SUNG sau này khi credit được xác nhận). Fail-soft 2 tầng:
+//    NIM lỗi/hết credit → BM25 thuần; DB lỗi → block null (chu kỳ y như trước).
+// ─────────────────────────────────────────────────────────────────
+
+// 1 chunk = 1 văn bản nguồn đã index (unique theo cặp refTable+refId — idempotent
+// cho bootstrap + self-heal mỗi chu kỳ). embedding Bytes = Float32[2048]
+// little-endian (8KB/chunk — 2.291 doc ≈ 19MB, đọc 1 lần vào RAM cache tăng dần,
+// cosine in-memory <50ms; pgvector CHƯA cần — chỉ khi kho >50k doc §6.3).
+model KnowledgeChunk {
+  id            String   @id @default(cuid())
+  refTable      String // AgentMessage | NewsItem | MarketAssessment | Signal | DecisionEvaluation | RelationInsight
+  refId         String
+  label         String // nhãn hiển thị dòng prompt ("tin VnEconomy" · "bài học WIN VCB"...)
+  content       String // văn bản đã index (BM25 + embedding) — cap 2.800 ký tự lúc build
+  embedding     Bytes? // Float32[2048] — null khi NIM fail (chunk vẫn sống BM25-only)
+  embedModel    String?
+  dim           Int?
+  embedAttempts Int      @default(0) // chống retry vô hạn: ≥3 lần fail → chờ rebuild chủ động
+  entityKeys    Json // string[] — khoá thực thể liên kết từ điển (stock:vcb · macro:cpi...)
+  datedAt       DateTime // mốc gốc nội dung (createdAt/publishedAt/decidedAt...)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([refTable, refId])
+  @@index([datedAt(sort: Desc)])
+  // KHÔNG index cột embedding: bytea 8.200 bytes/vòng vượt trần B-tree 8.191
+  // (Postgres 54000 khi insert) — và không bao giờ filter theo giá trị vector
+  // (cosine quét in-memory §6.3); (refTable, refId) unique là khoá tra cứu thật.
+}
+
+// Thực thể từ điển hoá — mentions/firstSeen/lastSeen gộp dần theo mỗi đợt index
+// (raw multi-row INSERT ... ON CONFLICT DO UPDATE — xem l2.ts flushGraphStats).
+model KnowledgeEntity {
+  id          String   @id @default(cuid())
+  key         String   @unique // stock:vcb | index:vnindex | macro:lạm phát | org:sbv | node:vn30
+  name        String // tên hiển thị tiếng Việt
+  type        String // stock | index | macro | org | node
+  description String?
+  mentions    Int      @default(0)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  updatedAt   DateTime @updatedAt
+
+  @@index([type])
+}
+
+// Cạnh đồ thị 2 loại: "cooccur" (2 thực thể cùng xuất hiện trong 1 chunk —
+// weight = số văn bản, gộp dần) · "market-relation" (NHẬP từ MarketRelation đo
+// được — weight = strength, meta = corr/condUp/condDown/obs/lag — §6.2: cạnh
+// định lượng THẬT, LLM không bao giờ đè lên số đo).
+model KnowledgeEdge {
+  id          String   @id @default(cuid())
+  sourceKey   String
+  targetKey   String
+  kind        String // cooccur | market-relation
+  description String?
+  weight      Float    @default(1)
+  meta        Json?
+  lastSeenAt  DateTime
+  updatedAt   DateTime @updatedAt
+
+  @@unique([sourceKey, targetKey, kind])
+  @@index([kind])
 }
 
 // F-02 (#129 — AI_ENGINEER_REVIEW_BRAIN §3 F-02) — chuỗi vĩ mô nội địa VN

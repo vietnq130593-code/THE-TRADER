@@ -336,6 +336,38 @@ KHÔNG ĐẢO — corpus vẫn quá nhỏ cho GraphRAG.**
 
 ---
 
+## §10 — TRIỂN KHAI L2 (Task 142 · 2026-10-18) — NGHIỆM THU
+
+Chủ sở hữu: *"Tiến hành triển khai lớp L2 đi"* — đã dựng trọn §6 và đo sống:
+
+### 10.1 Kiến trúc triển khai (mọi con số đều verify được)
+| Thành phần | Hiện trạng |
+|---|---|
+| **Schema** | 3 bảng mới: `KnowledgeChunk` (embedding Bytes Float32[2048] 8KB, unique refTable+refId, embedAttempts<3) · `KnowledgeEntity` (70 thực thể: stock 33 + macro 11 + org 10 + node 9 + index 3 + asset 4) · `KnowledgeEdge` (510 cooccur + 40 market-relation) + `RetrievalLog.layer` (L1/L2, backfill 33 hàng cũ = L1) |
+| **Kho** | **1.639 chunk — 100% có vector NIM**: 502 AgentMessage research/executive + 975 NewsItem + 62 narrative MarketAssessment (kho 773k ký tự lần đầu được dùng) + 51 Signal + 48 bài học DecisionEvaluation + 1 RelationInsight · pending = 0 |
+| **Client NIM** | `src/lib/ml/nim-embed.ts` — backend-only, key shim đọc `.env.local` kiểu db.ts #110-g (dev server boot trước khi key tồn tại vẫn chạy), batch 16, retry 429, throw để caller fail-soft |
+| **Retrieval** | Hybrid `0,45·BM25 + 0,45·cosine + 0,1·độ tươi (nửa đời 30 ngày)`; filter `bm25>0 ∨ cos≥0,30`; query vector cache 60s (6 agent/chu kỳ chung query); đồ thị 4 dòng (market-relation corr/P(cond)/n/lag ưu tiên trước cooccur) |
+| **Tiêm prompt** | 13 điểm: 6 single-run (agent-context) + 5 agent nghiên cứu + risk-manager + Chủ tịch (run route) — sau L1, trước XREL (tầng nóng → dài hạn → quan hệ) |
+| **Tự chữa** | Mỗi truy hồi index ≤32 doc mới (budget 12s) — kho tự lớn theo +185 doc/ngày, không cần cron mới; bootstrap lại qua `POST /api/ml/l2` |
+| **Đo lường** | RetrievalLog layer="L2" + `GET /api/ml/l2` + `GET /api/ml/status` field l2 + thẻ UI "Tri thức dài hạn (L2)" (tab Dữ liệu — 1.639 chunk · vector 100% · 70 thực thể) |
+
+### 10.2 Bằng chứng sống (verify 18-10, `scripts/p142-verify-l2.ts` — PASS toàn bộ)
+- Vector decode 2.048 dim finite từ DB · roundtrip Bytes↔Float32 cosine=1 · 0 trùng (refTable,refId).
+- Truy hồi thật: **8/8 hit có điểm cosine** (vector sống trên cả corpus) · query vector NIM dùng thật · block 1.830 ký tự ≤2.200 · 4 dòng đồ thị · cạnh market-relation mang meta corr.
+- **Fail-soft BM25-only**: rankL2 với queryVector=null vẫn trả 8 hit — NIM chết/hết credit hệ thống vẫn sống (đúng §6 nguyên tắc).
+- **Vào prompt agent THẬT**: single-run macro-economist 16:41 → RetrievalLog layer=L2 `usedInPrompt=true` — chuỗi NIM→chunk→hybrid→prompt→phản hồi agent khép kín.
+- E2E browser desktop + mobile 390px: thẻ L2 render đúng số liệu sống · 0 lỗi console/page · 0 tràn ngang · footer flush.
+
+### 10.3 Chi phí NIM thực chi (bootstrap)
+1.639 chunk embed ở lần chạy đầu ≈ **~300k token vào** (corpus ~750k ký tự ÷ 2,5) — chưa thấy 402/429; chủ sở hữu đối chiếu credit tại build.nvidia.com. Incremental ~185 doc/ngày ≈ 15k token/ngày + 1 query/chu kỳ (~50 token) — không đáng kể.
+
+### 10.4 Còn treo (đúng thiết kế — không phải nợ ẩn)
+- **LLM trích thực thể bổ sung** (§6.2 phần "LLM chỉ BỔ SUNG"): chưa bật — chờ chủ sở hữu xác nhận số dư credit NIM; từ điển hiện phủ 70 thực thể xác suất cao (mã + vĩ mô + org + node MarketRelation).
+- **Cổng §6.5**: cần ≥30 ngày chạy song song L1/L2 trước khi so sánh chất lượng phiếu hội đồng — mọi số đo đã sẵn (RetrievalLog theo layer).
+- 2 lần truy hồi L2 đầu tiên `usedInPrompt=false` là của verify script (trung thực — không phải chu kỳ thật); lần 16:41 single-run = true.
+
+---
+
 *Tài liệu liên quan: `docs/ML_LEARNING_BLUEPRINT.md` (L1-L3), `docs/AUDIT_137.md`
 (văn hoá trung thực số liệu), script bằng chứng `scripts/p140-rag-data-volume.ts`
 + `scripts/p141-nim-embed-test.ts`.*

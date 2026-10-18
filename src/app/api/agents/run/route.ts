@@ -59,6 +59,7 @@ import { maybeAutoEnableConsensus } from "@/lib/consensus";
 // L1 (ML_LEARNING_BLUEPRINT §2 — phiên #83): BM25 RAG — truy hồi tri thức
 // broadcast/tin cũ tiêm prompt 5 agent nghiên cứu + Chủ tịch + RetrievalLog.
 import { retrieveForCycle } from "@/lib/ml/rag";
+import { retrieveForCycleL2 } from "@/lib/ml/l2";
 // M2 (M2_RELATION_BLUEPRINT — phiên #103, cơ chế số 2): quan hệ thị trường
 // đã học (lead-lag 750 phiên) tiêm prompt market-analyst · news-sentiment · Chủ tịch.
 import { buildXrelPromptBlock } from "@/lib/ml/xrel";
@@ -605,6 +606,22 @@ export async function POST() {
       );
     }
 
+    // ── L2 (Task 142 · F-24 §6) — TRI THỨC DÀI HẠN: 1 lần/chu kỳ ──
+    // Corpus tuyển nhiều tuần + hybrid BM25+vector NIM + đồ thị thực thể;
+    // tự chữa index ≤32 doc mới bên trong. Fail-soft 2 tầng (NIM → BM25;
+    // DB → null) — chu kỳ KHÔNG bao giờ bị chặn vì L2. Thứ tự sau L1,
+    // trước XREL — đúng tầng thiết kế (nóng → dài hạn → quan hệ đo được).
+    const l2 = await retrieveForCycleL2(true).catch((l2Err) => {
+      console.error("[api/agents/run] RAG L2 lỗi (chu kỳ chạy không khối dài hạn):", l2Err);
+      return null;
+    });
+    const l2Block = l2?.block ?? null;
+    if (l2 && l2Block) {
+      console.log(
+        `[rag] L2 truy hồi ${l2.hits.length}/${l2.corpusSize} chunks · vector ${l2.vectorUsed ? "NIM 2048d" : "BM25-only (fail-soft)"} · đồ thị ${l2.graphLines.length} dòng · block ${l2Block.length} ký tự (~${Math.round(l2Block.length / 2.5)} token) · log ${l2.logId ?? "(lỗi ghi)"}`
+      );
+    }
+
     // ── M2 (#103) — QUAN HỆ THỊ TRƯỜNG ĐÃ HỌC (XREL): 1 lần/chu kỳ ──
     // Lead-lag + xác suất điều kiện hồi cứu (750 phiên) tiêm cho A2 · A4 ·
     // Chủ tịch. Fail-soft như RAG L1; cache in-process 60s nên ~0 chi phí DB.
@@ -637,25 +654,25 @@ export async function POST() {
     const prompts: Record<string, { system: string; user: string }> = {
       "market-analyst": {
         system: ROLE_PROMPTS["market-analyst"].system,
-        user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       "fair-value": {
         system: ROLE_PROMPTS["fair-value"].system,
-        user: [marketBlock, valuationBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, valuationBlock, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       "news-sentiment": {
         system: ROLE_PROMPTS["news-sentiment"].system,
-        user: [marketBlock, newsBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, newsBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       liquidity: {
         system: ROLE_PROMPTS["liquidity"].system,
-        user: [marketBlock, liquidityBlock, ...(ragBlock ? [ragBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [marketBlock, liquidityBlock, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       "macro-economist": {
         // #126 A20 — bảng điều khiển vĩ mô 3 lớp (lớp 1-2-3) + dòng khối ngoại
         // + XREL (lead-lag quốc tế→VN). Macro block đã chứa tin vĩ mô RSS riêng.
         system: ROLE_PROMPTS["macro-economist"].system,
-        user: [macroBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
+        user: [macroBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(xrelBlock ? [xrelBlock] : []), ...(dqPromptBlock ? [dqPromptBlock] : [])].join("\n\n"),
       },
       // risk-manager KHÔNG build ở đây — prompt cần khối QUANT của
       // RiskQuantEngine (chạy sau đợt B, trước đợt C — phiên #51 CRB §2)
@@ -803,7 +820,7 @@ export async function POST() {
         : null;
     prompts["risk-manager"] = {
       system: ROLE_PROMPTS["risk-manager"].system,
-      user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(quantPromptBlock ? [quantPromptBlock] : [])].join("\n\n"),
+      user: [marketBlock, flowsBlock, ...(ragBlock ? [ragBlock] : []), ...(l2Block ? [l2Block] : []), ...(quantPromptBlock ? [quantPromptBlock] : [])].join("\n\n"),
     };
 
     // ══ ĐỢT C · Ủy ban Kiểm soát (VETO) — risk LLM + 2 service ═════
@@ -1029,6 +1046,8 @@ export async function POST() {
       `TÍN HIỆU ĐANG MỞ:\n${openSignalsBlock}`,
       // L1 (#83) — tri thức truy hồi cho Chủ tịch (ngữ cảnh đối chiếu, không phải bằng chứng)
       ...(ragBlock ? ["", ragBlock] : []),
+      // L2 (Task 142) — tri thức DÀI HẠN cho Chủ tịch (nhiều tuần + đồ thị — cùng nguyên tắc vô hại hoá)
+      ...(l2Block ? ["", l2Block] : []),
       // M2 (#103) — quan hệ thị trường đã học cho Chủ tịch (cùng cấp như RAG)
       ...(xrelBlock ? ["", xrelBlock] : []),
       // #108 v2.2 — bối cảnh thị trường quốc tế THAM CHIẾU (mã + giá đơn vị DB)

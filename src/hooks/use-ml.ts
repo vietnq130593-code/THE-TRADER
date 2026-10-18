@@ -113,6 +113,9 @@ export interface MlStatusResponse {
   gru?: MlGruStatus | null;
   /** L1 (#83) — thống kê RAG BM25 (corpus + 30 ngày RetrievalLog). */
   rag?: MlRagStatus | null;
+  /** Task 142 (F-24 §6) — L2 tri thức dài hạn (corpus tuyển + vector NIM +
+   *  đồ thị thực thể). Additive — FE cũ bỏ qua. */
+  l2?: MlL2Status | null;
   /** #83 — số liệu bảng intraday 5-phút (tiến độ cổng "Lớp chuỗi đầy đủ"). */
   intraday?: MlIntradayStatus | null;
   /** C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1/Q4): tiến độ cổng dữ liệu
@@ -161,6 +164,22 @@ export interface MlRagStatus {
   usedInPrompt30d: number;
   usageRate30d: number | null;
   lastRetrievalAt: string | null;
+}
+
+/** Field `l2` của /api/ml/status (Task 142 — F-24 §6) — kho tri thức dài hạn. */
+export interface MlL2Status {
+  chunks: number;
+  byRefTable: Record<string, number>;
+  vectorCoverage: { withVector: number; bm25Only: number };
+  entities: { total: number; byType: Record<string, number> };
+  edges: { cooccur: number; marketRelation: number };
+  retrievals30d: number;
+  usedInPrompt30d: number;
+  usageRate30d: number | null;
+  lastRetrievalAt: string | null;
+  pending: number;
+  embedModel: string;
+  dim: number;
 }
 
 /** Field `intraday` của /api/ml/status — bar 5-phút gom từ tick S4. */

@@ -133,6 +133,11 @@ const MACRO_SYNONYM_GROUPS: readonly (readonly string[])[] = [
   ["fdi", "đầu tư trực tiếp"],
 ];
 
+// Task 142 (F-24 §6.2): xuất nhóm đồng nghĩa gốc cho L2 — mỗi nhóm là 1 THỰC
+// THỂ vĩ mô của đồ thị tri thức (key = macro:<member[0]>, mọi thành viên trỏ
+// về cùng key) — additive, không đổi hành vi L1.
+export const MACRO_SYNONYM_GROUPS_EXPORT = MACRO_SYNONYM_GROUPS;
+
 /** Mục 1 chiều — chỉ from → to, không đảo ngược (chống nhiễu ngược). */
 const MACRO_SYNONYM_ONE_WAY: readonly { from: string; to: readonly string[] }[] = [
   { from: "pmi", to: ["sản xuất"] },
@@ -457,8 +462,10 @@ export function formatRagBlock(hits: RagHit[], now = Date.now()): string | null 
  * Query GỐC từ ngữ cảnh chu kỳ (CHƯA mở rộng đồng nghĩa) — phần dựng query
  * cũ của buildCycleQueryTokens (blueprint §2 L1.3), tách riêng từ F-12a
  * (#129-A) để retrieveForCycle giữ được cả query gốc lẫn bản đã mở rộng.
+ * Task 142 (F-24 §6.4): xuất cho L2 — lớp dài hạn dựng query THEO CÙNG ngữ
+ * cảnh chu kỳ (một nguồn sự thật token query cho cả 2 lớp) — additive.
  */
-async function buildCycleQueryTokensRaw(): Promise<string[]> {
+export async function buildCycleQueryTokensRaw(): Promise<string[]> {
   const tokens = new Set<string>();
   const addText = (s: string) => {
     for (const t of tokenize(s)) tokens.add(t);

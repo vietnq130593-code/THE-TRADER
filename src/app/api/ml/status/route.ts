@@ -5,6 +5,8 @@ import { banditSnapshot, pendingSettleCount } from "@/lib/ml/bandit";
 // L1 + Intraday (#83 — additive fields `rag` + `intraday`): thống kê truy hồi
 // RAG (cổng L3) + số liệu bảng intraday 5-phút (cổng "Lớp chuỗi đầy đủ").
 import { ragStats } from "@/lib/ml/rag";
+// Task 142 (F-24 §6) — thống kê lớp L2 tri thức dài hạn (fail-soft như rag)
+import { l2Stats } from "@/lib/ml/l2";
 import { intradayStats } from "@/lib/intraday";
 // C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1/Q4): tiến độ cổng dữ liệu
 // "tin tức → đặc trưng v3-news22" — đo từ NewsItem (PIT-strict), TTL cache 60s.
@@ -502,7 +504,7 @@ export async function GET() {
     });
     const driftPromise = dlRowPromise.then((dlRow) => driftForServing(dlRow));
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru, rag, intraday, newsGate] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru, rag, intraday, newsGate, l2] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -518,6 +520,8 @@ export async function GET() {
       intradayStats().catch(() => null),
       // C2-pipeline (#99) — fail-soft như rag/intraday (available:false + reason)
       newsCoverageReport(),
+      // Task 142 — fail-soft như rag (FE cũ bỏ qua field l2)
+      l2Stats().catch(() => null),
     ]);
 
     const dlMetrics = dlRow
@@ -615,6 +619,23 @@ export async function GET() {
             usedInPrompt30d: rag.usedInPrompt30d,
             usageRate30d: rag.usageRate30d,
             lastRetrievalAt: rag.lastRetrievalAt ? rag.lastRetrievalAt.toISOString() : null,
+          }
+        : null,
+      // Task 142 (F-24 §6) — L2 tri thức dài hạn: additive, FE cũ bỏ qua.
+      l2: l2
+        ? {
+            chunks: l2.chunks,
+            byRefTable: l2.byRefTable,
+            vectorCoverage: l2.vectorCoverage,
+            entities: l2.entities,
+            edges: l2.edges,
+            retrievals30d: l2.retrievals30d,
+            usedInPrompt30d: l2.usedInPrompt30d,
+            usageRate30d: l2.usageRate30d,
+            lastRetrievalAt: l2.lastRetrievalAt,
+            pending: l2.pending,
+            embedModel: l2.embedModel,
+            dim: l2.dim,
           }
         : null,
       // Intraday (#83) — additive: số liệu bảng bar 5-phút (tiến độ cổng "Lớp
