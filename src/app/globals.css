@@ -214,3 +214,15 @@
 .kpi-tile {
   background-color: var(--tile-bg);
 }
+
+/* F-20 (#134) — lớp scanline CRT cho sơ đồ dark hacker (nn-viz.tsx):
+ * trang trí mờ, pointer-events-none — không chắn tương tác/tooltips. */
+.nn-scanlines {
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.22) 0px,
+    rgba(0, 0, 0, 0.22) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}

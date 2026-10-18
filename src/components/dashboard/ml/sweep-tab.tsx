@@ -813,6 +813,16 @@ export function SweepTab() {
             trung thực, không ép. Người đánh giá cuối cùng của kiến trúc vẫn là
             cổng bằng chứng, không phải bảng xếp hạng.
           </p>
+          <p>
+            <span className="font-semibold text-foreground">Phạm vi tìm kiếm</span> — chỉ
+            kiến trúc <strong>MLP/ANN</strong> (6 topo coarse × 2 biến thể activation + 4
+            refine quanh top-2: ±nơ-rôn, thêm/bớt lớp, lr × 0,5, preset trọng số loss ·
+            featureSet 16/24 chiều): đây là cấp <strong>L1 &quot;NAS-Lite&quot;</strong>{" "}
+            deterministic — <strong>không phải HyperNAS</strong> (L3: surrogate zero-shot,
+            graph encoder H(z), loss thích ứng — đã bị loại ở audit #97 vì chưa có bằng
+            chứng đủ). GRU-24 (cố định 16→24→8→3, window 20) và Q-learning nằm ngoài
+            sweep — GRU lên giọng thứ ba qua cổng bằng chứng B2 riêng.
+          </p>
         </CardContent>
       </Card>
     </div>

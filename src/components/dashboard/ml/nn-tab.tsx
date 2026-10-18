@@ -6,12 +6,15 @@
  * từng đầu ra, siêu tham số khối train…".
  *
  * HAI khối chính:
- *  (1) SƠ ĐỒ MLP SERVING — cột TÍNH ĐỘNG theo số lớp (in + hidden[1..5] + out
- *      = 3..7 cột, viewBox rộng theo số cột). Mỗi cạnh = 1 trọng số W THẬT từ
- *      blocks của bản serving (API đã map định dạng cũ W1..b3 → blocks tương
- *      đương) — dày/mảnh theo |w|, emerald = dương · rose = âm, animation
- *      dòng chảy (tôn trọng prefers-reduced-motion), tooltip W[i,j]/bias từng
- *      nơ-rôn, subsample EDGE_CAP có ghi chú trung thực.
+ *  (1) SƠ ĐỒ DARK HACKER TOPOLOGY ĐỒNG DẠNG (F-20 #134 — nn-viz.tsx):
+ *      MLP serving · ANN nháp · GRU-24 cùng một engine — nền tối terminal +
+ *      scanline CRT, hạt tín hiệu SMIL chuyển động giữa các nơ-rôn theo lớp:
+ *      lục = lan truyền tiến (x → ŷ — "não vận hành"), hồng = lan truyền
+ *      ngược (gradient ∂L — "não học"), hổ = dòng đệ quy GRU; 3 chế độ bấm
+ *      được (tiến · ngược · chu kỳ huấn luyện), tôn trọng
+ *      prefers-reduced-motion. Mỗi cạnh MLP vẫn = 1 trọng số W THẬT (tooltip
+ *      W[i,j]/bias, dày/mảnh theo |w|, lục dương · hồng âm, subsample
+ *      EDGE_CAP có ghi chú trung thực).
  *  (2) TRÌNH CHỈNH SỬA KIẾN TRÚC ANN — draft local khởi tạo từ "draft" của
  *      /api/ml/architecture (AppSetting ml-tuning hiệu lực): thêm/xoá lớp
  *      (1..5), stepper nơ-rôn từng lớp (2..96), Select activation từng lớp
@@ -70,18 +73,34 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { EmptyNote, nf0 } from "./shared";
+import {
+  EDGE_CAP,
+  COL_X0,
+  COL_GAP,
+  TOP,
+  BOTTOM,
+  DRAFT_TOP,
+  DRAFT_BOTTOM,
+  DRAFT_GAP,
+  DRAFT_X0,
+  DRAFT_EDGE_CAP,
+  nodePositions,
+  buildEdges,
+  subsample,
+  useVizMode,
+  usePrefersReducedMotion,
+  VizShell,
+  TypologyNet,
+  GruNet,
+  LegendDot,
+  LegendLine,
+  ModeLegendText,
+  VIZ_PALETTE,
+  type EdgeSpec,
+  type VizColumn,
+} from "./nn-viz";
 
-/* ─────────────────── Hằng số hình học + giới hạn ─────────────────── */
-
-/** Kích thước cột theo chiều dọc — dùng cho CẢ sơ đồ serving lẫn nháp. */
-const TOP = 56;
-const BOTTOM = 352;
-/** Khoảng cách ngang giữa 2 cột + lề trái phải (viewBox rộng theo số cột). */
-const COL_GAP = 150;
-const COL_X0 = 110;
-/** Trần số cạnh vẽ (mạng lớn — cấu trúc vẫn đúng, có ghi chú). */
-const EDGE_CAP = 1400;
-
+/* ─────────────────── Giới hạn trình chỉnh sửa ─────────────────── */
 /** Giới hạn trình chỉnh sửa (mirror MLP_ARCH_LIMITS backend — một ngữ nghĩa). */
 const LIMITS = {
   minLayers: 1,
@@ -113,100 +132,11 @@ const DEFAULT_HIDDEN: number[] = [24, 12];
 const DEFAULT_ACTIVATIONS: MlActivation[] = ["relu", "relu"];
 const DEFAULT_LOSS_WEIGHTS: [number, number, number] = [1, 1, 1];
 
-/* ─────────────────── Hình học chung ─────────────────── */
-
-interface NodePos {
-  x: number;
-  y: number;
-}
-
-function nodePositions(units: number, x: number, top: number, bottom: number): NodePos[] {
-  const span = bottom - top;
-  const gap = units > 1 ? span / (units - 1) : 0;
-  const y0 = units > 1 ? top : (top + bottom) / 2;
-  return Array.from({ length: units }, (_, i) => ({ x, y: y0 + i * gap }));
-}
-
-function radiusFor(units: number, top: number, bottom: number): number {
-  const gap = units > 1 ? (bottom - top) / (units - 1) : 20;
-  return Math.max(2.6, Math.min(6, gap * 0.36));
-}
-
-/** Cạnh nối 2 cột — tham số hoá theo trọng số thật (dày/mảnh + màu dấu). */
-interface EdgeSpec {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  w: number;
-  title: string;
-}
-
-function buildEdges(
-  from: NodePos[],
-  to: NodePos[],
-  W: number[] | undefined,
-  wTitle: (j: number, k: number) => string
-): EdgeSpec[] {
-  const edges: EdgeSpec[] = [];
-  const useWeights = Array.isArray(W) && W.length === to.length * from.length;
-  for (let j = 0; j < to.length; j++) {
-    for (let k = 0; k < from.length; k++) {
-      const w = useWeights ? (W as number[])[j * from.length + k] : 0;
-      edges.push({
-        x1: from[k].x,
-        y1: from[k].y,
-        x2: to[j].x,
-        y2: to[j].y,
-        w,
-        title: wTitle(j, k),
-      });
-    }
-  }
-  return edges;
-}
-
-/** Giảm số cạnh vẽ khi mạng lớn (vẫn đúng cấu trúc — ghi chú rõ trên UI). */
-function subsample<T>(items: T[], cap: number): { items: T[]; stride: number } {
-  if (items.length <= cap) return { items, stride: 1 };
-  const stride = Math.ceil(items.length / cap);
-  return { items: items.filter((_, i) => i % stride === 0), stride };
-}
-
-/** Vẽ một lớp cạnh — chuẩn hoá |w| theo max lớp để dày/mảnh tương đối.
- *  (component khai báo ngoài render — react-hooks/static-components). */
-function EdgeGroup({ edges }: { edges: EdgeSpec[] }) {
-  const wMax = Math.max(1e-9, ...edges.map((e) => Math.abs(e.w)));
-  return (
-    <g className="nn-edges">
-      {edges.map((e, i) => {
-        const mag = Math.abs(e.w) / wMax;
-        return (
-          <line
-            key={i}
-            x1={e.x1}
-            y1={e.y1}
-            x2={e.x2}
-            y2={e.y2}
-            strokeWidth={0.35 + 1.9 * mag}
-            strokeOpacity={0.22 + 0.6 * mag}
-            className={e.w >= 0 ? "stroke-emerald-500" : "stroke-rose-500"}
-          >
-            <title>{e.title}</title>
-          </line>
-        );
-      })}
-    </g>
-  );
-}
-
-function DiagramNode({ p, r, cls }: { p: NodePos; r: number; cls: string }) {
-  return <circle cx={p.x} cy={p.y} r={r} className={cls} />;
-}
-
-/* ─────────────────── Sơ đồ MLP serving — cột động N-layer ─────────────────── */
+/* ─────────────────── Sơ đồ MLP serving — dark hacker typology (#134) ─────────────────── */
 
 function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
+  const { mode, toolbar } = useVizMode();
+  const reduced = usePrefersReducedMotion();
   const { arch, activations, featureNames, weights, outputLabels } = mlp;
   const outLabels = React.useMemo(
     () => (outputLabels.length === 3 ? outputLabels : ["Giảm", "Đi ngang", "Tăng"]),
@@ -243,7 +173,6 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
       cols,
       groups,
       vbW: COL_X0 * 2 + (sizes.length - 1) * COL_GAP,
-      lastX: xs[xs.length - 1],
     };
   }, [arch, activations, weights, featureNames, outLabels]);
 
@@ -254,116 +183,62 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
   const biasOf = (blockIdx: number, j: number): number | undefined =>
     weights?.blocks?.[blockIdx]?.b?.[j];
 
+  const columns: VizColumn[] = geometry.sizes.map((units, ci) => {
+    const isInput = ci === 0;
+    const isOutput = ci === geometry.sizes.length - 1;
+    const hiddenIdx = ci - 1;
+    return {
+      nodes: geometry.cols[ci],
+      label: geometry.heads[ci],
+      sub: `${units} nơ-rôn`,
+      kind: isInput ? "input" : isOutput ? "output" : "hidden",
+      sideLabel: isInput
+        ? (j) => (featureNames[j] ?? `x[${j}]`).slice(0, 22)
+        : isOutput
+          ? (j) => outLabels[j] ?? `lớp ${j}`
+          : undefined,
+      nodeTitle: isInput
+        ? (j) => `x[${j}] ${featureNames[j] ?? ""} — đặc trưng chuẩn hoá z-score`
+        : isOutput
+          ? (j) =>
+              `softmax lớp ${outLabels[j] ?? j} — W·a + b[${j}], thiên lệch b=${biasOf(geometry.sizes.length - 2, j) ?? "—"}`
+          : (j) =>
+              `Nơ-rôn ẩn ${hiddenIdx + 1}.${j} — ${ACT_LABEL[activations[hiddenIdx] ?? "relu"]}(W·a + b)[${j}], thiên lệch b=${biasOf(hiddenIdx, j) ?? "—"}`,
+    };
+  });
+
   return (
-    <div className="overflow-x-auto custom-scrollbar">
-      <svg
-        viewBox={`0 0 ${geometry.vbW} 400`}
-        className="min-w-[620px] max-w-full"
-        role="img"
-        aria-label={`Sơ đồ mạng MLP ${mlp.archString} — ${geometry.sizes.length} cột, trọng số thật bản serving v${mlp.version}`}
+    <div className="flex flex-col gap-1.5">
+      <VizShell
+        title={`MLP ${mlp.archString} · serving v${mlp.version}`}
+        toolbar={toolbar}
+        legend={
+          <>
+            <LegendDot color={VIZ_PALETTE.fwd} label="hạt lục — lan truyền tiến (x → ŷ)" />
+            <LegendDot color={VIZ_PALETTE.bwd} label="hạt hồng — lan truyền ngược (gradient ∂L)" />
+            <LegendLine color={VIZ_PALETTE.wPos} label="trọng số dương" />
+            <LegendLine color={VIZ_PALETTE.wNeg} label="trọng số âm" />
+            <ModeLegendText mode={mode} reduced={reduced} />
+          </>
+        }
       >
-        <style>{`@keyframes nnflow { to { stroke-dashoffset: -44; } }
-.nn-edges line { stroke-dasharray: 5 7; animation: nnflow 2.4s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .nn-edges line { animation: none; } }`}</style>
-
-        {/* Tiêu đề cột + số nơ-rôn — ĐỘNG theo số lớp */}
-        {geometry.heads.map((head, i) => (
-          <text
-            key={`h-${i}`}
-            x={geometry.xs[i]}
-            y={30}
-            textAnchor="middle"
-            className="fill-muted-foreground text-[11px] font-medium"
-          >
-            {head}
-          </text>
-        ))}
-        {geometry.sizes.map((u, i) => (
-          <text
-            key={`u-${i}`}
-            x={geometry.xs[i]}
-            y={45}
-            textAnchor="middle"
-            className="fill-muted-foreground text-[10px] tabular-nums"
-          >
-            {u} nơ-rôn
-          </text>
-        ))}
-
-        {/* Cạnh (vẽ trước — nơ-rôn đè lên) */}
-        {sampled.map((g, gi) => (
-          <EdgeGroup key={`g-${gi}`} edges={g.items} />
-        ))}
-
-        {/* Nơ-rôn từng cột */}
-        {geometry.cols.map((col, ci) => {
-          // ci = 0 → vào · ci = sizes.length-1 → ra · còn lại lớp ẩn.
-          const isInput = ci === 0;
-          const isOutput = ci === geometry.sizes.length - 1;
-          const hiddenIdx = ci - 1;
-          const r = isOutput ? 8 : radiusFor(geometry.sizes[ci], TOP, BOTTOM);
-          return col.map((p, j) => {
-            if (isInput) {
-              return (
-                <g key={`n-${ci}-${j}`}>
-                  <circle cx={p.x} cy={p.y} r={r} className="fill-muted-foreground stroke-background" strokeWidth={1}>
-                    <title>{`x[${j}] ${featureNames[j] ?? ""} — đặc trưng chuẩn hoá z-score`}</title>
-                  </circle>
-                  <text
-                    x={p.x - r - 6}
-                    y={p.y + 3}
-                    textAnchor="end"
-                    className="fill-muted-foreground text-[7.5px]"
-                  >
-                    {(featureNames[j] ?? `x[${j}]`).slice(0, 22)}
-                  </text>
-                </g>
-              );
-            }
-            if (isOutput) {
-              return (
-                <g key={`n-${ci}-${j}`}>
-                  <circle cx={p.x} cy={p.y} r={r} className="fill-primary stroke-primary-foreground" strokeWidth={1.5}>
-                    <title>{`softmax lớp ${outLabels[j] ?? j} — W·a + b[${j}], thiên lệch b=${biasOf(geometry.sizes.length - 2, j) ?? "—"}`}</title>
-                  </circle>
-                  <text
-                    x={p.x + r + 6}
-                    y={p.y + 3.5}
-                    className="fill-foreground text-[9.5px] font-medium"
-                  >
-                    {outLabels[j] ?? `lớp ${j}`}
-                  </text>
-                </g>
-              );
-            }
-            const act = ACT_LABEL[activations[hiddenIdx] ?? "relu"];
-            return (
-              <g key={`n-${ci}-${j}`}>
-                <DiagramNode p={p} r={r} cls="fill-primary/70 stroke-primary" />
-                <title>{`Nơ-rôn ẩn ${hiddenIdx + 1}.${j} — ${act}(W·a + b)[${j}], thiên lệch b=${biasOf(hiddenIdx, j) ?? "—"}`}</title>
-              </g>
-            );
-          });
-        })}
-
-        {/* Mũi tên dòng chảy tổng */}
-        <g>
-          <line x1={geometry.xs[0] + 14} y1={376} x2={geometry.lastX - 18} y2={376} className="stroke-muted-foreground" strokeWidth={1} markerEnd="url(#nnarrow)" />
-          <text x={(geometry.xs[0] + geometry.lastX) / 2} y={392} textAnchor="middle" className="fill-muted-foreground text-[9px]">
-            hướng dòng chảy dữ liệu: đặc trưng {geometry.sizes.length - 2} lớp ẩn → xác suất 3 lớp
-          </text>
-          <defs>
-            <marker id="nnarrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 z" className="fill-muted-foreground" />
-            </marker>
-          </defs>
-        </g>
-      </svg>
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        <TypologyNet
+          columns={columns}
+          edgeGroups={sampled.map((g) => g.items)}
+          viewW={geometry.vbW}
+          viewH={400}
+          mode={mode}
+          reduced={reduced}
+          ariaLabel={`Sơ đồ typology mạng MLP ${mlp.archString} — ${geometry.sizes.length} cột, trọng số thật bản serving v${mlp.version}, hạt tín hiệu lan truyền tiến và ngược`}
+        />
+      </VizShell>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
         Mỗi cạnh = 1 trọng số thật của bản serving (di chuột lên nơ-rôn/cạnh để
         xem giá trị) —{" "}
-        <span className="text-emerald-600 dark:text-emerald-400">xanh: trọng số dương</span>{" · "}
-        <span className="text-rose-600 dark:text-rose-400">đỏ: âm</span> · dày = |trọng số| lớn.
+        <span className="text-emerald-600 dark:text-emerald-400">lục: trọng số dương</span>{" · "}
+        <span className="text-rose-600 dark:text-rose-400">hồng: âm</span> · dày = |trọng số| lớn ·
+        hạt lục chạy tiến (suy luận) · hạt hồng chạy ngược (học) — bấm nút
+        tiến/ngược/chu kỳ trên sơ đồ để đổi cơ chế đang hiển thị.
         {drawn < totalEdges
           ? ` Mạng lớn — vẽ ${nf0.format(drawn)}/${nf0.format(totalEdges)} cạnh đại diện (cấu trúc đúng 100%).`
           : ` Đủ ${nf0.format(totalEdges)} cạnh.`}
@@ -372,119 +247,33 @@ function MlpDiagram({ mlp }: { mlp: MlMlpArchInfo }) {
   );
 }
 
-/* ─────────────────── Sơ đồ GRU (schematic 3 cổng — giữ nguyên #89) ─────────────────── */
+/* ─────────────────── Sơ đồ GRU — typology cổng + đệ quy (#134) ─────────────────── */
 
 function GruDiagram({ gru }: { gru: MlGruArchInfo }) {
-  const { in: IN, h: H, d: D, out: OUT, window } = gru.arch;
-  const boxes = [
-    {
-      x: 16,
-      w: 150,
-      title: `Chuỗi vào`,
-      lines: [`${window} phiên × ${IN} đặc trưng`, "z-score theo chiều đặc trưng"],
-      params: "0",
-    },
-    {
-      x: 210,
-      w: 190,
-      title: `Tế bào GRU ${H} nơ-rôn`,
-      lines: ["cổng z — xoá (sigmoid)", "cổng r — cập nhật (sigmoid)", "hₜ — ứng viên (tanh)"],
-      params: nf0.format(3 * (H * IN + H * H + H)),
-    },
-    {
-      x: 444,
-      w: 100,
-      title: `Dense ${D}`,
-      lines: ["ReLU", "Wd·h + bd"],
-      params: nf0.format(D * H + D),
-    },
-    {
-      x: 584,
-      w: 80,
-      title: `Ra ${OUT}`,
-      lines: ["softmax"],
-      params: nf0.format(OUT * D + OUT),
-    },
-  ];
-  const y = 56;
-  const h = 168;
+  const { mode, toolbar } = useVizMode();
+  const reduced = usePrefersReducedMotion();
   return (
-    <div className="overflow-x-auto custom-scrollbar">
-      <svg viewBox="0 0 680 260" className="min-w-[560px] max-w-full" role="img" aria-label="Sơ đồ kiến trúc GRU-24">
-        {boxes.map((b, i) => {
-          const next = boxes[i + 1];
-          return (
-            <g key={b.x}>
-              <rect
-                x={b.x}
-                y={y}
-                width={b.w}
-                height={h}
-                rx={10}
-                className="fill-muted/40 stroke-muted-foreground/60"
-                strokeWidth={1.2}
-              />
-              <text x={b.x + b.w / 2} y={y + 22} textAnchor="middle" className="fill-foreground text-[11px] font-semibold">
-                {b.title}
-              </text>
-              {b.lines.map((line, li) => (
-                <text
-                  key={li}
-                  x={b.x + b.w / 2}
-                  y={y + 48 + li * 18}
-                  textAnchor="middle"
-                  className="fill-muted-foreground text-[9px]"
-                >
-                  {line}
-                </text>
-              ))}
-              <text x={b.x + b.w / 2} y={y + h - 12} textAnchor="middle" className="fill-muted-foreground text-[9px] tabular-nums">
-                {b.params} tham số
-              </text>
-              {next && (
-                <g>
-                  <line
-                    x1={b.x + b.w + 4}
-                    y1={y + h / 2}
-                    x2={next.x - 8}
-                    y2={y + h / 2}
-                    className="stroke-muted-foreground"
-                    strokeWidth={1.4}
-                    markerEnd="url(#gruarrow)"
-                  />
-                </g>
-              )}
-            </g>
-          );
-        })}
-        {/* Vòng lặp thời gian trên tế bào GRU */}
-        <path
-          d={`M ${210 + 95} ${y - 10} C ${210 + 95} ${y - 34}, ${210 + 95} ${y - 34}, ${210 + 95} ${y - 10}`}
-          className="stroke-muted-foreground"
-          fill="none"
-          strokeWidth={1.2}
-          markerEnd="url(#gruarrow)"
-        />
-        <text x={210 + 95} y={y - 40} textAnchor="middle" className="fill-muted-foreground text-[9px]">
-          lặp theo từng phiên t (BPTT viết tay)
-        </text>
-        <defs>
-          <marker id="gruarrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <path d="M0,0 L8,4 L0,8 z" className="fill-muted-foreground" />
-          </marker>
-        </defs>
-      </svg>
-    </div>
+    <VizShell
+      title={`GRU-${gru.arch.h} · ${gru.arch.in}→${gru.arch.h}→${gru.arch.d}→${gru.arch.out}`}
+      toolbar={toolbar}
+      legend={
+        <>
+          <LegendDot color={VIZ_PALETTE.fwd} label="hạt lục — lan truyền tiến" />
+          <LegendDot color={VIZ_PALETTE.bwd} label="hạt hồng — BPTT ngược theo thời gian" />
+          <LegendDot color={VIZ_PALETTE.recur} label="hạt hổ — dòng đệ quy hₜ₋₁" />
+          <LegendDot color={VIZ_PALETTE.gate} label="cổng sigmoid r·z" />
+          <LegendDot color={VIZ_PALETTE.cand} label="h̃ tanh" />
+          <LegendDot color={VIZ_PALETTE.state} label="trạng thái hₜ" />
+          <ModeLegendText mode={mode} reduced={reduced} />
+        </>
+      }
+    >
+      <GruNet arch={gru.arch} mode={mode} reduced={reduced} />
+    </VizShell>
   );
 }
 
 /* ─────────────────── Sơ đồ NHÁP (trình chỉnh sửa — cấu trúc, không trọng số) ─────────────────── */
-
-const DRAFT_TOP = 26;
-const DRAFT_BOTTOM = 148;
-const DRAFT_GAP = 118;
-const DRAFT_X0 = 96;
-const DRAFT_EDGE_CAP = 500;
 
 function DraftDiagram({
   inUnits,
@@ -495,6 +284,8 @@ function DraftDiagram({
   hidden: number[];
   activations: MlActivation[];
 }) {
+  const { mode, toolbar } = useVizMode();
+  const reduced = usePrefersReducedMotion();
   const geometry = React.useMemo(() => {
     const sizes = [inUnits, ...hidden, 3];
     const xs = sizes.map((_, i) => DRAFT_X0 + i * DRAFT_GAP);
@@ -517,69 +308,44 @@ function DraftDiagram({
   const cap = Math.max(120, Math.floor(DRAFT_EDGE_CAP / geometry.groups.length));
   const sampled = geometry.groups.map((g) => subsample(g, cap));
 
+  const columns: VizColumn[] = geometry.sizes.map((u, i) => {
+    const isLast = i === geometry.sizes.length - 1;
+    return {
+      nodes: geometry.cols[i],
+      label: i === 0 ? `Vào ${u}` : isLast ? "Ra 3" : `Ẩn ${i} · ${u}`,
+      sub: i === 0 ? "z-score" : isLast ? "softmax" : ACT_LABEL[activations[i - 1] ?? "relu"],
+      kind: i === 0 ? "input" : isLast ? "output" : "hidden",
+      sideLabel: isLast ? (j) => CLASS_LABELS[j]?.label ?? String(j) : undefined,
+    };
+  });
+
   return (
-    <div className="overflow-x-auto custom-scrollbar rounded-lg border bg-background/60 p-2">
-      <svg
-        viewBox={`0 0 ${geometry.vbW} 200`}
-        className={cn("max-w-full", geometry.sizes.length > 4 ? "min-w-[560px]" : "min-w-[420px]")}
-        role="img"
-        aria-label={`Sơ đồ nháp kiến trúc: ${inUnits} vào → ${hidden.join(" → ")} → 3 ra`}
-      >
-        {geometry.sizes.map((u, i) => {
-          const head =
-            i === 0
-              ? `Vào ${u}`
-              : i === geometry.sizes.length - 1
-                ? "Ra 3"
-                : `Ẩn ${i} · ${u} ${ACT_LABEL[activations[i - 1] ?? "relu"]}`;
-          return (
-            <text
-              key={`dh-${i}`}
-              x={geometry.xs[i]}
-              y={14}
-              textAnchor="middle"
-              className="fill-muted-foreground text-[9px] font-medium"
-            >
-              {head}
-            </text>
-          );
-        })}
-        {sampled.map((g, gi) => (
-          <g key={`dg-${gi}`} className="stroke-muted-foreground/25" strokeWidth={0.5}>
-            {g.items.map((e, i) => (
-              <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />
-            ))}
-          </g>
-        ))}
-        {geometry.cols.map((col, ci) => {
-          const isOutput = ci === geometry.sizes.length - 1;
-          const r = isOutput ? 7 : radiusFor(geometry.sizes[ci], DRAFT_TOP, DRAFT_BOTTOM);
-          return col.map((p, j) =>
-            isOutput ? (
-              <g key={`dn-${ci}-${j}`}>
-                <circle cx={p.x} cy={p.y} r={r} className="fill-primary stroke-primary-foreground" strokeWidth={1.2} />
-                <text
-                  x={p.x + r + 5}
-                  y={p.y + 3}
-                  className="fill-foreground text-[8.5px] font-medium"
-                >
-                  {CLASS_LABELS[j]?.label ?? j}
-                </text>
-              </g>
-            ) : (
-              <circle
-                key={`dn-${ci}-${j}`}
-                cx={p.x}
-                cy={p.y}
-                r={r}
-                className={ci === 0 ? "fill-muted-foreground/70 stroke-background" : "fill-primary/60 stroke-primary/70"}
-                strokeWidth={0.8}
-              />
-            )
-          );
-        })}
-      </svg>
-    </div>
+    <VizShell
+      title="ANN — bản nháp trình chỉnh sửa"
+      toolbar={toolbar}
+      legend={
+        <>
+          <LegendDot color={VIZ_PALETTE.fwd} label="hạt lục — lan truyền tiến" />
+          <LegendDot color={VIZ_PALETTE.bwd} label="hạt hồng — lan truyền ngược" />
+          <span>cạnh cấu trúc — chưa có trọng số (sẽ có sau lần train)</span>
+          <ModeLegendText mode={mode} reduced={reduced} />
+        </>
+      }
+    >
+      <TypologyNet
+        columns={columns}
+        edgeGroups={sampled.map((g) => g.items)}
+        viewW={geometry.vbW}
+        viewH={176}
+        mode={mode}
+        reduced={reduced}
+        structural
+        flowArrows={false}
+        headersAt={[14, 26]}
+        minW={geometry.sizes.length > 4 ? 560 : 420}
+        ariaLabel={`Sơ đồ nháp kiến trúc ANN: ${inUnits} vào → ${hidden.join(" → ")} → 3 ra, hạt tín hiệu lan truyền`}
+      />
+    </VizShell>
   );
 }
 
@@ -1316,6 +1082,17 @@ export function NnTab() {
             <span className="ml-auto text-[11px] text-muted-foreground">{gru.note}</span>
           </div>
           <GruDiagram gru={gru} />
+          <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            Sơ đồ typology: hiển thị đại diện ({Math.min(gru.arch.in, 10)}/{gru.arch.in} đặc
+            trưng · {Math.min(gru.arch.h, 12)}/{gru.arch.h} nơ-rôn mỗi cổng) — công thức từng
+            cổng giữ nguyên trong tooltip, cấu trúc đúng 100%. Kiến trúc GRU{" "}
+            <strong>CỐ ĐỊNH trong code</strong> (GRU_ARCH {gru.arch.in}→{gru.arch.h}→
+            {gru.arch.d}→{gru.arch.out} · window {gru.arch.window} phiên) —{" "}
+            <strong>không nằm trong không gian tìm kiếm</strong> của tab Tự động tìm kiếm
+            (NAS-Lite chỉ tìm kiến trúc MLP/ANN + hyper đi kèm); GRU lên giọng thứ ba qua
+            cổng bằng chứng B2 (shadow 60 phiên · Brier ≤ MLP), không qua champion board.
+          </p>
         </section>
       )}
 
