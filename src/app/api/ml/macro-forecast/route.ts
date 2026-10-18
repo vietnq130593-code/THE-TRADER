@@ -5,6 +5,7 @@ import {
   trainAllMacroAssets,
   type MacroTrainSummary,
 } from "@/lib/ml/macro-forecast";
+import { markTrainAttempt, releaseTrainLock, tryAcquireTrainLock } from "@/lib/ml/train-mlp";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,13 +21,16 @@ export const maxDuration = 60;
  *        brier60, baseline 0,667, edge, modelVersion, missingContext} —
  *        tab Mạng thần kinh hiển thị khối riêng.
  * POST — body {"train": true} → trainAllMacroAssets() (8 MLP fail-soft từng
- *        tài sản) RỒI trả forecast + trainSummary. Không cooldown phức tạp —
- *        chỉ MUTEX IN-PROCESS kiểu chuỗi Promise module-level (pattern
- *        AUD-CODE #18 của /api/ml/settle): 2 POST không bao giờ train đè
- *        nhau (nextVersion max+1 + $transaction đã an toàn, mutex chống ép
- *        CPU 8×8 fit song song). GET KHÔNG qua mutex — đường đọc phải luôn
- *        nhẹ nhàng (ảnh chụp giữa đợt train vẫn nhất quán từng dòng vì mỗi
- *        dòng tự khóa theo meta.assetSymbol).
+ *        tài sản) RỒI trả forecast + trainSummary. AUDIT 137 B12: train giờ
+ *        qua tryAcquireTrainLock DÙNG CHUNG với /api/ml/train + sweep (mutex
+ *        in-process kiểu chuỗi Promise module-level chỉ còn chống 2 POST
+ *        macro đè nhau — pattern AUD-CODE #18 của /api/ml/settle): hết khả
+ *        năng macro train song song với train/sweep (tranh CPU 8×8 fit; kind
+ *        khác nên không trùng version, nhưng nextVersion max+1 + create vẫn
+ *        là 2 await rời — hàng rào cuối cùng giờ là @@unique([kind, version])
+ *        ở DB). Khoá bận → 429 thân thiện. GET KHÔNG qua khoá — đường đọc
+ *        luôn nhẹ nhàng (ảnh chụp giữa đợt train vẫn nhất quán từng dòng vì
+ *        mỗi dòng tự khóa theo meta.assetSymbol).
  *
  * AuditLog action "MACRO_MLP_TRAINED" entity "MlModel" sau mỗi đợt train
  * (kể cả 0 trained — truy vết "đã chạy", pattern ML_SETTLE): after =
@@ -64,7 +68,24 @@ async function runPost(req: Request): Promise<NextResponse> {
   try {
     let trainSummary: MacroTrainSummary | null = null;
     if (train) {
-      trainSummary = await trainAllMacroAssets();
+      // AUDIT 137 B12 — khoá train DÙNG CHUNG (train/sweep/macro): bận → 429
+      // (không đè CPU); nhả khoá ở MỌI đường thoát (finally bên dưới).
+      if (!tryAcquireTrainLock()) {
+        return NextResponse.json(
+          {
+            ok: false,
+            busy: true,
+            error: "Đợt train/sweep khác đang giữ khoá huấn luyện dùng chung — thử lại sau khi nó xong.",
+          },
+          { status: 429 }
+        );
+      }
+      markTrainAttempt(Date.now());
+      try {
+        trainSummary = await trainAllMacroAssets();
+      } finally {
+        releaseTrainLock();
+      }
       // Audit sau đợt train — fail-soft (models đã lưu, audit không chặn trả lời)
       try {
         await db.auditLog.create({

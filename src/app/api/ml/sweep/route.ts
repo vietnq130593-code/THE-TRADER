@@ -99,6 +99,8 @@ function gateSummaryOf(champion: SweepChampionInfo | null): {
   pass: boolean;
   reasons: string[];
   deltaBrier: { mean: number; ciLow: number; ciHigh: number } | null;
+  holdout: SweepChampionInfo["holdout"];
+  selectionNote: string | null;
   serving: { valAcc: number | null; paramCount: number | null; version: number | null } | null;
 } | null {
   if (!champion) return null;
@@ -106,6 +108,9 @@ function gateSummaryOf(champion: SweepChampionInfo | null): {
     pass: champion.swapProposed,
     reasons: champion.swapReason ? [champion.swapReason] : [],
     deltaBrier: champion.deltaBrier ?? null,
+    // AUDIT 137 B4 — số cổng walk-forward cho UI (đồng cửa sổ champ vs serving).
+    holdout: champion.holdout ?? null,
+    selectionNote: champion.selectionNote ?? null,
     serving: champion.serving ?? null,
   };
 }

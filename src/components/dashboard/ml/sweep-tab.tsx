@@ -671,6 +671,33 @@ export function SweepTab() {
                       ? "ĐÃ HOÁN ĐỔI sang serving — champion qua đủ cổng 4 điều kiện (audit ML_SWEEP_SWAP)."
                       : `Không đổi serving — ${latest.champion.swapReason}`}
                   </p>
+                  {/* AUDIT 137 B4 — số cổng walk-forward: điều kiện 1+2 chấm trên
+                      block holdout cuối (SAU val early-stop, không tham gia chọn
+                      champion), đồng cửa sổ champion vs serving. valAcc/Brier phía
+                      trên là số selection (post-selection) — xem selectionNote. */}
+                  {latest.champion.holdout != null && (
+                    <p className="font-medium">
+                      Cổng walk-forward · {nf0.format(latest.champion.holdout.size)} mẫu holdout
+                      {latest.champion.holdout.dateFrom != null &&
+                      latest.champion.holdout.dateTo != null
+                        ? ` (${latest.champion.holdout.dateFrom} → ${latest.champion.holdout.dateTo})`
+                        : ""}
+                      : champion {pct1(latest.champion.holdout.championAcc)} · serving{" "}
+                      {latest.champion.holdout.servingAcc != null
+                        ? pct1(latest.champion.holdout.servingAcc)
+                        : "baseline 33,3%"}
+                      {latest.champion.holdout.championBrier != null
+                        ? ` · Brier ${nf4.format(latest.champion.holdout.championBrier)} vs ${
+                            latest.champion.holdout.servingBrier != null
+                              ? nf4.format(latest.champion.holdout.servingBrier)
+                              : "0,667"
+                          }`
+                        : ""}
+                    </p>
+                  )}
+                  {latest.champion.selectionNote != null && (
+                    <p className="text-[10px] opacity-80">{latest.champion.selectionNote}</p>
+                  )}
                   {/* F-18B (#132): chỉ đường hiển thị kết quả — trả lời câu hỏi
                       “UI hiển thị kết quả tính toán của Champion board ở đâu”. */}
                   <p className="opacity-80">

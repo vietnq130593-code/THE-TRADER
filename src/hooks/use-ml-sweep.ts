@@ -94,6 +94,18 @@ export interface MlSweepChampion {
   swapReason: string;
   modelVersion: number;
   deltaBrier?: { mean: number; ciLow: number; ciHigh: number } | null;
+  /** AUDIT 137 B4 — số đo cổng walk-forward trên block holdout cuối (SAU val
+   *  early-stop, không tham gia chọn champion): điều kiện 1+2 chấm ở đây. */
+  holdout?: {
+    size: number;
+    dateFrom: string | null;
+    dateTo: string | null;
+    championAcc: number;
+    championBrier: number | null;
+    servingAcc: number | null;
+    servingBrier: number | null;
+  } | null;
+  selectionNote?: string;
   serving?: { valAcc: number | null; paramCount: number | null; version: number | null } | null;
   /** F-18 (#131): đồng bộ champion → ml-tuning (chỉ có khi swap thành công). */
   tuningSync?: { synced: boolean; note: string } | null;
@@ -119,6 +131,9 @@ export interface MlSweepGateSummary {
   pass: boolean;
   reasons: string[];
   deltaBrier: { mean: number; ciLow: number; ciHigh: number } | null;
+  /** AUDIT 137 B4 — số cổng walk-forward (đồng cửa sổ champion vs serving). */
+  holdout: MlSweepChampion["holdout"];
+  selectionNote: string | null;
   serving: { valAcc: number | null; paramCount: number | null; version: number | null } | null;
 }
 

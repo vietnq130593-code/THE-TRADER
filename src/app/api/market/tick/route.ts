@@ -242,6 +242,16 @@ async function fillOrder(
   if (qty <= 0) return false;
 
   return db.$transaction(async (tx) => {
+    // ── AUDIT 137 C9 — row-lock tài khoản (SELECT … FOR UPDATE) ngay ĐẦU tx:
+    //    mọi fill trên cùng tài khoản hoá tuần tự ở DB (Position + cash đều
+    //    read-then-write — trước đây chỉ an toàn nhờ mutex đơn-process; đa
+    //    process/đa instance sẽ mất cập nhật vị thế/tiền: 2 lệnh cùng đọc
+    //    qty=0 → mỗi tx ghi 100 → mất 100 cp trong khi cash trừ 2 lần).
+    //    Khoá account chặn cả đồng thời vị thế (mọi fill đều đụng cash cùng
+    //    tài khoản) — một khoá duy nhất, mọi tx fill lấy đúng khoá này
+    //    TRƯỚC tiên → không đảo chiều chờ → không deadlock. ──
+    await tx.$queryRaw`SELECT id FROM trader."BrokerAccount" WHERE id = ${brokerAccountId} FOR UPDATE`;
+
     // ── F-303 (audit 22-a): SELL không đủ cổ phiếu → từ chối lệnh MỘT LẦN ──
     // (trước đây throw INSUFFICIENT_POSITION → retry mỗi tick vĩnh viễn).
     // Hành vi sàn thật: lệnh bán khi không nắm giữ đủ cp bị từ chối.
@@ -284,6 +294,19 @@ async function fillOrder(
       }
     }
 
+    // AUDIT 137 C8 — phí lệnh = phí LŨY KẾ (Σ Trade.fee đã có của lệnh +
+    // phí phần khớp LẦN NÀY): engine full-fill 1 shot thì hai số bằng nhau
+    // (không đổi hành vi hôm nay); lệnh PARTIALLY_FILLED tương lai giữ
+    // Order.fee ≡ Σ Trade.fee — trước đây claim ghi fee(TOÀN khối lượng × giá
+    // fill này) ≠ Σ fee từng phần đã khớp → lệch sổ order-fee-ledger ngay
+    // khi có partial fill (bug ngủ được đóng trước khi tỉnh).
+    const fee = BigInt(Math.round(FEE_RATE * price * qty));
+    const priorFeeAgg = await tx.trade.aggregate({
+      where: { orderId: snapshot.id },
+      _sum: { fee: true },
+    });
+    const orderFeeAccum = (priorFeeAgg._sum.fee ?? BigInt(0)) + fee;
+
     // Claim: chỉ một tick giữ được quyền chuyển trạng thái → FILLED
     const claimed = await tx.order.updateMany({
       where: {
@@ -299,12 +322,11 @@ async function fillOrder(
         ),
         submittedAt: snapshot.submittedAt ?? now,
         filledAt: now,
-        fee: BigInt(Math.round(FEE_RATE * price * snapshot.quantity)),
+        fee: orderFeeAccum,
       },
     });
     if (claimed.count === 0) return false;
 
-    const fee = BigInt(Math.round(FEE_RATE * price * qty));
     const tax =
       snapshot.side === "SELL" ? BigInt(Math.round(TAX_RATE * price * qty)) : BigInt(0);
 

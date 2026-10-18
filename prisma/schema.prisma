@@ -733,7 +733,7 @@ model FinancialFundamental {
 // lưu JSON string (MLP layers + z-score norm / Q-table 48×3).
 model MlModel {
   id          String   @id @default(cuid())
-  kind        String // "dl-mlp" | "rl-q"
+  kind        String // "dl-mlp" | "rl-q" | "dl-gru" | "dl-mtl" | "macro-mlp"
   version     Int
   status      String   @default("serving") // serving | archived
   weights     String // JSON (MLP layers hoặc Q-table)
@@ -747,6 +747,12 @@ model MlModel {
   createdAt   DateTime @default(now())
 
   @@index([kind, status])
+  // AUDIT 137 B12 — hàng rào CUỐI CÙNG ở DB: nextVersion (max+1) + create
+  // là 2 await rời, mutex in-process là bảo vệ duy nhất trước đây; mọi đường
+  // tương lai quên tryAcquireTrainLock (hoặc chạy đa instance) sẽ gặp P2002
+  // thay vì lặng lẽ sinh hàng trùng (kind, version) như lỗi F-612R-06 cũ.
+  // DB hiện checked 0 trùng (2026-10-18) — thêm ràng buộc không cần dedupe.
+  @@unique([kind, version])
 }
 
 // C1 (#99 · ML_AUTOML_BLUEPRINT §4.5) — lịch sử các đợt sweep AutoML L1

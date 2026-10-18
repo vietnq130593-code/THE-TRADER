@@ -523,7 +523,12 @@ export async function mlForecastEnsemble(): Promise<MlEnsembleResult | null> {
    * source="learned") thay hardcode khi đủ điều kiện — cold-start/kill-switch
    * xoá key → fixed như cũ (bit-flip tương thích ngược). */
   const learned = await readEnsembleWeights().catch(() => null);
-  const useLearned = learned != null && learned.source === "learned";
+  // AUDIT 137 B14 — cặp learned chỉ được kiểm định trong thế giới 2 GIỌNG
+  // (mlp+linreg, Σ=1): khi GRU bật, cộng cứng W_GRU ngoài cặp learned làm
+  // tổng trọng số ≠ 1 (double-count cấu trúc — learned chưa bao giờ được
+  // kiểm định cho cấu trúc 3 giọng). GRU đang bật → dùng cặp fixed V3 (đã
+  // cân cho 3 giọng); learned chỉ áp trong đúng thế giới 2 giọng của nó.
+  const useLearned = learned != null && learned.source === "learned" && !gruActive;
   const weightsSource: "fixed" | "learned" = useLearned ? "learned" : "fixed";
   const wMlpFixed = gruActive ? W_MLP_V3 : W_MLP;
   const wLinFixed = gruActive ? W_LINREG_V3 : W_LINREG;

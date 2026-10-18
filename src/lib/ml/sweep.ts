@@ -19,6 +19,10 @@
  *       paramWarnThreshold — F4);
  *   (4) skip-guard windowHash như A4 — áp LUÔN cho mọi đợt (F8, xử TRƯỚC
  *       khi tạo hàng SweepRun — không có bar mới = không có gì mới để tìm).
+ *   AUDIT 137 B4: điều kiện 1+2 đo trên HOLDOUT WALK-FORWARD — block mẫu
+ *       cuối SAU val early-stop, KHÔNG tham gia chọn champion — hết “chọn
+ *       theo val rồi báo lại chính val đó” (winner's curse) và hết so chéo
+ *       cửa sổ train cũ của serving.
  *
  * KHÔNG PHẢI (§4.1): RL controller · train song song vô hạn · tự đổi serving
  * ngoài cổng · thêm dependency. Champion board công khai toàn bộ (§2.10):
@@ -36,6 +40,7 @@ import {
   buildTrainingSet,
   trainingWindowDigest,
   ML_FEATURE_SET,
+  type TrainingSetWithSeries,
 } from "@/lib/ml/features";
 import { MLP, type MlpActivation } from "@/lib/ml/nn";
 import {
@@ -558,7 +563,9 @@ export function pairedBootstrapDeltaBrierCI(
 /** Tham số cổng 4 điều kiện (§4.4) — thuần, verify script test riêng từng đường. */
 export interface ChampionGateParams {
   championValAcc: number;
-  /** null = DB sạch → baseline 1/3 (F4). */
+  /** null = DB sạch → baseline 1/3 (F4). AUDIT 137 B4: championValAcc +
+   *  servingValAcc đo trên CÙNG gateIdx (holdout walk-forward khi có dữ
+   *  liệu — đồng cửa sổ, post-selection). */
   servingValAcc: number | null;
   deltaSwap: number;
   /** CI 95% của ΔBrier paired bootstrap (champ − serving). */
@@ -821,6 +828,22 @@ export interface SweepChampionInfo {
   modelVersion: number;
   /** CI ΔBrier paired bootstrap (champ − serving) đã đo cho cổng. */
   deltaBrier?: { mean: number; ciLow: number; ciHigh: number };
+  /** AUDIT 137 B4 — số đo walk-forward trên block holdout cuối (SAU val
+   *  early-stop, không tham gia chọn champion): điều kiện 1+2 của cổng chấm
+   *  ở đây — đồng cửa sổ champion vs serving, trung thực post-selection.
+   *  null = dữ liệu tối thiểu, holdout tắt (cổng dùng val selection). */
+  holdout?: {
+    size: number;
+    dateFrom: string | null;
+    dateTo: string | null;
+    championAcc: number;
+    championBrier: number | null;
+    servingAcc: number | null;
+    servingBrier: number | null;
+  } | null;
+  /** Ghi chú trung thực về valAcc phía trên (số post-selection — early-stop
+   *  + chọn champion trên cùng val block; chỉ mang tính tham khảo). */
+  selectionNote?: string;
   /** Trạng thái serving TRƯỚC đợt (null object = DB sạch). */
   serving?: { valAcc: number | null; paramCount: number | null; version: number | null } | null;
   /** F-18 (#131): kết quả đồng bộ champion → AppSetting ml-tuning (chỉ khi
@@ -983,15 +1006,48 @@ export async function runSweepOnce(opts: {
     }
     const servingParamCount = servingModel?.paramCount ?? null;
 
-    // Val block dùng chung mọi phép đo — cùng cut 80/20 thời gian như fit()
-    // (F6: Brier tự tính đúng method gate script, khớp early-stop val block).
+    // AUDIT 137 B4 — WALK-FORWARD HOLDOUT cho cổng champion: cắt H mẫu CUỐI
+    // (mới nhất theo thời gian — buildTrainingSet sort theo ngày) ra khỏi vũ
+    // trụ chọn-lựa. Ứng viên chỉ train + early-stop + chấm score trên
+    // m = n−H mẫu đầu (setTrain); block H mẫu cuối CHỈ phục vụ điều kiện 1+2
+    // của cổng (champion vs serving đo CÙNG cửa sổ, SAU-selection). Trước
+    // đây valAcc champion được CHỌN trên val rồi BÁO lại chính val đó
+    // (winner's curse ~budget ứng viên, mỗi ứng viên early-stop theo val) —
+    // số cổng lạc quan hệ thống; servingValAcc cũ lại đo trên cửa sổ train
+    // khác (so chéo). H = 5% cửa sổ kẹp [120; 1500]; dữ liệu tối thiểu
+    // (n−H < 650 mẫu để trainDlMlp còn ≥ 600) → H co về 0 = holdout tắt,
+    // cổng lùi về val block như cũ (selectionNote ghi rõ trung thực).
     const n = set.X.length;
-    const nTrain = Math.floor(n * TRAIN_FRACTION);
+    let holdoutCount = Math.min(1500, Math.max(120, Math.floor(n * 0.05)));
+    if (n - holdoutCount < 650) holdoutCount = Math.max(0, n - 650);
+    const m = n - holdoutCount;
+    // Cắt ĐỒNG BỘ mọi mảng theo mẫu (X · y · symbols · dates · rich) —
+    // trainDlMlp tính topSymbols bằng set.symbols.forEach trên preds của
+    // set.X: thiếu cặp nào lệch độ dài ở đó (nghiệm thu mini-sweep: TypeError
+    // "reading '0'" ở preds[i] undefined — fail-soft giữ 0 hàng MlModel).
+    const setTrain: TrainingSetWithSeries =
+      holdoutCount > 0
+        ? {
+            ...set,
+            X: set.X.slice(0, m),
+            y: set.y.slice(0, m),
+            symbols: set.symbols.slice(0, m),
+            dates: set.dates.slice(0, m),
+            ...(set.rich != null ? { rich: set.rich.slice(0, m) } : {}),
+          }
+        : set;
+    const holdoutIdx: number[] = [];
+    for (let i = m; i < n; i++) holdoutIdx.push(i);
+
+    // Val block SELECT — cùng cut 80/20 thời gian như fit() (F6: Brier tự
+    // tính đúng method gate script, khớp early-stop val block) — trên vũ trụ
+    // chọn-lựa m mẫu (không gồm holdout).
+    const nTrainSel = Math.floor(setTrain.X.length * TRAIN_FRACTION);
     const valIdx: number[] = [];
-    for (let i = nTrain; i < n; i++) valIdx.push(i);
+    for (let i = nTrainSel; i < setTrain.X.length; i++) valIdx.push(i);
     const servingPerSample =
       servingModel != null
-        ? valIdx.map((i) => perSampleBrier(servingModel as MLP, set.X[i]!, set.y[i]!))
+        ? valIdx.map((i) => perSampleBrier(servingModel as MLP, setTrain.X[i]!, setTrain.y[i]!))
         : null;
     const servingBrierMean =
       servingPerSample != null && servingPerSample.length > 0
@@ -1023,13 +1079,19 @@ export async function runSweepOnce(opts: {
         seed: cand.hyper.seed,
       };
       try {
-        const res = await trainDlMlp(set, {
+        // AUDIT 137 B4 — ứng viên train trên setTrain (vũ trụ chọn-lựa m mẫu,
+        // KHÔNG gồm holdout cuối) — holdout chỉ dành cho phép đo cổng.
+        const res = await trainDlMlp(setTrain, {
           tuning: candidateTuning,
           promote: false, // §4.3 — sweep KHÔNG đụng serving trong lúc chạy
-          extraMeta: { sweepRunId: run.id, sweepIndex: cand.index },
+          extraMeta: {
+            sweepRunId: run.id,
+            sweepIndex: cand.index,
+            ...(holdoutCount > 0 ? { gateHoldout: { size: holdoutCount } } : {}),
+          },
         });
         const ms = Date.now() - t0;
-        const perSample = valIdx.map((i) => perSampleBrier(res.model, set.X[i]!, set.y[i]!));
+        const perSample = valIdx.map((i) => perSampleBrier(res.model, setTrain.X[i]!, setTrain.y[i]!));
         const brier = perSample.reduce((s, v) => s + v, 0) / Math.max(1, perSample.length);
         const paramCount = res.model.paramCount;
         const score = computeScore({
@@ -1165,23 +1227,78 @@ export async function runSweepOnce(opts: {
 
     if (championEval) {
       const ce = championEval;
-      const champPer = ce.perSampleBrier ?? [];
-      const deltas = valIdx.map(
+      // AUDIT 137 B4 — cổng đo trên gateIdx: holdout walk-forward khi có dữ
+      // liệu (block cuối SAU val early-stop, không tham gia chọn champion),
+      // val block cũ khi holdout tắt (dữ liệu tối thiểu). serving null →
+      // baseline uniform (F4). Điều kiện 1+2 từ đây: đồng cửa sổ champion vs
+      // serving, post-selection — hết winner's curse và hết so chéo cửa sổ
+      // train cũ của serving (servingValAcc biến metrics cũ giờ chỉ hiển thị).
+      const gateIdx = holdoutCount > 0 ? holdoutIdx : valIdx;
+      const champGatePer =
+        ce.model != null
+          ? gateIdx.map((i) => perSampleBrier(ce.model as MLP, set.X[i]!, set.y[i]!))
+          : [];
+      const servingGatePer =
+        servingModel != null
+          ? gateIdx.map((i) => perSampleBrier(servingModel as MLP, set.X[i]!, set.y[i]!))
+          : null;
+      const deltas = gateIdx.map(
         (_, i) =>
-          champPer[i]! - (servingPerSample != null ? servingPerSample[i]! : UNIFORM_BRIER_BASELINE)
+          champGatePer[i]! - (servingGatePer != null ? servingGatePer[i]! : UNIFORM_BRIER_BASELINE)
       );
       const ci = pairedBootstrapDeltaBrierCI(deltas, SWEEP_BOOTSTRAP_DRAWS, config.seed);
+      // Accuracy trên gateIdx — cùng semantics argmax-class như evalSplit
+      // nn.ts (predictProba [pUp,pFlat,pDown] ↔ label [2,1,0]).
+      const accOnGateIdx = (model: MLP | null): number | null => {
+        if (model == null || gateIdx.length === 0) return null;
+        let ok = 0;
+        for (const i of gateIdx) {
+          const p = model.predictProba(set.X[i]!);
+          let k = 0;
+          if (p[1] > p[k]) k = 1;
+          if (p[2] > p[k]) k = 2;
+          if (2 - k === set.y[i]) ok++;
+        }
+        return ok / gateIdx.length;
+      };
+      const championGateAcc = accOnGateIdx(ce.model) ?? 0;
+      const servingGateAcc = accOnGateIdx(servingModel);
+      const champGateBrierMean =
+        champGatePer.length > 0
+          ? champGatePer.reduce((s, v) => s + v, 0) / champGatePer.length
+          : null;
+      const servingGateBrierMean =
+        servingGatePer != null && servingGatePer.length > 0
+          ? servingGatePer.reduce((s, v) => s + v, 0) / servingGatePer.length
+          : null;
+      const holdoutInfo =
+        holdoutCount > 0
+          ? {
+              size: holdoutCount,
+              dateFrom: set.dates[m] ?? null,
+              dateTo: set.dates[n - 1] ?? null,
+              championAcc: Number(championGateAcc.toFixed(4)),
+              championBrier:
+                champGateBrierMean != null ? Number(champGateBrierMean.toFixed(4)) : null,
+              servingAcc: servingGateAcc != null ? Number(servingGateAcc.toFixed(4)) : null,
+              servingBrier:
+                servingGateBrierMean != null ? Number(servingGateBrierMean.toFixed(4)) : null,
+            }
+          : null;
       const gate = championGateCheck({
-        championValAcc: ce.entry.valAcc ?? 0,
-        servingValAcc,
+        championValAcc: championGateAcc,
+        servingValAcc: servingGateAcc,
         deltaSwap: config.deltaSwap,
         deltaBrierCiLow: ci.ciLow,
         deltaBrierCiHigh: ci.ciHigh,
         championParamCount: ce.entry.params ?? 0,
         servingParamCount,
         maxParamFactor: config.maxParamFactor,
-        // F-19 (#133): cap theo dữ liệu — chính tập đã train champion đợt này.
-        nTrain,
+        // F-19 (#133): cap theo dữ liệu — chính vũ trụ chọn-lựa ứng viên đã
+        // train (mẫu, trừ holdout; valFraction riêng từng ứng viên — B4).
+        nTrain: Math.floor(
+          m * (1 - Math.min(0.5, Math.max(0.05, ce.cand.hyper.valFraction)))
+        ),
       });
 
       // (8) Cổng PASS → SWAP trong MỘT $transaction (updateMany serving →
@@ -1232,6 +1349,8 @@ export async function runSweepOnce(opts: {
                   brier: ce.entry.brier,
                   score: ce.entry.score,
                   deltaBrier: { mean: ci.mean, ciLow: ci.ciLow, ciHigh: ci.ciHigh },
+                  // AUDIT 137 B4 — số cổng (holdout walk-forward, đồng cửa sổ).
+                  holdout: holdoutInfo,
                   at: new Date().toISOString(),
                 }),
               },
@@ -1299,6 +1418,13 @@ export async function runSweepOnce(opts: {
           ciLow: Number(ci.ciLow.toFixed(4)),
           ciHigh: Number(ci.ciHigh.toFixed(4)),
         },
+        // AUDIT 137 B4 — số cổng walk-forward + ghi chú trung thực về valAcc
+        // selection (post-selection, thiên lệch lên — không dùng cho cổng).
+        ...(holdoutInfo != null ? { holdout: holdoutInfo } : {}),
+        selectionNote:
+          holdoutInfo != null
+            ? "valAcc/brier phía trên là số SELECTION (early-stop + chọn champion trên cùng val block — post-selection, thiên lệch lên); điều kiện 1+2 của cổng đo trên holdout walk-forward (xem holdout)"
+            : "dữ liệu tối thiểu — holdout tắt, số cổng đo trên val selection (post-selection)",
         serving: {
           valAcc: servingValAcc,
           paramCount: servingParamCount,

@@ -11,8 +11,13 @@
  *         P(dir | voice) qua đặc trưng [1, pUp−pDown, tanh(z)] — softmax
  *         tuyến tính theo trọng số w (ridge λ=0,5 — chống overfit giọng yếu),
  *         walk-forward 70/30 THEO THỜI GIAN (val = block cuối).
- *   • Chỉ bật khi valBrier learned THẮNG fixed − deadband 0,05·Brier
+ *   • AUDIT 137 B14 — artifact được kiểm định = artifact được deploy: gate
+ *     chấm Brier của CHÍNH công thức serving (score = wMlp·mlpDiff +
+ *     wLinreg·tanh(z) → pf mapping) với cặp scalar rút từ w, so với fixed
+ *     0,7/0,3 cùng công thức; chỉ bật khi thắng fixed − deadband 0,05·Brier
  *     (đặc tả F-07 mục 3); ngược lại giữ hardcode + whyRejected (N6).
+ *     Trước đây gate chấm softmax(w·x) đầy đủ — mô hình KHÔNG BAO GIỜ deploy,
+ *     “pass” không chứng minh gì cho cặp trọng số thật.
  *
  * Kill-switch: xoá AppSetting "ml-ensemble-weights" → ensemble fallback
  * fixed TỨC THÌ (mlForecastEnsemble đọc thiếu → dùng hằng số module).
@@ -42,8 +47,12 @@ export interface EnsembleWeightsSetting {
   wLinreg: number;
   /** Số phiếu có voice vector dùng train. */
   nVotes: number;
-  /** Brier val của trọng số learned (walk-forward). */
+  /** Brier val của softmax(w·x) đầy đủ — CHỈ CHẨN ĐOÁN (không phải artifact
+   *  deploy; AUDIT 137 B14 giữ làm tham khảo). */
   valBrier: number | null;
+  /** AUDIT 137 B14 — Brier val của CHÍNH công thức deploy (cặp scalar
+   *  wMlp/wLinreg → score → pf mapping) — số gate so với fixed. */
+  valBrierDeployed?: number | null;
   /** Brier val của trọng số fixed trên cùng split (đối chứng). */
   valBrierFixed: number | null;
   /** Lý do giữ fixed khi rejected (whyRejected — N6 trung thực). */
@@ -127,6 +136,7 @@ export async function readEnsembleWeights(): Promise<EnsembleWeightsSetting | nu
       wLinreg: typeof parsed.wLinreg === "number" ? parsed.wLinreg : FIXED_WEIGHTS.linreg,
       nVotes: typeof parsed.nVotes === "number" ? parsed.nVotes : 0,
       valBrier: typeof parsed.valBrier === "number" ? parsed.valBrier : null,
+      valBrierDeployed: typeof parsed.valBrierDeployed === "number" ? parsed.valBrierDeployed : null,
       valBrierFixed: typeof parsed.valBrierFixed === "number" ? parsed.valBrierFixed : null,
       whyRejected: typeof parsed.whyRejected === "string" ? parsed.whyRejected : undefined,
       trainedAt: typeof parsed.trainedAt === "string" ? parsed.trainedAt : "",
@@ -228,32 +238,11 @@ export async function trainEnsembleWeights(): Promise<{
       }
     }
 
-    // 4) Đối chiếu learned vs fixed trên CÙNG val split:
-    //    learned Brier = Brier của phân bố softmax(w·x);
-    //    fixed Brier = Brier của phân bố mô phỏng ensemble fixed
-    //    (p ~ hợp thành: score = 0,7·mlpDiff + 0,3·tanh(z) → quy 3 lớp
-    //    qua cùng softmax tại bias mở rộng — xấp xỉ trung thành công thức
-    //    ensemble hiện hành trên dữ liệu lịch sử phiếu).
-    let brierLearned = 0;
-    let brierFixed = 0;
-    for (const v of val) {
-      const x = voiceFeatures(v);
-      const pl = softmax3([0, 1, 2].map((c) => w[c]!.reduce((s, wj, j) => s + wj * (x[j] ?? 0), 0)));
-      brierLearned += brier3(pl, v.realizedDir);
-      // fixed: score tổng → map [DOWN, FLAT, UP] qua (1−|score|, ...) heuristic
-      const score = FIXED_WEIGHTS.mlp * (v.pUp - v.pDown) + FIXED_WEIGHTS.linreg * (v.z != null ? Math.tanh(v.z) : 0);
-      const pf = [Math.max(0, -score), Math.max(0, 1 - Math.abs(score)), Math.max(0, score)];
-      const pfSum = pf[0]! + pf[1]! + pf[2]!;
-      const pfn = pfSum > 0 ? pf.map((p) => p / pfSum) : [1 / 3, 1 / 3, 1 / 3];
-      brierFixed += brier3(pfn, v.realizedDir);
-    }
-    const valBrier = Number((brierLearned / val.length).toFixed(4));
-    const valBrierFixed = Number((brierFixed / val.length).toFixed(4));
-    const deadband = ENSEMBLE_LEARN_DEADBAND_FACTOR * Math.max(0.1, valBrierFixed);
-    const beats = valBrier < valBrierFixed - deadband;
-
-    // 5) Trọng số giọng nói rút ra từ w: wMlp ~ |w của class UP trên đặc trưng
-    //    mlpDiff|, wLinreg ~ |w trên đặc trưng tanh(z)| — chuẩn hoá Σ=1.
+    // 4) AUDIT 137 B14 — RÚT cặp scalar deploy TƯỚC khi chấm gate: wMlp ~
+    //    |w của class UP trên đặc trưng mlpDiff|, wLinreg ~ |w trên đặc trưng
+    //    tanh(z)| — chuẩn hoá Σ=1. Cặp 2 số VÔ HƯỚNG này mới là thứ được
+    //    TRIỂN KHAI vào công thức ensemble serving (softmax đầy đủ không
+    //    bao giờ serve).
     const mlpContribution = (Math.abs(w[2]![1]!) + Math.abs(w[0]![1]!)) / 2;
     const linContribution = (Math.abs(w[2]![2]!) + Math.abs(w[0]![2]!)) / 2;
     const total = mlpContribution + linContribution;
@@ -264,14 +253,49 @@ export async function trainEnsembleWeights(): Promise<{
       wLinreg = Number((1 - wMlp).toFixed(3));
     }
 
+    // 5) Đối chiếu trên CÙNG val split — AUDIT 137 B14: gate so Brier của
+    //    CHÍNH công thức deployed (score → pf mapping như baseline fixed)
+    //    với cặp (wMlp, wLinreg) vừa rút, so với fixed 0,7/0,3 cùng công
+    //    thức. brierLearned (softmax đầy đủ) chỉ còn là số chẩn đoán.
+    const brierOfPair = (wM: number, wL: number): number => {
+      let b = 0;
+      for (const v of val) {
+        const score = wM * (v.pUp - v.pDown) + (v.z != null ? wL * Math.tanh(v.z) : 0);
+        // fixed: score tổng → map [DOWN, FLAT, UP] qua (1−|score|, ...) heuristic
+        const pf = [Math.max(0, -score), Math.max(0, 1 - Math.abs(score)), Math.max(0, score)];
+        const pfSum = pf[0]! + pf[1]! + pf[2]!;
+        const pfn = pfSum > 0 ? pf.map((p) => p / pfSum) : [1 / 3, 1 / 3, 1 / 3];
+        b += brier3(pfn, v.realizedDir);
+      }
+      return b / val.length;
+    };
+    let brierLearned = 0;
+    for (const v of val) {
+      const x = voiceFeatures(v);
+      const pl = softmax3([0, 1, 2].map((c) => w[c]!.reduce((s, wj, j) => s + wj * (x[j] ?? 0), 0)));
+      brierLearned += brier3(pl, v.realizedDir);
+    }
+    const valBrier = Number((brierLearned / val.length).toFixed(4));
+    const valBrierDeployed = Number(brierOfPair(wMlp, wLinreg).toFixed(4));
+    const valBrierFixed = Number(brierOfPair(FIXED_WEIGHTS.mlp, FIXED_WEIGHTS.linreg).toFixed(4));
+    const deadband = ENSEMBLE_LEARN_DEADBAND_FACTOR * Math.max(0.1, valBrierFixed);
+    // AUDIT 137 B14 — gate trên artifact DEPLOY (cặp scalar + công thức
+    // serving thật), không còn trên softmax không bao giờ deploy.
+    const beats = valBrierDeployed < valBrierFixed - deadband;
+
     const setting: EnsembleWeightsSetting = {
       source: beats ? "learned" : "rejected",
       wMlp,
       wLinreg,
       nVotes: voices.length,
       valBrier,
+      valBrierDeployed,
       valBrierFixed,
-      ...(beats ? {} : { whyRejected: `valBrier learned ${valBrier} không thắng fixed ${valBrierFixed} − deadband ${deadband.toFixed(4)} — giữ 0,7/0,3` }),
+      ...(beats
+        ? {}
+        : {
+            whyRejected: `valBrier deployed ${valBrierDeployed} không thắng fixed ${valBrierFixed} − deadband ${deadband.toFixed(4)} — giữ 0,7/0,3 (AUDIT 137 B14: gate chấm công thức deploy thật, softmax chẩn đoán ${valBrier})`,
+          }),
       trainedAt: new Date().toISOString(),
     };
     await db.appSetting.upsert({
@@ -297,7 +321,7 @@ export async function trainEnsembleWeights(): Promise<{
       outcome: beats ? "learned" : "rejected",
       setting,
       note: beats
-        ? `learned: wMlp ${wMlp}/wLinreg ${wLinreg} — valBrier ${valBrier} vs fixed ${valBrierFixed} (n=${voices.length})`
+        ? `learned: wMlp ${wMlp}/wLinreg ${wLinreg} — valBrier deployed ${valBrierDeployed} vs fixed ${valBrierFixed} (n=${voices.length}; softmax chẩn đoán ${valBrier})`
         : `rejected: ${setting.whyRejected ?? ""}`,
     };
   } catch (err) {
