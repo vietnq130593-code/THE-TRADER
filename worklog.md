@@ -4734,3 +4734,24 @@ Stage Summary:
 - Con số trung thực hoá (đáng chú ý nhất cho chủ sở hữu): serving v73 holdout gần nhất ≈ 37,0% acc / Brier 0,618 (mini-sweep đo cùng cửa sổ) · retrain trung thực v77 = 40,82% vs 42,88% công bố cũ · macro Brier60 holdout: VNINDEX edge thật, VN30 không edge — mọi số CỔNG từ nay đo walk-forward đồng cửa sổ
 - Cơ chế mới còn lại sống: unique (kind,version) chặn cuối DB · row-lock account đa-process an toàn · phí lũy kế partial-ready · gate ensemble chấm đúng artifact deploy
 - 10 file sửa + 2 script mới (p139-purge-risk-snapshots.ts · p139-verify-c8-c9.ts) + docs/worklog · sẵn sàng commit+push Task 139
+
+---
+Task ID: 140
+Agent: main-orchestrator (Z.ai Code)
+Task: F-24 ASSESSMENT — chủ sở hữu hỏi: "Kiểm tra khối lượng dữ liệu của THE TRADER trong database, cho tôi biết có thể nâng cấp từ RAG thành lightRAG hoặc GraphRAG không, nếu nâng cấp thì giữa LightRAG và GraphRAG loại nào phù hợp hơn"
+
+Work Log:
+- Đọc hiện trạng RAG L1 BM25 viết tay (src/lib/ml/rag.ts): corpus cuộn 500 AgentMessage broadcast + 200 NewsItem · hybrid 0,7·BM25 + 0,3·recency (nửa đời 72h) · MACRO_SYNONYMS mở rộng query · tiêm khối ≤1.200 token vào 6 prompt qua agent-context.ts:1195 · RetrievalLog đo cổng L3
+- Viết scripts/p140-rag-data-volume.ts (READ-ONLY — chỉ SELECT, 0 ghi DB) + 3 cuộc gọi LLM THẬT glm-4.6 mô phỏng prompt trích xuất thực thể kiểu LightRAG để đo chi phí/độ trễ thay vì ước lượng trên giấy; chạy env -u DATABASE_URL bun — vá 1 lỗi quoting camelCase (sourceKey) rồi PASS toàn bộ
+- KHỐI LƯỢNG ĐO ĐƯỢC: DB 168 MB nhưng 107 MB là Bar (OHLC — không phải văn bản) · kho tri thức ứng viên = 2.291 doc (1.316 AgentMessage broadcast 644k ký tự + 975 NewsItem 237k ký tự, p50 chỉ 286/242 ký tự) ≈ 0,85 MB ~350k token VN · tăng ~185 doc/ngày · MarketAssessment.detail 62 row × TB 12.469 ký tự = 773k ký tự là KHO VĂN BẢN LỚN NHẤT chưa dùng · RetrievalLog 33 lần truy hồi 100% vào prompt (có người tiêu thụ sống)
+- CHẤT LƯỢNG CORPUS: nhóm research chỉ 290/1.316 tin (22%) — ml 406 + platform 242 + control 166 = 814 tin (62%) là telemetry vận hành
+- MICRO-TEST LLM: trích xuất thực thể tiếng Việt chạy tốt (12 thực thể + 4 quan hệ từ tin agent 777 ký tự; 4+3 từ tin tức) · TB 305 token in / 451 out = $0,0012/cuộc · ĐỘ TRỄ 7-15s/cuộc → indexing phải chạy nền
+- RÀNG BUỘC NỀN TẢNG: z-ai-web-dev-sdk KHÔNG có endpoint embeddings (chỉ chat/vision/TTS/ASR/image/video/search) — LightRAG chịu được (keyword mode + tái dùng BM25 query = 0 LLM khi truy vấn), GraphRAG gãy local search · chi phí: LightRAG index toàn bộ $5,38 + $0,44/ngày vs GraphRAG $9,47 + $0,77/ngày + tái phân cụm — đối chiếu ngân sách LLM toàn hệ thống $5,51/tháng (AgentRun 30 ngày)
+- Viết docs/RAG_UPGRADE_ASSESSMENT.md (§0 TL;DR · §1 khối lượng · §2 hiện trạng L1 · §3 micro-test · §4 ràng buộc · §5 bảng so 7 tiêu chí · §6 lộ trình L2 · §7 ngưỡng reconsider GraphRAG · §8 giới hạn) — 0 dòng sản phẩm bị sửa
+
+Stage Summary:
+- TRẢ LỜI (1) CÓ THỂ nâng cấp về kỹ thuật — LLM trích xuất tiếng Việt hoạt động tốt, nhưng 3 ràng buộc thật: không embeddings endpoint, độ trễ 7-15s/call (chỉ hợp chạy nền), corpus 62% telemetry cần tuyển lọc trước
+- TRẢ LỜI (2) LIGHTRAG phù hợp hơn GraphRAG trên cả 7 tiêu chí đo được: quy mô 2.291 doc là đất của LightRAG (GraphRAG cần ≥50-100k doc để cộng đồng Leiden có nghĩa) · rẻ hơn ~2× khi index · 0-1 LLM call/truy vấn vs 10-30 · insert incremental vs tái phân cụm · và khớp kiến trúc "máy tiêm ngữ cảnh" của THE TRADER (GraphRAG global search sinh KẾT LUẬN từ tin cũ — vi phạm guardrail vô hại hoá)
+- KHUYẾN NGHỊ: không thay L1 BM25 — THÊM lớp L2 tri thức dài hạn kiểu LightRAG trên corpus tuyển (research+executive+macro news+MarketAssessment narrative+DecisionEvaluation ~1.500 doc ~$3-4 index) · bootstrap đồ thị từ 104 Instrument + MACRO_SYNONYMS + 40 cạnh MarketRelation đo được · LLM chỉ trích phần văn bản · giữ fail-soft + cổng đo RetrievalLog theo layer
+- GraphRAG chỉ reconsider khi đủ đồng thời 3 điều: corpus ≥50-100k doc (ingest toàn văn bài báo), có embedding endpoint thật, use case đổi sang hỏi tổng quan chủ đề 1 lần/tuần
+- Artifacts: docs/RAG_UPGRADE_ASSESSMENT.md + scripts/p140-rag-data-volume.ts (giữ lại tái sử dụng) · read-only với DB · 0 file src/ bị đụng
