@@ -470,10 +470,25 @@ export async function POST() {
     k4 = await getK4();
 
     // Mark every agent RUNNING while the cycle executes
-    await db.agent.updateMany({
-      where: { id: { in: agents.map((a) => a.id) } },
+    // AUDIT 137 A8 — khe TOCTOU giữa guard 409 (đọc status lúc findMany) và
+    // claim RUNNING: 3 await xen giữa (expireDueSignals/markKRunCycle/getK4)
+    // cho phép single-run claim agent X IDLE → updateMany VÔ ĐIỀU KIỆN dưới
+    // đây đè RUNNING và chạy X kép (2 AgentRun + 2 tin broadcast). Claim có
+    // điều kiện status != RUNNING + đối chiếu count → phát hiện đua thật.
+    const claimed = await db.agent.updateMany({
+      where: { id: { in: agents.map((a) => a.id) }, status: { not: "RUNNING" } },
       data: { status: "RUNNING" },
     });
+    if (claimed.count !== agents.length) {
+      lastCycleStartedAt = prevCycleStartedAt;
+      return NextResponse.json(
+        {
+          error: "Có agent vừa được lệnh chạy riêng claim giữa lúc chu kỳ khởi động — hủy chu kỳ này để tránh chạy chồng, thử lại sau.",
+          retryAfterSeconds: 60,
+        },
+        { status: 409, headers: { "Retry-After": "60" } }
+      );
+    }
   } catch (err) {
     lastCycleStartedAt = prevCycleStartedAt;
     console.error("[api/agents/run:pre-cycle]", err);
@@ -485,6 +500,19 @@ export async function POST() {
 
   // Kết quả phân tích theo code (đưa vào digest cho Chủ tịch)
   const analyses = new Map<string, AgentAnalysis>();
+
+  // AUDIT 137 A4 — heartbeat: chạm updatedAt các agent còn RUNNING sau mỗi
+  // wave → watchdog 5' chỉ dọn chu kỳ THẬT SỰ chết im (không phải chu kỳ dài).
+  // Không có heartbeat, chu kỳ LLM xấu nhất (45s × 4 retry × 8 cuộc gọi tuần
+  // tự > 5 phút) làm agent còn xếp hàng bị releaseStuckRunningAgents reset
+  // IDLE giữa chừng → chu kỳ/single-run mới chạy chồng (double LLM, 2 Signal).
+  // persistRun đã tự chạm updatedAt từng agent HOÀN TẤT — heartbeat lo phần
+  // agent CHƯA chạy (vẫn RUNNING từ mốc claim đầu chu kỳ).
+  const heartbeatRunningAgents = () => db.agent.updateMany({
+    where: { id: { in: agents.map((a) => a.id) }, status: "RUNNING" },
+    data: { updatedAt: new Date() },
+  }).catch(() => undefined);
+
   const createdMessages: {
     id: string;
     fromAgentId: string;
@@ -559,6 +587,8 @@ export async function POST() {
         buildLiquidityBlock(),
         buildMacroBlock(),
       ]);
+    // AUDIT 137 A4 — heartbeat sau wave (xem helper heartbeatRunningAgents)
+    await heartbeatRunningAgents();
     const marketBlock = market.block;
 
     // ── L1 (#83) — TRÍ THỨC TRUY HỒI (RAG): 1 lần/chu kỳ ──
@@ -592,6 +622,8 @@ export async function POST() {
     await Promise.all(
       (["data-collector", "feature-store"] as const).map((code) => runOneServiceAgent(code))
     );
+    // AUDIT 137 A4 — heartbeat sau wave A (S0 ∥ S2)
+    await heartbeatRunningAgents();
     const dqRun = await runOneServiceAgent("data-integrity");
     const dqVerdict: DataQualityVerdict | null = dqRun ? extractVerdict(dqRun.output) : null;
     await runOneServiceAgent("notification-officer", { dataQuality: dqVerdict });
@@ -635,6 +667,8 @@ export async function POST() {
     const waveBServiceResults = await Promise.all(
       WAVE_B_SERVICE_CODES.map((code) => runOneServiceAgent(code))
     );
+    // AUDIT 137 A4 — heartbeat sau đợt B service (trước chuỗi LLM tuần tự)
+    await heartbeatRunningAgents();
 
     // LLM research agents (4) tuần tự — tôn trọng rate-limit gateway
     for (const code of WAVE_B_LLM_CODES) {
@@ -697,6 +731,10 @@ export async function POST() {
           err instanceof Error ? err.message : "Lỗi không xác định."
         ).catch(() => undefined);
       }
+      // AUDIT 137 A4 — heartbeat sau TỪNG agent LLM tuần tự: chuỗi 5 cuộc gọi
+      // xấu nhất (45s × 4 retry mỗi call) vượt xa 5 phút — heartbeat từng
+      // vòng lặp giữ agent còn xếp hàng (Chủ tịch/đợt C/đợt E) tươi cho watchdog.
+      await heartbeatRunningAgents();
     }
 
     // Cả 5 agent nghiên cứu LLM đều lỗi → không thể tổng hợp
@@ -826,6 +864,8 @@ export async function POST() {
       })(),
       ...WAVE_C_SERVICE_CODES.map((code) => runOneServiceAgent(code, { riskQuant })),
     ]);
+    // AUDIT 137 A4 — heartbeat sau đợt C (Ủy ban Kiểm soát, trước Chủ tịch)
+    await heartbeatRunningAgents();
 
     // ══ AUD-CODE #6: ENFORCE VETO — Ủy ban Kiểm soát có quyền phủ quyết THẠT ══
     // Trước đây verdict "VETO" của exposure/compliance chỉ là text trong digest —
@@ -848,6 +888,13 @@ export async function POST() {
         (c.result.output.verdict as string).startsWith("VETO")
     );
     const vetoBlocked = vetoExposure || vetoCompliance;
+    // AUDIT 137 A3 — control agent lỗi (result null) → VÀNG fail-safe:
+    // không để phơi nhiễm/biến margin CHƯA KIỂM ĐỊNH lọt qua (fail-closed).
+    // Trước đây runOneServiceAgent catch → null → verdict.startsWith("VETO")
+    // không match → tín hiệu MUA đi thẳng (fail-open) đúng lúc DB/kết nối
+    // kém ổn định (= lúc rủi ro cao nhất), agent lỗi còn biến mất khỏi digest.
+    const controlMissing = controlOutputs.filter((c) => !c.result).map((c) => c.code);
+    const controlUnavailable = controlMissing.length > 0;
 
     // ══ ĐỢT D · BỘ TỔNG HỢP BAYES (phiên #34 — 0 LLM, deterministic ~1-2s) ══
     // Sau Ủy ban Kiểm soát, TRƯỚC Chủ tịch: tổng hợp mọi bằng chứng định lượng
@@ -875,12 +922,17 @@ export async function POST() {
     try {
       const bundle = await buildEvidenceBundle({
         llmVotes,
-        veto: vetoBlocked
+        // AUDIT 137 A3 — thêm nhánh controlUnavailable: control agent lỗi cũng
+        // vào veto block của Bayes (đúng nguyên tắc "engine lỗi → fallback
+        // VETO-cứng") để Chủ tịch + digest UI Tổng hợp THẤY trạng thái chặn.
+        veto: vetoBlocked || controlUnavailable
           ? {
               blocked: true,
               reason: vetoCompliance
                 ? "Compliance A8 VETO — biên margin/chế độ giao dịch hiện không đạt"
-                : "Exposure A7 VETO — danh mục vượt hạn mức phơi nhiễm",
+                : controlUnavailable
+                  ? `Ủy ban Kiểm soát chưa kiểm định chu kỳ này (agent ${controlMissing.join(", ")} lỗi) — fail-safe hạ GIỮ theo nguyên tắc VETO-cứng`
+                  : "Exposure A7 VETO — danh mục vượt hạn mức phơi nhiễm",
             }
           : { blocked: false, reason: null },
         // Phiên #51 — CRB §0.6/T7.5: bằng chứng quant vào Bayes ĐÚNG MỘT LẦN
@@ -936,7 +988,10 @@ export async function POST() {
       return `- ${a.name} (${a.gen1}): ${truncated}`;
     });
     const strategistAgent = byCode.get(CHAIRMAN_CODE)!;
-    const vetoNotice = vetoBlocked
+    // AUDIT 137 A3 — vetoNotice cũng bật khi control agent lỗi (fail-closed):
+    // Chủ tịch phải BIẾT phơi nhiễm/biến margin chưa được kiểm định, không để
+    // agent lỗi biến mất khỏi digest như trước (analyses.has bỏ agent fail).
+    const vetoNotice = vetoBlocked || controlUnavailable
       ? [
           "RÀNG BUỘC CỨNG TỪ ỦY BAN KIỂM SOÁT (VETO — bắt buộc tuân thủ):",
           vetoExposure
@@ -944,6 +999,9 @@ export async function POST() {
             : "",
           vetoCompliance
             ? "- Compliance A8 đã VETO: biên margin/chế độ giao dịch hiện không đạt — KHÔNG được đưa bất kỳ tín hiệu mới nào (direction phải là HOLD)."
+            : "",
+          controlUnavailable
+            ? `- Ủy ban Kiểm soát CHƯA KIỂM ĐỊNH được chu kỳ này (agent ${controlMissing.join(", ")} lỗi chạy — fail-safe audit 137 A3): phơi nhiễm/biến margin chưa rõ — KHÔNG được đưa bất kỳ tín hiệu MUA/BÁN mới nào (direction phải là HOLD).`
             : "",
           "Hệ thống sẽ tự động hạ tầm tín hiệu vi phạm về HOLD — hãy phân tích theo giới hạn này.",
         ].filter(Boolean)
@@ -1197,6 +1255,9 @@ export async function POST() {
         strategistErr instanceof Error ? strategistErr.message : "Lỗi tổng hợp."
       ).catch(() => undefined);
     }
+    // AUDIT 137 A4 — heartbeat sau Chủ tịch (ranh giới wave rõ: đợt E sắp bắt
+    // đầu, cuộc gọi LLM dài nhất đã kết thúc)
+    await heartbeatRunningAgents();
 
     // ── K4 (#94 — AUTONOMY_BLUEPRINT §7.1): Chủ tịch GIAO VIỆC ──────────────
     // Sau khi Chairman chạy xong (có output thô) và TRƯỚC Đợt F: parse
@@ -1236,13 +1297,21 @@ export async function POST() {
       const sig = strategist.signal;
       // AUD-CODE #6: VETO hard-enforce — tín hiệu vi phạm bị hạ tầm về HOLD
       // (exposure chặn MUA / compliance chặn mọi hướng mới) kèm lý do gián tiếp
+      // AUDIT 137 A3 — thêm controlUnavailable: control agent lỗi (result
+      // null) cũng hạ GIỮ và chặn cả BUY lẫn SELL như compliance — kiểm soát
+      // biến margin/phơi nhiễm chưa biết thì KHÔNG tạo tín hiệu mới (fail-closed,
+      // không còn kẽ 'verdict.startsWith("VETO") không match → mua thẳng').
       let vetoedBy: string | null = null;
-      if (vetoBlocked && sig.direction !== "HOLD") {
+      if ((vetoBlocked || controlUnavailable) && sig.direction !== "HOLD") {
         vetoedBy = vetoCompliance
           ? "Compliance A8 VETO — biên margin/chế độ giao dịch hiện không đạt"
-          : "Exposure A7 VETO — danh mục vượt hạn mức phơi nhiễm, chỉ chấp nhận SELL hoặc HOLD";
-        if (!vetoCompliance && sig.direction === "SELL") {
-          // Exposure chỉ chặn MUA (SELL giảm phơi nhiễm → được phép)
+          : controlUnavailable
+            ? `Ủy ban Kiểm soát chưa kiểm định chu kỳ này (agent ${controlMissing.join(", ")} lỗi) — fail-safe hạ GIỮ theo nguyên tắc VETO-cứng`
+            : "Exposure A7 VETO — danh mục vượt hạn mức phơi nhiễm, chỉ chấp nhận SELL hoặc HOLD";
+        if (!vetoCompliance && !controlUnavailable && sig.direction === "SELL") {
+          // Exposure chỉ chặn MUA (SELL giảm phơi nhiễm → được phép);
+          // controlUnavailable/compliance chặn CẢ SELL (biến margin chưa biết
+          // thì không tạo tín hiệu mới theo bất kỳ hướng nào).
         } else {
           sig.rationale = `[BỊ ỦY BAN KIỂM SOÁT PHỦ QUYẾT → hạ về GIỮ] ${vetoedBy}. Đề xuất gốc bị chặn. ${sig.rationale}`;
           sig.direction = "HOLD";
@@ -1375,6 +1444,8 @@ export async function POST() {
 
     // Settlement + Cash Management (service, song song)
     await Promise.all(WAVE_E_SERVICE_CODES.map((code) => runOneServiceAgent(code)));
+    // AUDIT 137 A4 — heartbeat sau đợt E (wave Promise.all cuối cùng)
+    await heartbeatRunningAgents();
 
     // ── K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.3): auto-convert CUỐI CHU KỲ ──────
     // Điểm ghép DUY NHẤT của sandbox: sau khi mọi tín hiệu đã lưu + mọi wave

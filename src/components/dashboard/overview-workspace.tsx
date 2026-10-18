@@ -33,6 +33,10 @@ import type {
   SignalRow,
 } from "@/lib/types";
 
+// AUDIT 137 D1 — polling fallback khi WebSocket gãy: nhịp làm mới ["quotes"]
+// khi realtimeConnected=false (WS market-engine chết); khi WS sống → false.
+const QUOTES_FALLBACK_POLL_MS = 30_000;
+
 /**
  * M4.4 (UIUX_UPGRADE_BLUEPRINT §4 — #110-d): workspace "Tổng quan" 6.5 → 7.5.
  * "Một màn hình trả lời 3 câu hỏi" trong 3 giây:
@@ -84,6 +88,10 @@ function StatTileSkeleton() {
 
 function SessionClosePanel() {
   const { rangeQuery, rangeKey } = useDateRange();
+  // AUDIT 137 D1 — WS chết ⇒ ["quotes"] đóng băng (không interval, focus-refetch
+  // tắt) — tile VN30 trên bảng chốt phiên giữ số cũ. Polling fallback 30s chỉ
+  // khi WS gãy; khi WS sống → false (zero tải thêm).
+  const realtimeConnected = useUiStore((s) => s.realtimeConnected);
 
   // Cả 3 query DÙNG CHUNG cache (không thêm request): ["quotes"] với
   // MarketSummary/QuotesTable · ["signals", rangeKey] với SignalsFeed ·
@@ -92,6 +100,8 @@ function SessionClosePanel() {
     queryKey: ["quotes"],
     queryFn: () => apiGet<QuotesResponse>("/api/market/quotes"),
     staleTime: 30_000,
+    // AUDIT 137 D1 — polling fallback khi WebSocket gãy
+    refetchInterval: realtimeConnected ? false : QUOTES_FALLBACK_POLL_MS,
   });
   const signalsQuery = useQuery({
     queryKey: ["signals", rangeKey],

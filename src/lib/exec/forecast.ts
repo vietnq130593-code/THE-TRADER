@@ -45,8 +45,14 @@ export async function recordCashSnapshot(input: {
     },
   });
   // Prune: giữ 90 ngày (chuỗi dài đủ cho xu hướng, ngắn đủ nhẹ DB).
+  // AUDIT 137 C7 — prune CHỈ tài khoản đang ghi: trước fix xoá MỌI tài khoản,
+  // kể cả chuỗi k1-daily (source K1 §5.4 giữ 365 ngày) của sandbox — cắt âm
+  // thầm "đường cong học dài hạn" của K1 xuống còn 90 ngày.
   await db.cashSnapshot.deleteMany({
-    where: { createdAt: { lt: new Date(now.getTime() - 90 * 86_400_000) } },
+    where: {
+      brokerAccountId: input.brokerAccountId,
+      createdAt: { lt: new Date(now.getTime() - 90 * 86_400_000) },
+    },
   }).catch(() => undefined);
 }
 

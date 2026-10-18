@@ -705,27 +705,33 @@ export async function runScenarioAnalysis(): Promise<ScenarioReport> {
   const notes: string[] = [];
 
   /* — 4a. Vị thế thật + số dư tài khoản (pattern engine.ts F-102) — */
-  const [positionRows, account] = await Promise.all([
-    db.position
-      .findMany({
-        where: { status: "OPEN" },
-        select: {
-          quantity: true,
-          avgPrice: true,
-          instrumentId: true,
-          instrument: {
-            select: {
-              symbol: true,
-              quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } },
-            },
+  // AUDIT 137 C1 — world-context paper: P0 quarantine §5.1 — nạp tài khoản
+  // paper TRƯỚC (accountType != sandbox, orderBy cố định) rồi mới query vị
+  // thế theo account.id; hết tài khoản paper → 0 vị thế → rổ proxy như thiết
+  // kế (0 vị thế → proxy rổ top-10), KHÔNG lọt vị thế sandbox vào NAV.
+  const account = await db.brokerAccount
+    .findFirst({
+      where: { deletedAt: null, accountType: { not: "sandbox" } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, cashBalance: true },
+    })
+    .catch(() => null);
+  const positionRows = await db.position
+    .findMany({
+      where: { status: "OPEN", brokerAccountId: account?.id ?? "__no_paper_account__" },
+      select: {
+        quantity: true,
+        avgPrice: true,
+        instrumentId: true,
+        instrument: {
+          select: {
+            symbol: true,
+            quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { last: true } },
           },
         },
-      })
-      .catch(() => []),
-    db.brokerAccount
-      .findFirst({ where: { deletedAt: null }, select: { cashBalance: true } })
-      .catch(() => null),
-  ]);
+      },
+    })
+    .catch(() => []);
   const cash = account ? Number(account.cashBalance) : 0;
 
   let inputs: ScenarioPositionInput[] = [];

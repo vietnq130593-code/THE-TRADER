@@ -26,11 +26,22 @@ import {
 } from "@/lib/format";
 import type { FlowsResponse, NewsResponse, QuotesResponse } from "@/lib/types";
 
+// AUDIT 137 D1 — polling fallback khi WebSocket gãy: nhịp làm mới ["quotes"]
+// khi realtimeConnected=false (WS market-engine chết); khi WS sống → false.
+const QUOTES_FALLBACK_POLL_MS = 30_000;
+
 export function MarketSummary() {
+  // AUDIT 137 D1 — WS chết ⇒ ["quotes"] không interval + focus-refetch tắt →
+  // 4 thẻ tổng quan thị trường đóng băng. Polling fallback 30s CHỈ khi WS gãy
+  // (realtimeConnected=false) — zero tải thêm khi WS khỏe. (MarketPulseBar bên
+  // dưới đã dùng realtimeConnected cho dot trạng thái — cùng nguồn store.)
+  const realtimeConnected = useUiStore((s) => s.realtimeConnected);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["quotes"],
     queryFn: () => apiGet<QuotesResponse>("/api/market/quotes"),
     staleTime: 30_000,
+    // AUDIT 137 D1 — polling fallback khi WebSocket gãy
+    refetchInterval: realtimeConnected ? false : QUOTES_FALLBACK_POLL_MS,
   });
 
   if (isLoading) {

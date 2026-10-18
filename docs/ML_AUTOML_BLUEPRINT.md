@@ -228,6 +228,12 @@ Champion của đợt chỉ được **đề xuất swap** khi thoả MỌI đi�
 
 Không thoả → champion nằm lại bảng với nhãn *"không đủ vượt cổng"* — trung thực, không ép.
 
+#### 4.4.1 LỖI CHỌN LỌC (selection bias — audit 137 B4)
+
+Champion được **chọn** theo score trên val, rồi valAcc của chính champion trên **cùng val đó** lại vào điều kiện cổng 1 — đây là winner's curse trên ~16 ứng viên (mỗi ứng viên đã early-stop theo val): kỳ vọng của max của ~16 biến ngẫu nhiên thiên lệch LÊN, nên `valAcc_champion` là số post-selection, không phải ước lượng không thiên lệch ngoài mẫu. Cùng block val đó còn được dùng lần thứ 3 bởi calibration gate (B5). Hàng rào hiện có là **bộ phận**: δ = 0,01 (điều kiện 1) và ΔBrier paired CI95 < 0 (điều kiện 2 — paired cùng cửa sổ, chấm lại serving weights trên val block hiện tại, phần này sạch); riêng `servingValAcc` ở điều kiện 1 đọc từ metrics CŨ của bản serving train trên cửa sổ dữ liệu khác — so chéo cửa sổ, chỉ công bằng khi route 04:00 hôm đó vừa retrain + promote cùng windowHash.
+
+**Walk-forward / heldout sau val (chấm Brier/accuracy cổng trên block post-val hoặc k-fold thời gian) ĐÃ ĐẠ KẾ HOẠCH, CHƯA TRIỂN KHAI** — ghi nợ kỹ thuật #2 của audit 137 (cùng họ với B5 calibration holdout đã vá nửa-đầu/nửa-sau và B6 macro holdout tail 60 phiên). Lưu ý sau audit 137 B1 (chuẩn hoá train-only): **valAcc công bố sau vá NHẠT HƠN số cũ** — đó là đổi chuẩn đo trung thực (loạt 42,9% trước đây lạc quan hệ thống vì mean/std z-score dính block val), không phải mô hình sa sút. So sánh champion-vs-serving (cùng leak cả hai trước vá / cùng sạch cả hai sau vá) ít bị ảnh hưởng hơn con số tuyệt đối.
+
 ### 4.5 Lưu trữ & hiển thị (schema additive — 1 model + 1 AppSetting; F7/F9)
 
 ```prisma

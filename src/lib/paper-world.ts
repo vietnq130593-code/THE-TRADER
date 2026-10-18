@@ -27,6 +27,9 @@
  */
 
 import { db } from "@/lib/db";
+// AUDIT 137 C5 — import tĩnh an toàn: reconciliation.ts chỉ import db +
+// exec/constants (không import paper-world → không circular).
+import { resetReconcileCheckpoint } from "@/lib/exec/reconciliation";
 
 /** Action audit — một nguồn sự thật cho route + verify. */
 export const PAPER_WORLD_RESET_ACTION = "PAPER_WORLD_RESET";
@@ -112,6 +115,12 @@ export async function resetPaperWorld(): Promise<PaperWorldResetResult> {
       // BigInt(0) thay literal 0n — tsconfig target < ES2020 (pattern k-sandbox)
       data: { cashBalance: BigInt(0), equity: BigInt(0), marginUsed: BigInt(0) },
     });
+
+    // AUDIT 137 C5 — REV-12: reset checkpoint bù trừ sau khi zero cash.
+    // Checkpoint còn giữ {cash, positions} của thời điểm TRƯỚC reset → chu kỳ
+    // settlement kế tiếp nổ MISMATCH giả "0 giao dịch" (actualDelta = 0 − C).
+    // Fail-soft như audit log — lỗi xoá checkpoint không làm hỏng reset.
+    await resetReconcileCheckpoint().catch(() => undefined);
 
     // ── 4. Audit minh bạch (fail-soft — audit lỗi không làm hỏng reset) ──
     const summary: PaperWorldResetSummary = {

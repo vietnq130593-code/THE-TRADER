@@ -76,9 +76,9 @@ const PORT = 3003;
 // edit file → scheduler ĐĂNG KÝ TRÙNG (đo thật 2026-10-11T04:29:56Z: 3 lần boot
 // trong 1 giây → news bắn ×3 cùng lúc, hydrate state ×3). globalThis sống qua
 // reload nên flag dưới phát hiện re-evaluation — cảnh báo ỒNG để operator restart
-// (kill + double-fork) thay vì để engine chạy với lịch trùng. Về sau nếu muốn
-// hot-reload thật sự an toàn: chuyển đăng ký scheduler vào guard này (hiện tại
-// giữ đăng ký bình thường để hành vi boot lạnh không đổi).
+// (kill + double-fork). AUDIT 137 D7: từ nay scheduler cũ TỰ ĐƯỢC DỌN qua guard
+// __traderEngineTimers bên dưới (clearInterval trước khi đăng ký bộ mới) — cảnh
+// báo console giữ nguyên để operator vẫn biết module vừa re-evaluate.
 const gEngine = globalThis as { __traderEngineEvalAt?: number };
 if (gEngine.__traderEngineEvalAt) {
   console.error(
@@ -86,6 +86,19 @@ if (gEngine.__traderEngineEvalAt) {
   );
 }
 gEngine.__traderEngineEvalAt = Date.now();
+
+// AUDIT 137 D7 — bun --hot reload đăng ký scheduler TRÙNG: guard global +
+// dọn interval cũ trước khi đăng ký mới (trước đây chỉ console.error nhắc
+// operator restart tay — đo thật worklog #86: 3 lần re-evaluate trong 1 giây
+// → news bắn ×3, tick ×3, hydrate ×3). Mọi setInterval mới bên dưới push
+// handle vào mảng global này; module re-evaluate sẽ clearInterval hết scheduler
+// cũ ngay tại đây trước khi đăng ký bộ mới. Socket/io KHÔNG đụng (socket cũ tự
+// disconnect theo process — không đổi logic io theo phạm vi audit).
+const g = globalThis as { __traderEngineTimers?: NodeJS.Timeout[] };
+for (const t of g.__traderEngineTimers ?? []) clearInterval(t);
+// Alias non-optional (cùng tham chiếu mảng global) — các push bên dưới không
+// phải đánh dấu optional mỗi lần; gán lại global để lần re-evaluate sau dọn.
+const engineTimers: NodeJS.Timeout[] = (g.__traderEngineTimers = []);
 
 // Phiên #57 — sandbox: "localhost" phân giải ::1 (refused) — app lắng nghe
 // 127.0.0.1; engine kết nối thẳng qua IPv4 loopback
@@ -1373,12 +1386,14 @@ http.listen(PORT, () => {
   });
   enqueueTick();
   void ingestNewsAndBroadcast();
-  setInterval(enqueueTick, TICK_MS);
-  setInterval(ingestNewsAndBroadcast, NEWS_MS);
+  // AUDIT 137 D7 — mọi interval đăng ký qua mảng global để re-evaluate dọn được
+  engineTimers.push(setInterval(enqueueTick, TICK_MS));
+  engineTimers.push(setInterval(ingestNewsAndBroadcast, NEWS_MS));
   // Try/catch quanh cả khối due-check: một due-check hỏng (bug cấu hình,
   // null schedule…) không được phép giết event loop của cả engine — bug #42
   // đã làm engine chết lặng ~2h vì TypeError không được bắt trong callback này.
-  setInterval(() => {
+  // AUDIT 137 D7 — interval due-check 60s cũng vào mảng global (guard hot-reload)
+  const dueCheckTimer = setInterval(() => {
     try {
       if (eodSyncDue()) void syncEodAndBroadcast();
       if (intlSyncDue()) void syncIntlAndBroadcast();
@@ -1416,8 +1431,11 @@ http.listen(PORT, () => {
       log("sched", `LỖI scheduler 60s: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, 60_000);
+  engineTimers.push(dueCheckTimer);
   if (AGENT_CYCLE_MINUTES > 0) {
-    setInterval(runAgentCycleAndBroadcast, AGENT_CYCLE_MINUTES * 60_000);
+    engineTimers.push(
+      setInterval(runAgentCycleAndBroadcast, AGENT_CYCLE_MINUTES * 60_000)
+    );
   }
 });
 

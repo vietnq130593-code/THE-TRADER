@@ -14,7 +14,7 @@ import { GRU } from "@/lib/ml/gru";
 import { buildTrainingSequences, ML_GRU_WINDOW } from "@/lib/ml/features";
 import { buildBasket, policyStance, trainQTable, regimeBitsOf } from "@/lib/ml/rl";
 // F-09 (#129): MLP đa nhiệm 3 đầu ra (hướng + biên độ + biến động).
-import { MultitaskMLP } from "@/lib/ml/multitask";
+import { MultitaskMLP, MT_VAL_FRACTION } from "@/lib/ml/multitask";
 import { standardize } from "@/lib/ml/features";
 import { settlePendingRewards } from "@/lib/ml/bandit";
 // C1/F2 (#99 — ML_AUTOML_BLUEPRINT §0.9-F2): toàn bộ bộ train + lưu dl-mlp +
@@ -46,9 +46,11 @@ export const runtime = "nodejs";
 /**
  * POST /api/ml/train (phiên #35 — Task 35-ML) — huấn luyện MÔ HÌNH THẬT
  * trên dữ liệu EOD Supabase: MLP backprop+Adam (dl-mlp) + Q-learning tabular
- * 48×3 (rl-q). Trước khi train luôn kết toán bandit (settlePendingRewards —
- * nhanh, 0 LLM). Hai train chạy TUẦN TỰ (không Promise.all — tránh ép CPU
- * đè nhau), mỗi cái gói try/catch để hỏng cái này không chặn cái kia.
+ * 96×3 khi có regimeBits VNINDEX, 48×3 legacy khi thiếu (rl-q — F-13). Trước
+ * khi train luôn kết toán bandit (settlePendingRewards — nhanh, 0 LLM). Hai
+ * train chạy TUẦN TỰ (không Promise.all — tránh ép CPU đè nhau), mỗi cái gói
+ * try/catch để hỏng cái này không chặn cái kia.
+ * AUDIT 137 B7: target dl-mtl đã KHOÁ (400) — head mag/vol sai toán.
  *
  * Versioning: updateMany bản serving cùng kind → archived, create version
  * max+1 (weights = JSON mạng/Q-table, featureNorm = z-score, metrics JSON).
@@ -195,7 +197,8 @@ async function trainDlGru(): Promise<TrainedGruMetrics> {
 }
 
 /**
- * Train Q-learning 48×3 trên rổ top-10 thanh khoản → lưu MlModel kind rl-q
+ * Train Q-learning (96×3 khi có regimeBits VNINDEX — F-13; 48×3 legacy khi
+ * thiếu) trên rổ top-10 thanh khoản → lưu MlModel kind rl-q
  * (weights = Q-table JSON; metrics kèm stance/exposure/qMax hiện tại).
  */
 async function trainRlQ(): Promise<TrainedRlQMetrics> {
@@ -250,6 +253,11 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
  * lên serving chỉ qua sweep gate như ứng viên, đặc tả F-09 gate MAE vol ≥ 10%
  * so baseline vol20). Backbone 16→24→12 + 3 head (dir 8→3 · mag 4→1 · vol
  * 4→1); Loss CE + 0,3·MSE_mag + 0,3·MSE_vol; nhãn giàu từ labelRichAt.
+ *
+ * ⛔ AUDIT 137 B7 — KHÔNG GỌI TỪ ROUTE: head mag/vol sai toán (gradient check
+ * FAIL 10×, placeholder nhánh chết) — POST đã guard 400 ở trên; hàm giữ lại
+ * cho truy vết/nghiên cứu, chuẩn hoá bên dưới đã vá B1 cho đúng khi head
+ * được viết lại (tái dùng đường này).
  */
 async function trainDlMtl(): Promise<{
   epochs: number;
@@ -269,7 +277,13 @@ async function trainDlMtl(): Promise<{
     );
   }
   const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
-  const { mean, std, Xstd } = standardize(set.X);
+  // AUDIT 137 B1 — thống kê chỉ từ TRAIN split — chặn leakage: multitask fit()
+  // cắt val = Math.floor(n * (1 − MT_VAL_FRACTION)) dòng cuối (multitask.ts
+  // không có opts.valFraction — 0,2 cố định) nên nTrain tính từ CHÍNH hằng đó,
+  // không phải TRAIN_FRACTION (đường dl-gru bên trên dùng TRAIN_FRACTION vì
+  // GRU fit cũng cố định 0,2). valAcc sau vá nhạt hơn số cũ (trung thực).
+  const nTrainMtl = Math.floor(set.X.length * (1 - MT_VAL_FRACTION));
+  const { mean, std, Xstd } = standardize(set.X, { nTrain: nTrainMtl });
   const mtl = new MultitaskMLP(set.X[0].length);
   const fit = mtl.fit(Xstd, set.rich);
   mtl.setNorm({ mean, std });
@@ -297,6 +311,11 @@ async function trainDlMtl(): Promise<{
   );
   return metrics;
 }
+
+// AUDIT 137 B7 — route đã KHOÁ dl-mtl (guard 400): giữ tham chiếu hàm để
+// eslint không đánh dấu unused và để lần viết lại head mag/vol (multitask.ts)
+// tái dùng nguyên đường này (chuẩn hoá B1 đã vá đúng bên trong).
+void trainDlMtl;
 
 export async function POST(req: Request) {
   // F-612R-06/#61 (Vòng 2) — cooldown check TRƯỚC mutex (429/400 sớm không cắm cờ)
@@ -361,6 +380,24 @@ export async function POST(req: Request) {
     }
   }
 
+  // AUDIT 137 B7 — KHOÁ dl-mtl: head mag/vol sai toán đã chứng minh bằng
+  // numerical gradient-check trên chính class (gradient bm[0] lệch hệ số 10,
+  // ReLU gate soi sai tầng, lớp ra 4→1 là placeholder no-op). Chưa viết lại
+  // head (multitask.ts — xem banner ⛔ KHOÁ đầu file) thì KHÔNG train. Cùng
+  // pattern error response 400 như cổng dl-gru bên trên (fail-safe, không
+  // "thử cho biết").
+  if (target === "dl-mtl") {
+    return NextResponse.json(
+      {
+        error:
+          "dl-mtl đã KHOÁ (audit 137 B7: head mag/vol sai toán — gradient check FAIL 10×, placeholder nhánh chết) — chưa viết lại head thì không train. Xem banner ⛔ KHOÁ đầu src/lib/ml/multitask.ts.",
+        locked: true,
+        audit: "137-B7",
+      },
+      { status: 400 }
+    );
+  }
+
   markTrainAttempt(now);
   const started = Date.now();
 
@@ -380,7 +417,9 @@ export async function POST(req: Request) {
     let dlMlp: TrainedDlMlpMetrics | null = null;
     let rlQ: TrainedRlQMetrics | null = null;
     let dlGru: TrainedGruMetrics | null = null;
-    let dlMtl: Awaited<ReturnType<typeof trainDlMtl>> | null = null;
+    // AUDIT 137 B7 — dl-mtl KHOÁ: luôn null trong response (guard 400 chặn
+    // target; giữ field để FE hợp đồng response không đổi).
+    const dlMtl: Awaited<ReturnType<typeof trainDlMtl>> | null = null;
     let dlPromotion: DlMlpPromotion | null = null;
     let appliedTuning: AppliedMlpTuning | null = null;
 
@@ -479,16 +518,10 @@ export async function POST(req: Request) {
         errors.push(`GRU: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (target === "dl-mtl") {
-      // F-09 (#129) — multitask 3 đầu ra (shadow archived, lên serving qua sweep).
-      try {
-        dlMtl = await trainDlMtl();
-        trained.push("dl-mtl");
-      } catch (err) {
-        console.error("[api/ml/train] trainDlMtl failed:", err);
-        errors.push(`MTL: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    // AUDIT 137 B7 — đường train dl-mtl đã XOÁ khỏi luồng chạy: guard 400 ở
+    // đầu POST chặn target "dl-mtl" (head mag/vol sai toán); trainDlMtl()
+    // giữ lại bên dưới (kèm chuẩn hoá B1 đã vá) cho lần viết lại head sau
+    // này — tham chiếu qua `void trainDlMtl` để không bị unused.
 
     const durationMs = Date.now() - started;
 

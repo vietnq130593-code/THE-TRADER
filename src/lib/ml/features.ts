@@ -968,21 +968,38 @@ export async function loadSegmentBaskets(barsPerSymbol = 260): Promise<SegmentBa
 }
 
 /**
- * Chuẩn hoá z-score theo cột (fit trên tập train): mean/std từng đặc trưng,
- * std = 0 → 1 (cột hằng). Trả mean/std (lưu featureNorm) + ma trận chuẩn hoá.
+ * Chuẩn hoá z-score theo cột: mean/std từng đặc trưng, std = 0 → 1 (cột
+ * hằng). Trả mean/std (lưu featureNorm) + ma trận chuẩn hoá.
+ *
+ * AUDIT 137 B1 — opts.nTrain = số dòng ĐẦU (train split theo thời gian) dùng
+ * tính mean/std; PHẦN CÒN LẠI vẫn được transform nhưng KHÔNG đóng góp thống kê
+ * (chặn leakage block val tương lai vào phép biến đổi của train + vào chính
+ * val khi được chấm). Không truyền nTrain = toàn chuỗi — giữ tương thích
+ * call-site cũ đã TỰ CẮT Xtr train-only (src/lib/risk/forecast.ts).
+ * KHỚP cut của nn.ts fit(): nTrain = Math.floor(n * (1 - valFraction)) —
+ * caller truyền đúng valFraction mà fit sẽ dùng.
  */
-export function standardize(X: number[][]): { mean: number[]; std: number[]; Xstd: number[][] } {
+export function standardize(
+  X: number[][],
+  opts?: { nTrain?: number }
+): { mean: number[]; std: number[]; Xstd: number[][] } {
   const n = X.length;
   const d = n > 0 ? X[0].length : 0;
   const mean = new Array<number>(d).fill(0);
   const std = new Array<number>(d).fill(1);
   if (n === 0) return { mean, std, Xstd: [] };
-  for (const row of X) for (let j = 0; j < d; j++) mean[j] += row[j];
-  for (let j = 0; j < d; j++) mean[j] /= n;
+  // AUDIT 137 B1 — clamp phòng thủ: nTrain ≤ 0 hoặc > n → tính trên toàn chuỗi
+  // (hành vi cũ, không crash call-site lỗi).
+  const nStats = opts?.nTrain != null && opts.nTrain > 0 && opts.nTrain < n ? opts.nTrain : n;
+  for (let i = 0; i < nStats; i++) for (let j = 0; j < d; j++) mean[j] += X[i][j];
+  for (let j = 0; j < d; j++) mean[j] /= nStats;
   for (let j = 0; j < d; j++) {
     let v = 0;
-    for (const row of X) v += (row[j] - mean[j]) * (row[j] - mean[j]);
-    v /= n;
+    for (let i = 0; i < nStats; i++) {
+      const dv = X[i][j] - mean[j];
+      v += dv * dv;
+    }
+    v /= nStats;
     std[j] = v > 0 ? Math.sqrt(v) : 1;
   }
   const Xstd = X.map((row) => row.map((v, j) => (v - mean[j]) / std[j]));
@@ -1306,7 +1323,9 @@ export async function hoseSessionDates(): Promise<string[]> {
 export interface PitBaskets {
   /** Số tuần có rổ (tuần ISO). */
   weeks: number;
-  /** instrumentId ∈ rổ của tuần chứa dateStr (fallback tuần gần nhất TRƯỚC). */
+  /** instrumentId ∈ rổ của TUẦN TRƯỚC tuần chứa dateStr (AUDIT 137 B3 — rổ
+   *  tuần wk rank từ bar cuối tuần wk nên rổ của chính tuần wk là lookahead;
+   *  fallback = rổ tuần gần nhất TRƯỚC). */
   inBasket(dateStr: string, instrumentId: string): boolean;
   /** Toàn bộ instrumentId từng xuất hiện trong bất kỳ rổ nào (union). */
   unionIds: Set<string>;
@@ -1368,13 +1387,17 @@ export async function weeklyPitBaskets(topN: number): Promise<PitBaskets> {
     weeks: basketsByWeek.length,
     inBasket(dateStr: string, instrumentId: string): boolean {
       const wk = weekOf(dateStr);
-      // tuần của ngày nằm giữa 2 mốc rổ → dùng rổ TRƯỚC (không nhìn tương lai)
+      // AUDIT 137 B3 — PIT: rổ tuần TRƯỚC (rank từ bar cuối tuần TRƯỚC), không
+      // dùng rổ của CHÍNH tuần đang lấy mẫu — rổ tuần wk được xếp hạng từ bar
+      // CUỐI tuần wk (SQL rn=1 ORDER BY d DESC) nên sample thứ Hai/thứ Ba của
+      // tuần wk mà dùng rổ wk là nhìn 3-4 phiên tương lai. Comparator CHẶT
+      // "< wk" (tuần nhỏ hơn tuần lấy mẫu) — fallback tuần gần nhất TRƯỚC.
       let lo = 0;
       let hi = basketsByWeek.length - 1;
       let ans = -1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (basketsByWeek[mid]!.week <= wk) {
+        if (basketsByWeek[mid]!.week < wk) {
           ans = mid;
           lo = mid + 1;
         } else {

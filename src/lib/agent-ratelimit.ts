@@ -32,9 +32,16 @@ export type AgentRateLimit =
  * single-run 400 MÃI MÃI.
  *
  * Ranh giới 5 phút không đụng agent đang chạy THẬT: run đơn tối đa ~2 phút
- * (LLM 45s × retry); chu kỳ 23 agents claim RUNNING lúc khởi động và trả từng
+ * (LLM 45s × retry). Chu kỳ 23 agents claim RUNNING lúc khởi động và trả từng
  * agent khi xong — chu kỳ dài nhất 5 phút (maxDuration route) nên agent đang
  * xếp hàng giữa chu kỳ luôn có updatedAt (mốc claim) tươi hơn 5 phút.
+ *
+ * AUDIT 137 A4 — maxDuration KHÔNG được enforce khi self-host (pm2 + bun dev):
+ * chu kỳ LLM xấu nhất (45s × 4 retry × 8 cuộc gọi tuần tự) VƯỢT 5 phút dễ dàng
+ * → watchdog cũ reset agent còn xếp hàng giữa chừng → chu kỳ/single-run mới
+ * chạy chồng. Giờ route chu kỳ heartbeat (chạm updatedAt các agent RUNNING)
+ * sau mỗi wave + sau từng agent LLM tuần tự — watchdog 5 phút giờ chỉ dọn
+ * chu kỳ THẬT SỰ chết im (process crash/restart), không còn giết chu kỳ dài.
  *
  * Trả số agent đã reset. Idempotent — gọi thoải mái mỗi request.
  */

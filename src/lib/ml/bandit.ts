@@ -1,7 +1,7 @@
 /**
- * src/lib/ml/bandit.ts — THOMPSON SAMPLING Beta-Bernoulli cho 6 arm =
- * 5 LLM research agents + ml-forecast (phiên #35 · B7 #38). KHÔNG gọi LLM,
- * KHÔNG dependencies.
+ * src/lib/ml/bandit.ts — THOMPSON SAMPLING Beta-Bernoulli cho 7 arm =
+ * 6 LLM research agents + ml-forecast (phiên #35 · B7 #38 · A20 #126). KHÔNG
+ * gọi LLM, KHÔNG dependencies.
  *
  * Posterior Beta(α+1, β+1) mỗi arm; reward sinh từ kết toán phiếu bầu:
  * đối chiếu direction vote trong MarketAssessment với realized direction
@@ -23,7 +23,9 @@ import { ROSTER_BY_CODE } from "@/lib/agent-roster";
 import { classifyRegime, type MarketRegime } from "@/lib/quant/regime";
 import { wilson } from "@/lib/ml/analytics";
 
-/** 6 arm Thompson sampling = 5 agent LLM có phiếu assessment + ml-forecast (B7). */
+/** 7 arm Thompson sampling = 6 agent LLM có phiếu assessment + ml-forecast
+ *  (B7 #38 + A20 #126 — đếm BANDIT_ARM_CODES; AUDIT 137 B10 sửa nhãn cũ
+ *  "6 arm" sai thực trạng). */
 export const BANDIT_ARM_CODES = [
   "market-analyst",
   "fair-value",
@@ -40,6 +42,20 @@ const SETTLE_SESSIONS = 5;
 const SETTLE_THRESHOLD = 0.005;
 /** Số mã tối thiểu có giá tại 2 mốc thời gian để kết toán. */
 const SETTLE_MIN_SYMBOLS = 3;
+/**
+ * AUDIT 137 A2 — mốc giờ chót ICT của một Bar. Convention eod-sync.ts:350-353
+ * lưu Bar.date = 15:00 UTC của ngày giao dịch (= 22:00 ICT trên trục UTC),
+ * trong khi giờ chốt THẬT là 15:00 ICT = 08:00 UTC = Bar.date − 7h. So phiếu
+ * bầu TRỰC TIẾP với Bar.date khiến phiếu sau 15:45 ICT (08:45 UTC — sau
+ * eod-sync đã ghi bar ngày D) vẫn thấy bar D là "tương lai" (15:00 UTC >
+ * 08:45 UTC) → castDate = D−1, đo [D−1 → D+4]: 1/5 phiên reward là thông tin
+ * ĐÃ BIẾT lúc bầu. So theo mốc giờ chót ICT thì bar D "đã chốt" từ 08:00 UTC
+ * → castDate = D, cửa sổ đo [D → D+5] đủ 5 phiên tương lai thật.
+ */
+const ICT_CLOSE_OFFSET_MS = 7 * 3600_000;
+function ictCloseMs(d: Date): number {
+  return d.getTime() - ICT_CLOSE_OFFSET_MS;
+}
 /** F-15 (#129): quét N assessment gần nhất khi kết toán — TĂNG 30 → 200:
  *  con trổ backlog thay take-30 quên phiếu cũ (P1-4). ~6 assessment/ngày
  *  → 200 bản ≈ 1 tháng dư địa cho engine chết dài; settledKeys vẫn idempotent.
@@ -71,8 +87,8 @@ export interface SettleResult {
   details?: { agentCode: string; agentName: string; reward: number; assessmentId: string }[];
 }
 
-/** Upsert 6 BanditArm nếu thiếu (idempotent — gọi an toàn mọi nơi).
- * Perf #64: TRƯỚC fix upsert 6 arm TUẦN TỰ mỗi lần gọi (~600ms WAN — Comics
+/** Upsert 7 BanditArm nếu thiếu (idempotent — gọi an toàn mọi nơi).
+ * Perf #64: TRƯỚC fix upsert 7 arm TUẦN TỰ mỗi lần gọi (~600ms WAN — Comics
  * đóng góp lớn nhất trong 1,4s của /api/ml/status); giờ chạy parallel MỘT
  * lần/process (module flag) — các lần sau 0 query. */
 let armsEnsured = false;
@@ -114,7 +130,7 @@ export async function ensureArms(): Promise<void> {
 /**
  * Đọc phiếu bầu từ detail JSON của assessment: hỗ trợ cả dạng detail
  * .agentVotes [{code, direction, confidence}] (persist #38 lưu kèm) và dạng
- * .drivers source "llm-vote:<code>" (cấu trúc cũ) — chỉ giữ phiếu 6 arm bandit.
+ * .drivers source "llm-vote:<code>" (cấu trúc cũ) — chỉ giữ phiếu 7 arm bandit.
  */
 function parseVotes(detail: string): CastVote[] {
   let parsed: Record<string, unknown>;
@@ -266,10 +282,14 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
     take: SETTLE_SESSIONS * SETTLE_SCAN_LIMIT + 20,
     select: { date: true },
   });
-  // Phiên cast của mỗi assessment = phiên giao dịch cuối tại/b trước khi bầu
-  // (danh sách distinct desc — đủ cho 30 assessment trong quét)
+  // Phiên cast của mỗi assessment = phiên giao dịch cuối đã CHỐT (mốc ICT) tại/
+  // trước khi bầu (danh sách distinct desc — đủ cho quét).
+  // AUDIT 137 A2 — biên SQL lte nới +7h để KHÔNG loại bar có mốc chốt ICT ≤
+  // createdAt (Bar.date 15:00 UTC của ngày D có ictClose 08:00 UTC: phiếu bầu
+  // 08:45 UTC ngày D cần bar D trong pastDates — lte createdAt thô sẽ loại
+  // nó); điều kiện CHẶT vẫn chấm bằng ictCloseMs ở vòng lặp dưới.
   const pastDates = await db.bar.findMany({
-    where: { date: { lte: pending[0].createdAt } },
+    where: { date: { lte: new Date(pending[0].createdAt.getTime() + ICT_CLOSE_OFFSET_MS) } },
     distinct: ["date"],
     orderBy: { date: "desc" },
     take: SETTLE_SCAN_LIMIT,
@@ -330,8 +350,15 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
     if (votesForAssessment.length === 0) continue;
 
     // Đủ 5 phiên giao dịch sau createdAt chưa?
-    const after = futureDates.filter((f) => f.date >= a.createdAt).slice(0, SETTLE_SESSIONS);
-    const castDate = pastDates.find((d) => d.date <= a.createdAt)?.date;
+    // AUDIT 137 A2 — so theo MỐC GIỜ CHỐT ICT (ictCloseMs), không theo Bar.date
+    // 15:00 UTC: phiếu 08:45 UTC (15:45 ICT) sau eod-sync phải coi bar ngày D
+    // là ĐÃ CHỐT (castDate = D) — trước đây bar D lọt vào "future" → đo
+    // [D−1 → D+4] với 1/5 phiên đã biết. Settle cũ đã chạy thì KHÔNG hồi lại
+    // (idempotent keys settledKeys) — chỉ phiếu MỚI được xếp đúng cửa sổ.
+    const after = futureDates
+      .filter((f) => ictCloseMs(f.date) >= a.createdAt.getTime())
+      .slice(0, SETTLE_SESSIONS);
+    const castDate = pastDates.find((d) => ictCloseMs(d.date) <= a.createdAt.getTime())?.date;
     if (after.length < SETTLE_SESSIONS || castDate == null) continue;
     const realizedDate = after[SETTLE_SESSIONS - 1].date;
 
@@ -479,8 +506,10 @@ async function banditSnapshotRaw(): Promise<{
     pulls: number;
     wins: number;
     posteriorMean: number;
-    /** F-15 (#129): Wilson CI 95% của posteriorMean — UI bandit-block hiển thị
-     *  cạnh posterior + mốc "≥100 pulls = tin khoảng cách". */
+    /** F-15 (#129): Wilson CI 95% của TỈ LẸ THẮNG wins/pulls — xấp xỉ hợp lý
+     *  vì reward là thập phân (0/0,2/0,7/1), KHÔNG phải CI của posteriorMean
+     *  (AUDIT 137 B10 sửa nhãn cũ). UI bandit-block hiển thị cạnh posterior +
+     *  mốc "≥100 pulls = tin khoảng cách". */
     wilsonLow: number;
     wilsonHigh: number;
     /** F-13 (#129): posterior theo regime hiện tại (null = dùng bảng chung). */
@@ -503,7 +532,8 @@ async function banditSnapshotRaw(): Promise<{
   const mapped = arms.map((a) => {
     const roster = ROSTER_BY_CODE.get(a.agentCode);
     const posteriorMean = (a.alpha + 1) / (a.alpha + a.beta + 2);
-    // F-15: Wilson 95% trên (wins/pulls) — pulls=0 → khoảng [0,1] trung thực
+    // F-15: Wilson 95% trên TỈ LẸ THẮNG (wins/pulls — xấp xỉ vì reward thập
+    // phân, AUDIT 137 B10) — pulls=0 → khoảng [0,1] trung thực
     // (wilson() ném lỗi khi n ≤ 0 — guard trước, không nuốt silent).
     let ciLow = 0;
     let ciHigh = 1;
@@ -621,9 +651,15 @@ async function loadVnindexCloses(): Promise<{ dates: Date[]; closes: number[] }>
       orderBy: { date: "asc" },
       select: { date: true, close: true },
     });
+    // AUDIT 137 B10 — lọc bar rắc (close ≤ 0) TRƯỚC rồi map CẢ HAI mảng từ
+    // CÙNG danh sách: bản cũ filter riêng closes → dates.length ≠
+    // closes.length khi có bar rắc → regimeOf trả null VĨNH VIÊN (fail-safe
+    // nhưng chết chức năng regime) + currentMarketRegime lấy dates[last] của
+    // bar đã bị lọc ra (nhãn asOf sai phiên).
+    const clean = bars.filter((b) => b.close > 0);
     const out = {
-      dates: bars.map((b) => b.date),
-      closes: bars.map((b) => b.close).filter((c) => c > 0),
+      dates: clean.map((b) => b.date),
+      closes: clean.map((b) => b.close),
     };
     vnindexCache = { at: Date.now(), ...out };
     return out;

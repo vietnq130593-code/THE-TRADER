@@ -59,8 +59,13 @@ export async function detectTradeAnomalies(
   to: Date
 ): Promise<AnomalyScanResult> {
   try {
+    // AUDIT 137 C10 — world-context paper: anomaly scan đo thế giới paper —
+    // Trade + Order FILLED của sandbox không vào mẫu IQR/z-score (K1 #87 §5.1).
     const trades = await db.trade.findMany({
-      where: { executedAt: { gte: from, lt: to } },
+      where: {
+        executedAt: { gte: from, lt: to },
+        order: { brokerAccount: { accountType: { not: "sandbox" } } },
+      },
       select: {
         id: true,
         instrumentId: true,
@@ -83,6 +88,7 @@ export async function detectTradeAnomalies(
         filledAt: { gte: from, lt: to },
         price: { gt: 0 }, // loại dòng bẩn ngay ở query (giữ thẳng hàng mẫu)
         avgFillPrice: { not: null },
+        brokerAccount: { accountType: { not: "sandbox" } }, // AUDIT 137 C10
       },
       select: { id: true, instrumentId: true, price: true, avgFillPrice: true, quantity: true },
     });

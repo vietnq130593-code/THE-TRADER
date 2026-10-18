@@ -1,7 +1,11 @@
 /**
  * src/lib/ml/rl.ts — Q-LEARNING TABULAR THẬT trên rổ top-10 thanh khoản
- * (phiên #35). Không dùng thư viện — bảng Q 48 trạng thái × 3 hành động,
- * cập nhật Q[s,a] += α(r + γ·maxQ[s'] − Q[s,a]).
+ * (phiên #35). Không dùng thư viện — bảng Q 96 trạng thái × 3 hành động khi có
+ * regimeBits VNINDEX (F-13 #129; 48 trạng thái legacy khi thiếu — tương thích
+ * Q-table v13 cũ), cập nhật Q[s,a] += α(r + γ·maxQ[s'] − Q[s,a]).
+ *
+ * AUDIT 137 B2 — công thức index 96-state đã vá thiếu ngoặc (xem stateIndexAt):
+ * 36/96 trạng thái hiệu dụng trước vá; verify scripts/p137-verify-rl-states.ts.
  *
  * State 48 = xu hướng (SMA20>SMA50 ? 1:0) × 4 bucket RSI rổ (<30/30-50/
  * 50-70/≥70) × mom5 (≥0 ? 1:0) × 3 bucket phơi nhiễm (0 / 0,5 / 1)
@@ -85,8 +89,10 @@ export function buildBasket(closesBySymbol: number[][], window = 1000): number[]
   return index;
 }
 
-/** Chuỗi chỉ báo rổ cần cho state (sma20/sma50/rsi14/mom5/retNext) O(N). */
-interface BasketStats {
+/** Chuỗi chỉ báo rổ cần cho state (sma20/sma50/rsi14/mom5/retNext) O(N).
+ *  AUDIT 137 B2 — export type cho script verify enumeration 96 trạng thái
+ *  (scripts/p137-verify-rl-states.ts) — additive, không đổi call-site nào. */
+export interface BasketStats {
   sma20: (number | null)[];
   sma50: (number | null)[];
   rsi14: (number | null)[];
@@ -149,7 +155,7 @@ function basketStats(b: number[]): BasketStats {
  *   + exposureBucket — "chính sách 1 bộ cho mọi chế độ là sai về kinh tế học".
  * regimeBits == null → bảng 48 legacy (tương thích Q-table v13 đang serving).
  */
-function stateIndexAt(
+export function stateIndexAt(
   st: BasketStats,
   i: number,
   exposure: number,
@@ -165,7 +171,12 @@ function stateIndexAt(
   if (regimeBit == null) {
     return ((trend * 4 + rsiBucket) * 2 + mom) * 3 + expBucket;
   }
-  return (((regimeBit ? 2 : 0) + trend) * 4 + rsiBucket) * 2 + mom * 3 + expBucket;
+  // AUDIT 137 B2 — thiếu cặp ngoặc quanh "... + mom" trước ×3: bản cũ
+  // `A*2 + mom*3 + exp` chỉ sinh 36/96 index duy nhất (60 va chạm, max 35 —
+  // enumeration chạy thật), 60 hàng Q-table chết. Công thức ĐÚNG theo comment
+  // mô tả ở trên (regime làm CHỐ ĐẦU): ((regime×2+trend)×4+rsi)×2+mom)×3+exp
+  // — 2×2×4×2×3 = 96 index duy nhất 0..95 (verify scripts/p137-verify-rl-states.ts).
+  return ((((regimeBit ? 2 : 0) + trend) * 4 + rsiBucket) * 2 + mom) * 3 + expBucket;
 }
 
 /**

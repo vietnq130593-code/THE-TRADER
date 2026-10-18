@@ -94,10 +94,11 @@ export function bucketProportions(values: number[], edges: number[]): number[] {
 }
 
 /**
- * Tên 16 đặc trưng THEO ĐÚNG THỨ TỰ featureAt trong features.ts (đối chiếu
+ * Tên 24 đặc trưng THEO ĐÚNG THỨ TỰ featureAt trong features.ts (đối chiếu
  * code featureAt — serving phụ thuộc thứ tự này). 10 chiều đầu = v1 giữ nguyên;
- * 6 chiều sau = B1 v2-lag16 (#81 — ML_OPS_BLUEPRINT §4). Chiều ngoài phạm vi
- * hiển thị "f${d}" — code đọc theo edges.length, không hardcode.
+ * 6 chiều sau = B1 v2-lag16 (#81 — ML_OPS_BLUEPRINT §4); 8 chiều cuối = F-01
+ * v3-macro (#129 — features.ts x[16..23]). Chiều ngoài phạm vi hiển thị
+ * "f${d}" — code đọc theo edges.length, không hardcode.
  */
 export const FEATURE_NAMES: string[] = [
   "RSI14/100",        // x[0]  (rsi ?? 50) / 100
@@ -117,9 +118,18 @@ export const FEATURE_NAMES: string[] = [
   "ΔRSI 5 phiên",        // x[13] (rsi14(t) − rsi14(t−5)) / 100
   "Δvolz 5 phiên",       // x[14] clip(volz20(t),±8) − clip(volz20(t−5),±8)
   "độ dốc SMA20 5 phiên", // x[15] sma20(t)/sma20(t−5) − 1
+  // ── F-01 v3-macro (#129 · AUDIT 137 B9 — drift giám sát đủ 24 chiều) ──
+  "ΔUS10Y 20 phiên (cb)",   // x[16] macro.dus10y20
+  "độ dốc 10Y−5Y (cb)",     // x[17] macro.slope10y5y
+  "động lượng DXY 20",      // x[18] macro.dxyMom20
+  "áp lực VND 20 phiên",    // x[19] macro.vndMom20
+  "chu kỳ hàng hoá MOM20",  // x[20] macro.cmdtyMom20 (GC/CL/BZ)
+  "độ rộng thị trường",     // x[21] macro.breadth20
+  "dòng ngoại flow20",      // x[22] macro.flow20 clip ±3
+  "sentiment 7 ngày",       // x[23] macro.sent7
 ];
 
-/** Tên chiều theo index — an toàn mọi số chiều (10 hôm nay · 16 sau B1). */
+/** Tên chiều theo index — an toàn mọi số chiều (10 v1 · 16 v2 · 24 v3-macro). */
 export function featureName(d: number): string {
   return FEATURE_NAMES[d] ?? `f${d}`;
 }

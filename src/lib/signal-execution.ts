@@ -260,16 +260,22 @@ export async function createPaperOrderFromSignal(
   // KHÔNG đánh giá lại bằng consensus mới hơn. VETO vẫn tối thượng (guard riêng).
   {
     const setting = await getConsensusSetting();
+    // AUDIT 137 C11 — gate null hai đường trái dấu: auto-decision (#91) TỪ
+    // CHỐI fail-safe khi consensusGate == null (dữ liệu cũ trước B9) nhưng
+    // convert TAY vẫn được phép tạo lệnh. Đồng bộ: null cũng chặn (điều kiện
+    // gọn còn !== "CONSENSUS" — bao trùm cả null), thông điệp phân nhánh riêng.
     if (
       setting.enforce &&
-      signal.consensusGate != null &&
       signal.consensusGate !== "CONSENSUS" &&
       signal.direction !== "HOLD"
     ) {
       return {
         ok: false,
         status: 409,
-        error: `Tín hiệu bị CỔNG ĐỒNG THUẬN chặn (${signal.consensusGate === "WEAK_MAJORITY" ? "đa số yếu" : "không đồng thuận"} — tỉ lệ trọng số số đông ${signal.consensusRatio != null ? `${(signal.consensusRatio * 100).toFixed(1).replace(".", ",")}%` : "?"} < 80%). Tín hiệu sinh ra khi hội đồng chưa đạt đồng thuận 80% → giữ GIỮ, không tạo lệnh.`,
+        error:
+          signal.consensusGate == null
+            ? "Tín hiệu chưa có snapshot cổng đồng thuận (dữ liệu cũ trước B9) — không thể chuyển lệnh; fail-safe đồng bộ với auto-decision."
+            : `Tín hiệu bị CỔNG ĐỒNG THUẬN chặn (${signal.consensusGate === "WEAK_MAJORITY" ? "đa số yếu" : "không đồng thuận"} — tỉ lệ trọng số số đông ${signal.consensusRatio != null ? `${(signal.consensusRatio * 100).toFixed(1).replace(".", ",")}%` : "?"} < 80%). Tín hiệu sinh ra khi hội đồng chưa đạt đồng thuận 80% → giữ GIỮ, không tạo lệnh.`,
       };
     }
   }
@@ -488,7 +494,20 @@ export async function createPaperOrderFromSignal(
       };
     }
     const rawQty = Math.floor((equity * sizeFraction) / lastPrice);
-    quantity = Math.max(100, Math.floor(rawQty / 100) * 100);
+    // AUDIT 137 C4 — min-lot ép 100 vượt hạn sizing: khi ngân sách 5% NAV <
+    // 1 lot, dòng cũ Math.max(100, ...) vẫn ép 100 cp (lệnh thật VIC 100cp @
+    // 224.200 = 22,6% NAV — 4,5× sizing ý định, còn bỏ guard đủ tiền). Đồng bộ
+    // với đường budget50m ở trên: từ chối thẳng khi rawQty < 100 (giữ nguyên
+    // hành vi floor-lot khi rawQty ≥ 100). Route đọc { ok, status, error } trả
+    // 400 — KHÔNG ném exception nên không rơi 500.
+    if (rawQty < 100) {
+      return {
+        ok: false,
+        status: 400,
+        error: "Khối lượng tính toán nhỏ hơn 1 lot (100 cổ phiếu).",
+      };
+    }
+    quantity = Math.floor(rawQty / 100) * 100;
 
     // P3-fix (Task 27 E2E): SELL nav5pct phải có vị thế mở — nếu không,
     // fill engine sẽ auto-REJECT INSUFFICIENT_POSITION (F-303) mỗi tick.

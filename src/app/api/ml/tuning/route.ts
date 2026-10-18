@@ -190,12 +190,17 @@ export async function POST(req: Request) {
     }
   }
 
-  // 4) Reset vòng học Bandit — 6 arm về prior Beta(1,1), BanditEvent GIỮ NGUYÊN
+  // 4) Reset vòng học Bandit — 7 arm về prior Beta(1,1), BanditEvent GIỮ NGUYÊN
   //    (truy vết phiếu-dự-đoán + chặn kết toán lại phiếu cũ — §5.6b AUTONOMY v1.3).
   if (body.resetBandit === true) {
     try {
       const res = await db.banditArm.updateMany({
-        data: { alpha: 1, beta: 1, pulls: 0, wins: 0, lastRewardAt: null },
+        // AUDIT 137 B13 — reset regimeStats LUÔN: posteriorByCodeForCycle ưu
+        // tiên regimeStats cũ (đủ ≥10 pulls) nên bỏ sót nó khiến phiếu tiếp
+        // theo dùng track record "đã xoá" theo regime — mâu thuẫn ngữ nghĩa
+        // "đặt lại vòng học". "{}" parse an toàn: bandit.ts đọc JSON rỗng →
+        // không có block regime → fallback bảng chung (đúng ngữ nghĩa reset).
+        data: { alpha: 1, beta: 1, pulls: 0, wins: 0, lastRewardAt: null, regimeStats: "{}" },
       });
       await logMlAudit("ML_BANDIT_RESET", "BanditArm", null, { arms: res.count });
       applied.push(`đặt lại vòng học Bandit (${res.count} arm)`);

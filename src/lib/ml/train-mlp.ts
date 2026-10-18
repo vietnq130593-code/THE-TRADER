@@ -102,10 +102,11 @@ export function isTrainInFlight(): boolean {
 /* ─────────────────── Meta + metrics (đối tác hợp đồng route/sweep) ─────────────────── */
 
 /**
- * Tỷ lệ TRAIN split theo thời gian — PHẢI khớp VAL_FRACTION=0.2 của nn.ts
- * fit (cut 80/20, val = block cuối): featureHist A3 tính trên ĐÚNG phần
- * 80% đầu mà mô hình đã học (không lẫn val block) — sweep tính Brier val
- * cũng dùng cùng cut này.
+ * Tỷ lệ TRAIN split theo thời gian — MẶC ĐỂM khi caller không truyền
+ * nTrain (khớp VAL_FRACTION=0,2 của nn.ts fit, cut 80/20, val = block cuối).
+ * AUDIT 137 B8: đường train tay/engine với valFraction tuỳ chỉnh (0,1–0,4)
+ * phải truyền nTrain tính từ CHÍNH valFraction đó (xem trainDlMlp) — hằng này
+ * giờ chỉ còn là fallback, không còn là nguồn cut duy nhất.
  */
 export const TRAIN_FRACTION = 0.8;
 
@@ -143,12 +144,17 @@ export interface MlModelMeta extends TrainingWindowMeta {
   /** C1 (#99) — vị trí ứng viên trong dãy deterministic của đợt. */
   sweepIndex?: number;
   /** F-08 (#129) — isotonic calibration fit trên val split lần train này
-   *  (curves null = identity / whyRejected khi ECE không giảm ≥ 20%). */
+   *  (curves null = identity / whyRejected khi ECE không giảm ≥ 20%).
+   *  AUDIT 137 B5 — gate chấm ECE trên NỬA SAU val (holdout theo thời gian)
+   *  khi đủ mẫu; curves lưu = bản fit NỬA ĐẦU (khuyến nghị audit "fit nửa
+   *  đầu / gate nửa sau"). */
   calibration?: {
     curves: unknown[];
     fitted: number;
     eceBefore: number | null;
     eceAfter: number | null;
+    /** true = gate holdout nửa sau; false = val nhỏ, gate in-sample (B5). */
+    gateHoldout?: boolean;
     whyRejected?: string;
     fittedAt: string;
   };
@@ -196,15 +202,24 @@ function quantileSorted(sorted: number[], q: number): number {
   return sorted[lo] + (h - lo) * (sorted[hi] - sorted[lo]);
 }
 
-/** A3 (#79) — featureHist từ đặc trưng RAW của TRAIN split (80% đầu theo thời
- *  gian, cùng cut với nn.ts). Bucket j: (edges[j-1], edges[j]] — giá trị bằng
- *  điểm cắt rơi bucket dưới; bucket cuối (edges[8], +∞). Tỷ lệ tổng = 1 đúng.
- *  F-01 (#129): dims tuỳ theo featureSet (16 v2-lag16 · 24 v3-macro). */
+/** A3 (#79) — featureHist từ đặc trưng RAW của TRAIN split (theo thời gian,
+ * cùng cut với nn.ts). Bucket j: (edges[j-1], edges[j]] — giá trị bằng điểm
+ * cắt rơi bucket dưới; bucket cuối (edges[8], +∞). Tỷ lệ tổng = 1 đúng.
+ * F-01 (#129): dims tuỳ theo featureSet (16 v2-lag16 · 24 v3-macro).
+ * AUDIT 137 B8 — opts.nTrain: cut theo valFraction THẬT của lần train này
+ * (Math.floor(X.length * (1 - valFraction))); không truyền → TRAIN_FRACTION
+ * 0,8 mặc định (giữ tương thích sweep/đường cũ dùng default 0,2). */
 export function computeFeatureHist(
   X: number[][],
-  dims: number = ML_FEATURE_COUNT
+  dims: number = ML_FEATURE_COUNT,
+  opts?: { nTrain?: number }
 ): { edges: number[][]; train: number[][] } {
-  const nTrain = Math.floor(X.length * TRAIN_FRACTION);
+  // AUDIT 137 B8 — nTrain do caller truyền theo valFraction hiệu lực; chỉ
+  // fallback về cut 0,8 cứng khi không truyền (hành vi cũ).
+  const nTrain =
+    opts?.nTrain != null && opts.nTrain > 0 && opts.nTrain < X.length
+      ? opts.nTrain
+      : Math.floor(X.length * TRAIN_FRACTION);
   const edges: number[][] = [];
   const train: number[][] = [];
   for (let d = 0; d < dims; d++) {
@@ -455,9 +470,23 @@ export async function trainDlMlp(
   // lượt nạp → window-hash mô tả sai cửa sổ đã train — phá đúng cái PIT P1-2
   // xây ra). B1 (#81): hash trên bar — KHÔNG đổi khi đổi bộ đặc trưng.
   const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
-  // A3 (#79) — histogram đặc trưng RAW của TRAIN split (đồng bộ meta PSI)
-  const featureHist = computeFeatureHist(set.X, dims);
-  const { mean, std, Xstd } = standardize(set.X);
+  // AUDIT 137 B1 + B8 — MỘT biên train/val duy nhất cho chuẩn hoá + featureHist
+  // + calibration, khớp CHÍNH XÁC công thức cut của nn.ts fit(): clamp
+  // Math.min(0.5, Math.max(0.05, v)) rồi nTrain = Math.floor(n * (1 - v))
+  // (nn.ts:356-367) — lệch biên giữa caller và fit là nguồn leakage B1 +
+  // nhiễm calibration B8.
+  const valFractionFit = Math.min(0.5, Math.max(0.05, effectiveMlp.valFraction));
+  const nTrainSplit = Math.floor(set.X.length * (1 - valFractionFit));
+  // A3 (#79) — histogram đặc trưng RAW của TRAIN split (đồng bộ meta PSI);
+  // AUDIT 137 B8: cut theo valFraction hiệu lực (0,1–0,4 tuỳ chỉnh), không
+  // còn 0,8 cứng — histogram TRÊN train split như comment A3 #79 đã nói.
+  const featureHist = computeFeatureHist(set.X, dims, { nTrain: nTrainSplit });
+  // AUDIT 137 B1 — thống kê chỉ từ TRAIN split — chặn leakage (audit 137 B1):
+  // trước đây mean/std tính trên 100% chuỗi (gồm block val tương lai) trước
+  // khi fit() cắt val = block cuối → valAcc lạc quan hệ thống. LƯU Ý: valAcc
+  // tương lai sau vá NHẠT HƠN số cũ (42,9% trước đây lạc quan) — đổi chuẩn đo
+  // trung thực, không phải mô hình sa sút.
+  const { mean, std, Xstd } = standardize(set.X, { nTrain: nTrainSplit });
   // #89 → #94 — arch + activations + hyper từ AppSetting ml-tuning (fail-soft:
   // không có key → đúng MLP_ARCH_V2 16-24-12-3 relu×2 + lr 0,01/batch 32/60
   // epoch/patience 12/lossWeights [1,1,1]/l2 0/val 0,2/seed 42 — hành vi
@@ -527,15 +556,19 @@ export async function trainDlMlp(
     topSymbols,
   };
 
-  // F-08 (#129) — isotonic calibration fit trên VAL split (block cuối 20%,
-  // cùng cut TRAIN_FRACTION): per-sample probs từ preds đã tính (predictProba
-  // = [pUp, pFlat, pDown] → đảo về class nội bộ [DOWN, FLAT, UP]). Gate giữ
-  // calibration: ECE sau ≤ 80% ECE trước (giảm ≥ 20% tương đối — đặc tả F-08)
-  // — không đạt → curves null + whyRejected (ensemble chạy identity).
+  // F-08 (#129) — isotonic calibration fit trên VAL split (block cuối theo
+  // valFraction hiệu lực — AUDIT 137 B8, cùng biên nTrainSplit ở trên):
+  // per-sample probs từ preds đã tính (predictProba = [pUp, pFlat, pDown] →
+  // đảo về class nội bộ [DOWN, FLAT, UP]). Gate giữ calibration (AUDIT 137 B5:
+  // fit isotonic trên NỬA ĐẦU val theo thời gian, chấm eceBefore/eceAfter
+  // trên NỬA SAU — giảm ≥ 20% tương đối mới GIỮ) — không đạt → curves null +
+  // whyRejected (ensemble chạy identity).
   let calibrationMeta: MlModelMeta["calibration"] | undefined;
   try {
+    // AUDIT 137 B8 — calibration cut theo valFraction hiệu lực (cùng biên với
+    // fit/standardize/featureHist), không còn 0,8 cứng: valFraction 0,1 trước
+    // đây lẫn 10% mẫu TRAIN vào isotonic (fit trên dữ liệu mô hình đã học).
     const nTotal = set.X.length;
-    const nTrainSplit = Math.floor(nTotal * TRAIN_FRACTION);
     const valIdx: number[] = [];
     for (let i = nTrainSplit; i < nTotal; i++) valIdx.push(i);
     if (valIdx.length >= CALIBRATION_MIN_PER_CLASS) {
@@ -545,6 +578,9 @@ export async function trainDlMlp(
       });
       const valLabels = valIdx.map((i) => set.y[i]!);
       const cal = fitCalibration(valProbs, valLabels);
+      // AUDIT 137 B5 — gate ≥ 20% giảm giờ chấm trên NỬA SAU val (holdout);
+      // curves lưu cho serving = bản fit NỬA ĐẦU. Không đổi hành vi serving
+      // của model đã lưu (v73) — chỉ ảnh hưởng train tương lai.
       const improves =
         cal.eceBefore != null && cal.eceAfter != null && cal.eceAfter <= 0.8 * cal.eceBefore;
       if (improves) {
@@ -553,6 +589,7 @@ export async function trainDlMlp(
           fitted: cal.fitted,
           eceBefore: cal.eceBefore,
           eceAfter: cal.eceAfter,
+          gateHoldout: cal.gateHoldout,
           fittedAt: cal.fittedAt,
         };
       } else if (cal.eceBefore != null) {
@@ -561,7 +598,10 @@ export async function trainDlMlp(
           fitted: cal.fitted,
           eceBefore: cal.eceBefore,
           eceAfter: cal.eceAfter,
-          whyRejected: `ECE sau ${cal.eceAfter} không giảm ≥ 20% so trước ${cal.eceBefore} — giữ identity`,
+          gateHoldout: cal.gateHoldout,
+          whyRejected: `ECE sau ${cal.eceAfter} không giảm ≥ 20% so trước ${cal.eceBefore}${
+            cal.gateHoldout === true ? " (chấm trên nửa SAU val — holdout B5)" : " (val nhỏ — in-sample)"
+          } — giữ identity`,
           fittedAt: cal.fittedAt,
         };
       }

@@ -414,6 +414,14 @@ export type MacroModelMeta = MlModelMeta & {
   featureSet: string;
   /** Số mẫu không có context vĩ mô (đặc trưng context điền 0). */
   missingContext?: number;
+  /** AUDIT 137 B6 — số mẫu CUỐI được reserve làm holdout KHÔNG tham gia fit
+   *  (Brier60/edge ở serving đo trên holdout này). Bản cũ không có trường →
+   *  coi như 0 (toàn bộ mẫu đều vào fit — Brier60 in-sample val). */
+  holdoutTail?: number;
+  /** AUDIT 137 B6 — ngày phiên của mẫu fit CUỐI (biên trên phần dữ liệu mô
+   *  hình ĐÃ học). Serving so với ngày bắt đầu cửa sổ Brier để trung thực
+   * đánh dấu brier60Holdout. Bản cũ không có → null (không biết). */
+  fitDateTo?: string | null;
 };
 
 /** Kết quả train 1 tài sản — metrics tối thiểu {valAcc, valLoss, samples, epochs}. */
@@ -429,6 +437,9 @@ export interface MacroTrainResult {
     epochs: number;
     trainAcc: number;
     trainLoss: number;
+    /** AUDIT 137 B6 — số mẫu CUỐI reserve làm holdout (0 = không đủ mẫu để
+     *  holdout — Brier60 khi đó vẫn in-sample val, trung thực qua số 0). */
+    holdoutTail: number;
   };
   /** Số mẫu thiếu context vĩ mô (điền 0 khi train). */
   missingContext: number;
@@ -459,13 +470,34 @@ async function trainMacroMlpFromSet(
       `tập train ${set.X[0].length} chiều ≠ ${MACRO_FEATURE_COUNT} (featureSet macro-asset-v1 lệch?)`
     );
   }
-  const { mean, std, Xstd } = standardize(set.X);
+  // AUDIT 137 B6 — reserve 60 mẫu CUỐI làm holdout KHÔNG tham gia fit: trước
+  // đây Brier60/edge ở serving (cửa sổ 60 phiên cuối) đo trên CHÍNH val block
+  // đã early-stop model → "US10Y 67,5%" lạc quan một phần. Giờ biên train/val
+  // dời lùi 60 phiên — sau retrain, cửa sổ Brier60 = holdout thật (ngoài
+  // mẫu). Guard: chỉ holdout khi phần còn lại đủ MACRO_MIN_SAMPLES để fit.
+  const nHoldout = Math.min(
+    MACRO_BRIER_WINDOW,
+    Math.max(0, set.X.length - MACRO_MIN_SAMPLES)
+  );
+  const nFit = set.X.length - nHoldout;
+  const Xfit = set.X.slice(0, nFit);
+  const yFit = set.y.slice(0, nFit);
+  const fitDateTo = set.dates[nFit - 1] ?? null; // ngày mẫu fit CUỐI (biên B6)
+  // AUDIT 137 B1 — thống kê chỉ từ TRAIN split — chặn leakage: mean/std tính
+  // trên nTrain dòng ĐẦU khớp CHÍNH XÁC cut của nn.ts fit() (clamp
+  // [0,05..0,5] rồi Math.floor(n * (1 − v)) — MLP_FIT_DEFAULTS.valFraction
+  // 0,2): trước đây standardize(set.X) tính trên 100% chuỗi (gồm val tương
+  // lai) → valAcc lạc quan. LƯU Ý: valAcc sau vá NHẠT HƠN số cũ — đổi chuẩn
+  // đo trung thực, không phải mô hình sa sút.
+  const valFractionFit = Math.min(0.5, Math.max(0.05, MLP_FIT_DEFAULTS.valFraction));
+  const nTrainStd = Math.floor(nFit * (1 - valFractionFit));
+  const { mean, std, Xstd } = standardize(Xfit, { nTrain: nTrainStd });
   // Constructor mặc định: activations relu×2 · seed 42 (RNG_SEED nn.ts) —
   // tái dùng MLP_FIT_DEFAULTS cho opts fit (lr 0,01 · batch 32 · 60 epoch ·
   // patience 12 · lossWeights [1,1,1] · l2 0 · val 0,2 · seed 42) → kết quả
   // huấn luyện DETERMINISTIC/lặp lại được trên cùng cửa sổ dữ liệu.
   const mlp = new MLP(MACRO_MLP_ARCH);
-  const fit = mlp.fit(Xstd, set.y, { ...MLP_FIT_DEFAULTS });
+  const fit = mlp.fit(Xstd, yFit, { ...MLP_FIT_DEFAULTS });
   mlp.setNorm({ mean, std });
 
   const metrics = {
@@ -475,6 +507,9 @@ async function trainMacroMlpFromSet(
     epochs: fit.epochs,
     trainAcc: fit.trainAcc,
     trainLoss: fit.trainLoss,
+    // AUDIT 137 B6 — đánh dấu trung thực: lần train này reserve holdout.
+    holdoutTail: nHoldout,
+    brier60Holdout: nHoldout > 0,
   };
   const meta: MacroModelMeta = {
     windowHash: set.windowHash,
@@ -489,6 +524,9 @@ async function trainMacroMlpFromSet(
     assetSymbol: symbol,
     featureSet: MACRO_FEATURE_SET,
     missingContext: set.missingContext,
+    // AUDIT 137 B6 — serving đọc 2 trường này để đánh dấu brier60Holdout.
+    holdoutTail: nHoldout,
+    fitDateTo,
   };
   // promote:false — LUÔN archived: kind dùng chung 8 tài sản, promote qua
   // updateMany serving sẽ archive lẫn nhau; serving chọn theo meta.assetSymbol.
@@ -623,6 +661,10 @@ interface MacroModelRow {
   id: string;
   version: number;
   weights: string;
+  /** AUDIT 137 B6 — meta JSON để đọc holdoutTail/fitDateTo (đánh dấu
+   *  brier60Holdout trung thực; bản cũ không có → null). */
+  fitDateTo: string | null;
+  holdoutTail: number;
 }
 
 /**
@@ -641,13 +683,26 @@ async function latestMacroModels(): Promise<Map<string, MacroModelRow>> {
   });
   const pickedId = new Map<string, string>();
   const pickedVersion = new Map<string, number>();
+  // AUDIT 137 B6 — đọc kèm fitDateTo/holdoutTail từ meta (fail-soft null/0).
+  const pickedFit = new Map<string, { fitDateTo: string | null; holdoutTail: number }>();
   for (const row of rows) {
     let assetSymbol: string | null = null;
     let featureSet: string | null = null;
+    let fitDateTo: string | null = null;
+    let holdoutTail = 0;
     try {
-      const m = JSON.parse(row.meta ?? "{}") as { assetSymbol?: unknown; featureSet?: unknown };
+      const m = JSON.parse(row.meta ?? "{}") as {
+        assetSymbol?: unknown;
+        featureSet?: unknown;
+        fitDateTo?: unknown;
+        holdoutTail?: unknown;
+      };
       if (typeof m.assetSymbol === "string") assetSymbol = m.assetSymbol;
       if (typeof m.featureSet === "string") featureSet = m.featureSet;
+      if (typeof m.fitDateTo === "string") fitDateTo = m.fitDateTo;
+      if (typeof m.holdoutTail === "number" && Number.isFinite(m.holdoutTail)) {
+        holdoutTail = m.holdoutTail;
+      }
     } catch {
       // meta JSON hỏng — bỏ qua row (bản khác cùng tài sản vẫn được xét)
     }
@@ -655,6 +710,7 @@ async function latestMacroModels(): Promise<Map<string, MacroModelRow>> {
     if (featureSet !== MACRO_FEATURE_SET) continue; // chỉ nhận bộ đặc trưng hiện hành
     pickedId.set(assetSymbol, row.id);
     pickedVersion.set(assetSymbol, row.version);
+    pickedFit.set(assetSymbol, { fitDateTo, holdoutTail });
   }
   const out = new Map<string, MacroModelRow>();
   const ids = [...pickedId.values()];
@@ -667,7 +723,14 @@ async function latestMacroModels(): Promise<Map<string, MacroModelRow>> {
   for (const [symbol, id] of pickedId) {
     const w = byId.get(id);
     if (w) {
-      out.set(symbol, { id, version: pickedVersion.get(symbol) ?? w.version, weights: w.weights });
+      const fit = pickedFit.get(symbol) ?? { fitDateTo: null, holdoutTail: 0 };
+      out.set(symbol, {
+        id,
+        version: pickedVersion.get(symbol) ?? w.version,
+        weights: w.weights,
+        fitDateTo: fit.fitDateTo,
+        holdoutTail: fit.holdoutTail,
+      });
     }
   }
   return out;
@@ -693,6 +756,10 @@ export interface MacroAssetForecast {
   edge: boolean;
   /** Số phiên realized thực dùng tính Brier60 (≤ 60 — cửa sổ co khi dữ liệu ngắn). */
   brierWindow: number;
+  /** AUDIT 137 B6 — true ⇔ cửa sổ Brier60 nằm HOÀN TOÀN sau biên fit của
+   *  model (meta.fitDateTo — ngoài mẫu thật); false = trùng vùng model đã
+   *  fit; null = bản train trước B6 không ghi biên (không biết — trung thực). */
+  brier60Holdout: boolean | null;
   /** Version model đang phục vụ tài sản này — null khi chưa có model. */
   modelVersion: number | null;
   /** Số điểm đánh giá (cửa sổ Brier + phiên serving) KHÔNG có context vĩ mô. */
@@ -726,6 +793,7 @@ function emptyForecast(spec: MacroAssetLabelSpec, note: string, lastDate: string
     baseline: MACRO_BRIER_BASELINE_DISPLAY,
     edge: false,
     brierWindow: 0,
+    brier60Holdout: null,
     modelVersion: null,
     missingContext: 0,
     lastDate,
@@ -777,6 +845,7 @@ function forecastAsset(
     baseline: MACRO_BRIER_BASELINE_DISPLAY,
     edge: false,
     brierWindow: 0,
+    brier60Holdout: null, // AUDIT 137 B6 — tính ở phần Brier bên dưới
     modelVersion: model.version,
     missingContext: 0,
     lastDate: bars.dates[n - 1] ?? null,
@@ -816,6 +885,14 @@ function forecastAsset(
   // (2) Brier rolling 60 phiên realized (t ≤ n−1−horizon — nhãn đã xảy ra)
   const tLast = n - 1 - ML_HORIZON_DAYS;
   const tStart = Math.max(ML_WARMUP_BARS - 1, tLast - MACRO_BRIER_WINDOW + 1);
+  // AUDIT 137 B6 — trung thực hóa nguồn số: cửa sổ Brier60 nằm HOÀN TOÀN sau
+  // biên fit của model (meta.fitDateTo, ghi từ lần train sau B6 — holdout
+  // 60 mẫu cuối không vào fit) → ngoài mẫu thật. Bản train TRƯỚC B6 không
+  // ghi biên → null (không biết); cửa sổ đè vùng đã fit → false.
+  if (model.fitDateTo != null) {
+    const winStart = bars.dates[tStart] ?? null;
+    out.brier60Holdout = winStart != null ? winStart > model.fitDateTo : null;
+  }
   let brierSum = 0;
   let brierCount = 0;
   for (let t = tStart; t <= tLast; t++) {
@@ -934,6 +1011,16 @@ export async function macroAssetForecasts(): Promise<MacroForecastPayload> {
   if (withModel.length > 0 && withModel.every((a) => !a.edge)) {
     notes.push(
       "Chưa tài sản nào đạt cạnh biên so baseline (N6 trung thực — gate F-17: ≥ 2 tài sản đạt mới tính là chức năng sống)."
+    );
+  }
+  // AUDIT 137 B6 — ghi chú nguồn Brier60: model train sau B6 reserve 60 mẫu
+  // cuối làm holdout (brier60Holdout=true ⇔ ngoài mẫu thật); còn lại đo trên
+  // vùng chưa xác minh ngoài mẫu — không để bảng "DỰ BÁO 5 PHIÊN" đọc như
+  // track record sạch khi chưa retrain.
+  const notHoldout = withModel.filter((a) => a.brier60Holdout !== true).length;
+  if (notHoldout > 0) {
+    notes.push(
+      `${notHoldout}/${withModel.length} tài sản đo Brier60 trên vùng chưa xác minh ngoài mẫu (audit 137 B6: bản train trước B6 chưa reserve holdout 60 phiên — retrain để trung thực hóa).`
     );
   }
   return { asOf, assets, notes };

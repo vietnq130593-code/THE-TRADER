@@ -623,7 +623,11 @@ function intlPermTwoSidedP(xs: number[], ys: number[], rObs: number): number {
     const rp = correlation(shuffled, ys);
     if (rp != null && Math.abs(rp) >= absRObs) ge++;
   }
-  return ge / INTL_PERM_N;
+  // AUDIT 137 B11 — (ge + 1) / (N + 1) (Phipson–Smyth): ge/200 có thể trả
+  // p = 0 tuyệt đối hoá ý nghĩa ("không lần nào đạt" chỉ nghĩa là p < 1/200);
+  // sau Bonferroni ×44, p = 0 vẫn 0 → quan hệ r mạnh ở dữ liệu ngắn dễ được
+  // tuyên bố ý nghĩa quá mức. p nhỏ nhất giờ là 1/201 ≈ 0,00498.
+  return (ge + 1) / (INTL_PERM_N + 1);
 }
 
 /** Nạp chuỗi logret daily của 1 instrument theo symbol (bar ASC theo ngày). */

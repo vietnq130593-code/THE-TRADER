@@ -2,6 +2,16 @@
  * src/lib/ml/multitask.ts — F-09 (#129 — AI_ENGINEER_REVIEW_BRAIN §3 F-09)
  * MLP ĐA NHIỆM: backbone dùng chung + 3 ĐẦU RA (hướng · biên độ · biến động).
  *
+ * ⛔ KHOÁ (AUDIT 137 B7 — Task 138-b): head mag/vol SAI TOÁN đã chứng minh bằng
+ * numerical gradient-check trên chính class này — gradient thật của bm[0] là
+ * −2,09e-2 trong khi code tính −5,23e-2 (thiếu hệ số ×0,1 của chuỗi
+ * tanh(0,1·s)); ReLU gate kiểm nhầm tầng h2 (backbone) thay vì pre-activation
+ * Wm·h2+bm của head; lớp ra 4→1 không tồn tại (placeholder `(x >= 0 ? 1 : 1)`
+ * là no-op — nhánh chết). VIẾT LẠI HEAD là điều kiện mở khoá. Route
+ * /api/ml/train target "dl-mtl" đã GUARD 400 (audit 137 B7) — file này giữ
+ * nguyên để đọc/nghiên cứu, KHÔNG xoá (bản dl-mtl cũ trong MlModel vẫn parse
+ * được nếu cần truy vết). Giảm nhẹ: dl-mtl là shadow, chưa từng serving.
+ *
  * Kỳ vọng chủ sở hữu "biến động tài chính" cần ĐO ĐỘ LỚN — hiện hệ thống chỉ
  * dự báo hướng 3 lớp. Thiết kế theo đặc tả F-09:
  *   • backbone: in → h1 (ReLU) → h2 (ReLU) — thông tin chia sẻ giữa 3 tác vụ;
@@ -35,8 +45,10 @@ const MT_LR = 0.01;
 const MT_BATCH = 32;
 const MT_EPOCHS = 60;
 const MT_PATIENCE = 12;
-const MT_VAL_FRACTION = 0.2;
-
+/** AUDIT 137 B1 — export cho train route tính nTrain chuẩn hoá khớp cut
+ *  fit() của multitask (Math.floor(n * (1 − MT_VAL_FRACTION)) — multitask.ts
+ *  không có opts.valFraction nên đây là nguồn duy nhất của biên). */
+export const MT_VAL_FRACTION = 0.2;
 /** RNG mulberry32 (cùng nn.ts — tái lập được). */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;

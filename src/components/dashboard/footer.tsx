@@ -127,7 +127,11 @@ export function Footer() {
             title={
               realtimeConnected
                 ? "Đang kết nối WebSocket market-engine (cổng 3003) — bảng giá cập nhật mỗi 10 giây"
-                : "Chưa kết nối WebSocket — đang dùng polling TanStack Query"
+                : // AUDIT 137 D1 — tooltip cũ hứa "đang dùng polling TanStack
+                  // Query" khi WS chết nhưng ["quotes"] KHÔNG có refetchInterval
+                  // (khai polling giả — audit D1). Giờ ĐÃ CÓ fallback thật:
+                  // ["quotes"] tự làm mới mỗi 30s khi realtimeConnected=false.
+                  "Chưa kết nối WebSocket — bảng giá tự động làm mới mỗi 30 giây (chế độ dự phòng)"
             }
           >
             <span className="relative flex size-2">

@@ -13,8 +13,11 @@
  *   apply: clip về biên; ngoài [p0, pN] → ánh xạ bậc thang gần nhất
  *   (không ngoại suy — an toàn cho đuôi).
  *
- * Gate nghiệm thu F-08: ECE giảm ≥ 20% tương đối trên holdout thì GIỮ —
- * không thì whyRejected + không áp (identity). Mọi tính toán fail-soft:
+ * Gate nghiệm thu F-08 (AUDIT 137 B5): val đủ lớn → chia 2 nửa THEO THỜI
+ * GIAN — isotonic fit trên nửa đầu (mapping lưu cho serving), ECE giảm ≥ 20%
+ * tương đối trên NỬA SAU (holdout) thì GIỮ — không thì whyRejected + không áp
+ * (identity). Val quá nhỏ (< 80 mẫu) → gate in-sample trên chính tập fit
+ * (giữ hành vi cũ, gateHoldout:false). Mọi tính toán fail-soft:
  * calibration hỏng → xác suất gốc (không bao giờ làm hỏng ensemble).
  *
  * FIX #130 (fixbug Task 129): bản cũ gộp pool bằng splice trên ys/ws nhưng
@@ -42,10 +45,14 @@ export interface CalibrationSpec {
   curves: (IsotonicCurve | null)[];
   /** Số mẫu val dùng fit (min 60/class — không đủ → null = identity). */
   fitted: number;
-  /** ECE trên val TRƯỚC hiệu chuẩn (đo trung thực). */
+  /** ECE TRƯỚC hiệu chuẩn — AUDIT 137 B5: đo trên NỬA SAU val (holdout) khi
+   *  đủ mẫu chia đôi; val nhỏ (< 80) thì đo trên chính tập fit (in-sample). */
   eceBefore: number | null;
-  /** ECE trên val SAU hiệu chuẩn (gate giữ/tắt theo đặc tả). */
+  /** ECE SAU hiệu chuẩn — cùng tập với eceBefore (gate ≥ 20% giảm tương đối). */
   eceAfter: number | null;
+  /** AUDIT 137 B5 — true = gate đã chấm trên nửa SAU (holdout thật theo thời
+   *  gian); false = val quá nhỏ, gate in-sample như bản cũ (trung thực). */
+  gateHoldout?: boolean;
   fittedAt: string;
 }
 
@@ -53,6 +60,14 @@ export interface CalibrationSpec {
 export const CALIBRATION_MIN_PER_CLASS = 60;
 /** Số bin reliability curve (đồng khớp CALIBRATION_BUCKET_LABELS analytics). */
 export const CALIBRATION_BINS = 10;
+/**
+ * AUDIT 137 B5 — tổng số mẫu val tối thiểu để chia 2 nửa theo thời gian cho
+ * gate holdout (fit isotonic nửa đầu / chấm ECE nửa sau). Dưới ngưỡng này →
+ * giữ hành vi cũ (fit + chấm trên CÙNG tập, gate in-sample — comment điều
+ * kiện ở fitCalibration). 80 = 2 × 40: nửa ≥ 40 mẫu đủ chấm ECE thô (dù nửa
+ * 40 < CALIBRATION_MIN_PER_CLASS 60 có thể làm curves null → identity fail-soft).
+ */
+const CALIBRATION_HOLDOUT_MIN_TOTAL = 80;
 
 /* ─────────────────── PAV (Pool-Adjacent-Violators) ─────────────────── */
 
@@ -147,6 +162,15 @@ function clamp01(v: number): number {
  * FIX #130: lọc mẫu không hữu hạn + clamp [0,1] TRƯỚC khi fit — NaN đi qua
  * Math.max/Math.min vẫn là NaN (so sánh với NaN luôn false) nên bản cũ cho
  * rác đi thẳng vào PAV rồi lan xuống ECE.
+ *
+ * AUDIT 137 B5 — gate holdout: val đủ lớn (≥ CALIBRATION_HOLDOUT_MIN_TOTAL)
+ * → chia THEO THỜI GIAN làm 2 nửa: isotonic fit trên NỬA ĐẦU (mapping được
+ * LƯU cho serving), eceBefore/eceAfter chấm trên NỬA SAU (gate giảm ≥ 20%
+ * giờ là bằng chứng ngoài mẫu, không còn tự pass vì PAV tối thiểu hoá sai lệch
+ * đơn điệu in-sample). Val quá nhỏ (< 80 mẫu) → GIỮ hành vi cũ (fit + chấm
+ * cùng tập) + gateHoldout:false để tiêu thụ biết gate đang in-sample. Caller
+ * (train-mlp) truyền val đã sắp theo thời gian (block cuối) — nửa đầu/nửa sau
+ * đúng thứ tự thời gian.
  */
 export function fitCalibration(
   probs: readonly (readonly number[])[],
@@ -166,25 +190,35 @@ export function fitCalibration(
   }
   const safeProbs = clean.map((c) => c.p);
   const safeLabels = clean.map((c) => c.y);
+  // AUDIT 137 B5 — đủ mẫu → fit nửa ĐẦU / gate nửa SAU (theo thời gian);
+  // thiếu (val < 80) → cả hai dùng toàn bộ như bản cũ (điều kiện ghi rõ).
+  const useHoldoutGate = clean.length >= CALIBRATION_HOLDOUT_MIN_TOTAL;
+  const nFit = useHoldoutGate ? Math.floor(clean.length / 2) : clean.length;
+  const fitProbs = safeProbs.slice(0, nFit);
+  const fitLabels = safeLabels.slice(0, nFit);
+  const gateProbs = useHoldoutGate ? safeProbs.slice(nFit) : safeProbs;
+  const gateLabels = useHoldoutGate ? safeLabels.slice(nFit) : safeLabels;
   const curves: (IsotonicCurve | null)[] = [null, null, null];
   let fitted = 0;
   for (let c = 0; c < 3; c++) {
-    const p = safeProbs.map((pr) => pr[c]!);
-    const y = safeLabels.map((l) => (l === c ? 1 : 0));
+    const p = fitProbs.map((pr) => pr[c]!);
+    const y = fitLabels.map((l) => (l === c ? 1 : 0));
     const curve = fitIsotonic(p, y);
     curves[c] = curve;
-    if (curve) fitted = Math.max(fitted, safeLabels.length);
+    if (curve) fitted = Math.max(fitted, fitLabels.length);
   }
-  const eceBefore = eceOf(safeProbs, safeLabels);
-  const calibrated = safeProbs.map((pr) =>
+  // AUDIT 137 B5 — ECE trước/sau cùng chấm trên NỬA SAU (holdout) khi đủ mẫu.
+  const eceBefore = eceOf(gateProbs, gateLabels);
+  const calibrated = gateProbs.map((pr) =>
     applyCalibration({ curves, fitted, eceBefore: null, eceAfter: null, fittedAt: "" }, pr)
   );
-  const eceAfter = eceOf(calibrated, safeLabels);
+  const eceAfter = eceOf(calibrated, gateLabels);
   return {
     curves,
     fitted,
     eceBefore,
     eceAfter,
+    gateHoldout: useHoldoutGate,
     fittedAt: new Date().toISOString(),
   };
 }
@@ -276,6 +310,9 @@ export function parseCalibration(metaJson: string | null): CalibrationSpec | nul
       fitted: typeof cal.fitted === "number" ? cal.fitted : 0,
       eceBefore: typeof cal.eceBefore === "number" ? cal.eceBefore : null,
       eceAfter: typeof cal.eceAfter === "number" ? cal.eceAfter : null,
+      // AUDIT 137 B5 — đọc lại cờ gate holdout (bản cũ không có → undefined,
+      // tức "không biết" — serving không dùng cờ này, chỉ hiển thị/truy vết).
+      gateHoldout: cal.gateHoldout === true ? true : cal.gateHoldout === false ? false : undefined,
       fittedAt: typeof cal.fittedAt === "string" ? cal.fittedAt : "",
     };
   } catch {

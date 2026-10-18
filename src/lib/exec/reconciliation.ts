@@ -24,6 +24,11 @@
  *
  * MISMATCH không "tự lành" (§6.3): ghi RiskAlert EXEC_RECONCILE_MISMATCH,
  * dedupe 24h theo code + chưa ack để không spam mỗi chu kỳ.
+ *
+ * WORLD-CONTEXT (AUDIT 137 C2): toàn bộ window — Trade + Order FILLED +
+ * ledger (loadCurrentLedger) — cùng đo THẾ GIỚI PAPER (accountType !=
+ * "sandbox"). Fill của sandbox không rơi vào window này (đã từng tạo 2
+ * MISMATCH giả 14-10 & 16-10); sandbox có K1_SANDBOX_SETTLED riêng.
  */
 
 import { db } from "@/lib/db";
@@ -100,7 +105,8 @@ async function loadCurrentLedger(): Promise<CurrentLedgerState> {
   const [account, positionsAll] = await Promise.all([
     // K1 (#87 — P0 quarantine §5.1): ledger đối chiếu 5-phép E-P1 là thế giới
     // PAPER — loại trừ tài khoản sandbox (sandbox có K1_SANDBOX_SETTLED riêng,
-    // không đối chiếu chéo 2 thế giới tiền).
+    // không đối chiếu chéo 2 thế giới tiền). Window Trade/Order bên dưới cùng
+    // lọc thế giới này (AUDIT 137 C2 — trước fix Trade trộn mọi tài khoản).
     db.brokerAccount.findFirst({
       where: { deletedAt: null, accountType: { not: "sandbox" } },
       select: { id: true, cashBalance: true },
@@ -191,8 +197,15 @@ export async function runReconciliation(now = new Date()): Promise<Reconciliatio
   // vào window KẾ TIẾP — không kẽ hở, không đếm trùng.
 
   // ── Dữ liệu window ──
+  // AUDIT 137 C2 — world-context paper: Trade của thế giới sandbox KHÔNG rơi
+  // vào window của ledger paper (loadCurrentLedger chỉ đo tài khoản non-sandbox)
+  // — 2 MISMATCH giả đã nổ 14-10 & 16-10 do fill sandbox lọt vào đây. Lọc
+  // Trade→Order→BrokerAccount cùng thế giới ledger (K1 #87 §5.1).
   const trades = await db.trade.findMany({
-    where: { executedAt: { gte: from, lt: now } },
+    where: {
+      executedAt: { gte: from, lt: now },
+      order: { brokerAccount: { accountType: { not: "sandbox" } } },
+    },
     select: {
       id: true,
       orderId: true,
@@ -210,6 +223,8 @@ export async function runReconciliation(now = new Date()): Promise<Reconciliatio
   // FILLED trong window (filledAt ∈ [from, now)) — (b) là ca B3 exec-verify:
   // lệnh FILLED KHÔNG có Trade nào phải bị order-coverage BẮT, không được vô
   // hình (trước fix chỉ load qua trade orderIds → khoảng mù đúng chỗ cần soi).
+  // AUDIT 137 C2 — cùng world filter paper cho cả 2 nguồn order (lệnh sandbox
+  // FILLED trong window không thuộc ledger này).
   const orderIds = [...new Set(trades.map((t) => t.orderId))];
   const [ordersWithTrades, filledInWindow] = await Promise.all([
     orderIds.length
@@ -219,7 +234,11 @@ export async function runReconciliation(now = new Date()): Promise<Reconciliatio
         })
       : Promise.resolve([]),
     db.order.findMany({
-      where: { status: "FILLED", filledAt: { gte: from, lt: now } },
+      where: {
+        status: "FILLED",
+        filledAt: { gte: from, lt: now },
+        brokerAccount: { accountType: { not: "sandbox" } },
+      },
       select: { id: true, quantity: true, filledQuantity: true, status: true, fee: true, side: true },
     }),
   ]);

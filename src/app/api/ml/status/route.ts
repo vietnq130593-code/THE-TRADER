@@ -11,9 +11,11 @@ import { intradayStats } from "@/lib/intraday";
 import { newsCoverageReport } from "@/lib/ml/news-coverage";
 import {
   featureAt,
+  loadMacroContexts,
   loadTopSeries,
   ML_WARMUP_BARS,
   rollingFeatures,
+  type MacroContext,
 } from "@/lib/ml/features";
 import {
   bucketProportions,
@@ -122,6 +124,9 @@ type DriftPayload =
       maxPsi: number;
       maxDim: string;
       retrainRecommended: boolean;
+      /** AUDIT 137 B9 — có mặt CHỈ khi đặc trưng sống thiếu chiều so histogram
+       *  (mô tả chiều chưa giám sát — additive, FE cũ bỏ qua). */
+      psiDimsNote?: string;
     };
 
 /** Reason chuẩn khi serving chưa có histogram (bản train trước A3). */
@@ -132,8 +137,16 @@ function driftUnavailable(reason: string): DriftPayload {
   return { available: false, reason };
 }
 
-/** Kiểm tra shape featureHist chặt (9 cắt tăng dần · train tổng ≈ 1 bucket)
- * — meta sai shape coi như chưa có, không đo PSI trên số rác. */
+/** Kiểm tra shape featureHist chặt (9 cắt · train tổng ≈ 1 bucket) — meta sai
+ * shape coi như chưa có, không đo PSI trên số rác.
+ * AUDIT 137 B9 — cho phép cuts BẰNG NHAU (không giảm): computeFeatureHist
+ * (bên GHI) chính đáng sinh quantile trùng trên chiều có khối điểm —
+ * logret lag = 0 khi giá không đổi (dims 9-12), chiều vĩ mô = 0 khi thiếu
+ * context (dims 16-20/22-23 của v3-macro). Bên đọc cũ đòi tăng NGHIÊM →
+ * histogram do chính route train ghi bị từ chối → drift unavailable vĩnh
+ * viễn cho serving v3-macro (đo thực tế v73: 12/24 chiều có cuts trùng).
+ * Chỉ từ chối khi cuts GIẢM (số rác thật). Bucket trùng → bucket giữa rỗng
+ * cả hai phía, PSI xử lý qua PSI_EPS (psi.ts) an toàn. */
 function parseFeatureHist(metaJson: string): FeatureHist | null {
   try {
     const m = JSON.parse(metaJson) as { featureHist?: unknown } | null;
@@ -151,7 +164,7 @@ function parseFeatureHist(metaJson: string): FeatureHist | null {
       if (e.length === 0 || t.length !== e.length + 1) return null;
       if (!e.every(isNum) || !t.every(isNum)) return null;
       for (let i = 1; i < e.length; i++) {
-        if (!(e[i] > e[i - 1])) return null; // điểm cắt phải tăng dần
+        if (!(e[i] >= e[i - 1])) return null; // điểm cắt phải KHÔNG GIẢM
       }
     }
     return { edges, train };
@@ -184,8 +197,14 @@ const DRIFT_MIN_SAMPLES = 30;
  * P0-3, không đường tính thứ 2) → featureAt cho 30 phiên cuối của các ngày
  * chung rổ (distinct dates, lấy 30 cuối) → bin theo edges → so histogram
  * train. Fail-soft: lỗi DB/đo → available:false + reason, KHÔNG 500 route.
+ *
+ * AUDIT 137 B9 — featureSet của bản serving quyết định bộ đặc trưng sống:
+ * v3-macro (24 chiều) nạp loadMacroContexts(recent) và gọi featureAt(roll, t,
+ * ctx) — 8 chiều vĩ mô (dus10y20, slope, DXY, VND, cmdty, breadth, flow,
+ * sent7) giờ ĐƯỢC giám sát drift thay vì bị min(24,16) cắt âm thầm. Macro
+ * loader lỗi → đo 16 chiều giá + psiDimsNote khai báo chiều thiếu.
  */
-async function computeDrift(hist: FeatureHist): Promise<DriftPayload> {
+async function computeDrift(hist: FeatureHist, featureSet: string): Promise<DriftPayload> {
   const series = await loadTopSeries(DRIFT_TOP_N, {
     sinceDays: DRIFT_LOOKBACK_DAYS,
   });
@@ -204,6 +223,21 @@ async function computeDrift(hist: FeatureHist): Promise<DriftPayload> {
   }
   const recentSet = new Set(recent);
 
+  // AUDIT 137 B9 — serving v3-macro: nạp MacroContext cho đúng 30 phiên đo
+  // (loadMacroContexts trả entry MỌI ngày được hỏi — thiếu dữ liệu nguồn thì
+  // giá trị trung tính, features.ts N2; lỗi loader → null → đo 16 chiều).
+  let macroByDate: Map<string, MacroContext> | null = null;
+  if (featureSet === "v3-macro") {
+    try {
+      macroByDate = await loadMacroContexts(recent);
+    } catch (err) {
+      console.error(
+        "[api/ml/status] loadMacroContexts lỗi (drift v3-macro đo 16 chiều giá):",
+        err
+      );
+    }
+  }
+
   // Pooled samples: mỗi cặp (mã, phiên trong 30 cuối) đủ warmup = 1 mẫu raw.
   const perDim: number[][] = [];
   let samples = 0;
@@ -211,8 +245,18 @@ async function computeDrift(hist: FeatureHist): Promise<DriftPayload> {
     if (s.closes.length < ML_WARMUP_BARS) continue;
     const roll = rollingFeatures(s.closes, s.volumes);
     for (let t = ML_WARMUP_BARS - 1; t < s.closes.length; t++) {
-      if (!recentSet.has(s.bars[t].date.toISOString().slice(0, 10))) continue;
-      const x = featureAt(roll, t);
+      const dateStr = s.bars[t].date.toISOString().slice(0, 10);
+      if (!recentSet.has(dateStr)) continue;
+      // AUDIT 137 B9 — 24 chiều khi có macro context của đúng ngày đó; thiếu
+      // context (loader trả null entry — không xảy ra theo hợp đồng N2) → bỏ
+      // mẫu, KHÔNG trộn vector 16 chiều vào perDim 24 chiều.
+      let x: number[] | null;
+      if (macroByDate != null) {
+        const ctx = macroByDate.get(dateStr) ?? null;
+        x = ctx != null ? featureAt(roll, t, ctx) : null;
+      } else {
+        x = featureAt(roll, t);
+      }
       if (x == null) continue;
       samples++;
       for (let d = 0; d < x.length; d++) {
@@ -226,9 +270,17 @@ async function computeDrift(hist: FeatureHist): Promise<DriftPayload> {
     );
   }
 
-  // PSI từng chiều — số chiều theo edges.length (10 hôm nay · 16 sau B1).
+  // PSI từng chiều — số chiều theo edges.length (16 v2-lag16 · 24 v3-macro).
   const dims: DriftDim[] = [];
   const nDims = Math.min(hist.edges.length, perDim.length);
+  // AUDIT 137 B9 — đặc trưng sống thiếu chiều so histogram → khai báo trung
+  // thực thay vì cắt âm thầm (additive psiDimsNote — FE cũ bỏ qua).
+  const psiDimsNote =
+    perDim.length < hist.edges.length
+      ? `đo được ${perDim.length}/${hist.edges.length} chiều — ${
+          hist.edges.length - perDim.length
+        } chiều vĩ mô chưa giám sát drift (macro loader lỗi — audit 137 B9)`
+      : undefined;
   let maxPsi = 0;
   let maxDim = featureName(0);
   let retrainRecommended = false;
@@ -251,6 +303,7 @@ async function computeDrift(hist: FeatureHist): Promise<DriftPayload> {
     maxPsi,
     maxDim,
     retrainRecommended,
+    ...(psiDimsNote != null ? { psiDimsNote } : {}),
   };
 }
 
@@ -258,6 +311,8 @@ async function computeDrift(hist: FeatureHist): Promise<DriftPayload> {
  * Drift cho bản serving dl-mlp: chưa có featureHist → unavailable trung thực
  * (0 query thêm). Có → đo (TTL cache 15s keyed theo version+trainedAt —
  * train mới tự vô hiệu hoá cache). Lỗi đo nuốt thành reason (fail-soft §1.6).
+ * AUDIT 137 B9 — featureSet của bản serving (meta JSON) quyết định bộ đặc
+ * trưng sống dùng đo (v3-macro → 24 chiều gồm 8 chiều vĩ mô).
  */
 async function driftForServing(dlRow: {
   version: number;
@@ -267,6 +322,15 @@ async function driftForServing(dlRow: {
   if (!dlRow || !dlRow.meta) return driftUnavailable(DRIFT_NO_HISTOGRAM);
   const hist = parseFeatureHist(dlRow.meta);
   if (!hist) return driftUnavailable(DRIFT_NO_HISTOGRAM);
+  // AUDIT 137 B9 — featureSet bản serving (cùng cách đọc dlFeatureSet bên GET).
+  const servingFeatureSet = (() => {
+    try {
+      const m = JSON.parse(dlRow.meta!) as { featureSet?: unknown };
+      return typeof m.featureSet === "string" ? m.featureSet : "v1-lag10";
+    } catch {
+      return "v1-lag10";
+    }
+  })();
 
   const key = `${dlRow.version}:${dlRow.trainedAt.getTime()}`;
   const now = Date.now();
@@ -280,7 +344,7 @@ async function driftForServing(dlRow: {
 
   let value: DriftPayload;
   try {
-    value = await computeDrift(hist);
+    value = await computeDrift(hist, servingFeatureSet);
   } catch (err) {
     console.error("[api/ml/status] drift measurement failed:", err);
     value = driftUnavailable(

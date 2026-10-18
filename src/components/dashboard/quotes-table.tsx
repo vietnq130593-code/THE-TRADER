@@ -41,6 +41,11 @@ import {
 import type { QuoteRow, QuotesResponse, WatchlistResponse, WatchlistToggleResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+// AUDIT 137 D1 — polling fallback khi WebSocket gãy: nhịp làm mới ["quotes"]
+// khi realtimeConnected=false (WS market-engine chết). 30s = đủ mượt cho bảng
+// giá tham chiếu mà không đập /api/market/quotes; khi WS sống → false (tắt).
+const QUOTES_FALLBACK_POLL_MS = 30_000;
+
 /**
  * #110 M4.5.2 — props mới (optional, không phá cách dùng cũ):
  * bảng giá nhận rổ đang lọc từ card Đa rổ (state cục bộ market-workspace).
@@ -99,11 +104,17 @@ export function QuotesTable({
   const setQuotesExpanded = useUiStore((s) => s.setQuotesExpanded);
   // #110 M4.5.2 — EmptyState rổ tham chiếu: nút dẫn sang module Hội đồng
   const setActiveWorkspace = useUiStore((s) => s.setActiveWorkspace);
+  // AUDIT 137 D1 — WS chết ⇒ ["quotes"] không interval + focus-refetch tắt →
+  // bảng giá đóng băng vĩnh viễn. Polling fallback 30s CHỈ khi WS gãy
+  // (realtimeConnected=false) — zero tải thêm khi WS khỏe.
+  const realtimeConnected = useUiStore((s) => s.realtimeConnected);
 
   const quotesQuery = useQuery({
     queryKey: ["quotes"],
     queryFn: () => apiGet<QuotesResponse>("/api/market/quotes"),
     staleTime: 30_000,
+    // AUDIT 137 D1 — polling fallback khi WebSocket gãy
+    refetchInterval: realtimeConnected ? false : QUOTES_FALLBACK_POLL_MS,
   });
   const watchlistQuery = useQuery({
     queryKey: ["watchlist"],

@@ -40,6 +40,10 @@ import { cn } from "@/lib/utils";
 
 const TIMEFRAMES = [30, 60, 90] as const;
 
+// AUDIT 137 D1 — polling fallback khi WebSocket gãy: nhịp làm mới ["quotes"]
+// khi realtimeConnected=false (WS market-engine chết); khi WS sống → false.
+const QUOTES_FALLBACK_POLL_MS = 30_000;
+
 /**
  * PHASE3_BLUEPRINT §5.1 — RSI Wilder TỪNG PHIÊN (đồ thị chuỗi, không phải chỉ
  * giá trị cuối). Mô phỏng đúng ngữ nghĩa src/lib/indicators.ts `rsi()`:
@@ -134,11 +138,17 @@ export function PriceChart() {
   // cửa sổ biểu đồ theo NGUYÊN khoảng (API nâng trần 1.200 nến); tab 30/60/90N
   // tạm khoá để tránh 2 nguồn thật khiên nhau.
   const { dateRange, rangeQuery, rangeKey } = useDateRange();
+  // AUDIT 137 D1 — WS chết ⇒ ["quotes"] đóng băng (không interval, focus-refetch
+  // tắt) — thanh giá tham chiếu trên biểu đồ đứng im. Polling fallback 30s chỉ
+  // khi WS gãy; khi WS sống → false (zero tải thêm).
+  const realtimeConnected = useUiStore((s) => s.realtimeConnected);
 
   const { data: quotesData } = useQuery({
     queryKey: ["quotes"],
     queryFn: () => apiGet<QuotesResponse>("/api/market/quotes"),
     staleTime: 30_000,
+    // AUDIT 137 D1 — polling fallback khi WebSocket gãy
+    refetchInterval: realtimeConnected ? false : QUOTES_FALLBACK_POLL_MS,
   });
 
   // F-106-01 (fixbug #106) — đơn vị giá theo loại tài sản của MÃ ĐANG XEM:

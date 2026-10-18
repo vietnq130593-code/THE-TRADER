@@ -49,13 +49,16 @@ import {
 } from "@/lib/data-quality";
 import { liveIngestRegistry } from "@/lib/ingest-pipeline";
 import { dispatchDigest, retryPendingOutbox } from "@/lib/notify";
-import { MLP } from "@/lib/ml/nn";
+import { MLP, mlpArchString, parseMlpArch } from "@/lib/ml/nn";
 import { mlForecastEnsemble } from "@/lib/ml/ensemble";
-import { buildBasket, parseQTable, policyStance } from "@/lib/ml/rl";
+// AUDIT 137 A5 — RL_STATES_V2/BANDIT_ARM_CODES: số trạng thái/arm derive từ
+// nguồn sự thật (rl.ts/bandit.ts) thay vì hardcode "48"/"5" sai thực trạng.
+import { buildBasket, parseQTable, policyStance, RL_STATES_V2 } from "@/lib/ml/rl";
 import {
   banditSnapshot,
   pendingSettleCount,
   settlePendingRewards,
+  BANDIT_ARM_CODES,
 } from "@/lib/ml/bandit";
 // L1 (#83): thống kê RAG (corpus + RetrievalLog 30 ngày) cho A13.
 import { ragStats } from "@/lib/ml/rag";
@@ -180,9 +183,12 @@ async function portfolioSnapshot(): Promise<{
   // F-73R2-03: lọc positions theo tài khoản sống — không trộn vị thế tài khoản
   // khác/soft-delete vào NAV của A12 (filter JS theo id — giữ Promise.all,
   // không thêm truy vấn tuần tự; account trong where gây chicken-egg).
+  // AUDIT 137 A6 — fallback khi HẾT tài khoản paper là MẢNG RỐNG, không phải
+  // positionsAll: fallback cũ đưa vị thế sandbox vào NAV của A7/A8/A12 (mất
+  // kiểm dịch K1 §5.1) — trung thực "không có tài khoản paper" (NAV=0).
   const positions = account
     ? positionsAll.filter((p) => p.brokerAccountId === account.id)
-    : positionsAll;
+    : [];
   const rows = positions.map((p) => {
     const last = p.instrument.quotes[0]?.last ?? p.avgPrice;
     const mv = last * p.quantity;
@@ -1072,28 +1078,34 @@ async function runRlGym(): Promise<ServiceRunResult> {
       db.bar.count(),
     ]);
     return {
-      content: `Môi trường giả lập sẵn sàng: ${instrumentCount} mã · ${barCount.toLocaleString("vi-VN")} phiên lịch sử · 48 trạng thái (xu hướng × bucket RSI rổ × động lượng 5 phiên × phơi nhiễm) × 3 hành động (giảm/hold/tăng exposure ±0,5). Chưa có episode huấn luyện nào — Q-table trống, gym chờ lệnh từ RL Trainer (POST /api/ml/train target rl-q).`,
+      content: `Môi trường giả lập sẵn sàng: ${instrumentCount} mã · ${barCount.toLocaleString("vi-VN")} phiên lịch sử · ${RL_STATES_V2} trạng thái (khi đủ bit regime VNINDEX) hoặc 48 legacy (xu hướng × bucket RSI rổ × động lượng 5 phiên × phơi nhiễm) × 3 hành động (giảm/hold/tăng exposure ±0,5). Chưa có episode huấn luyện nào — Q-table trống, gym chờ lệnh từ RL Trainer (POST /api/ml/train target rl-q).`,
       reasoning: "Đếm Instrument/Bar làm độ phủ môi trường (chưa có MlModel rl-q).",
       sentiment: null,
-      output: { trained: false, instrumentCount, barCount, states: 48, actions: 3 },
+      output: { trained: false, instrumentCount, barCount, states: RL_STATES_V2, actions: 3 },
     };
   }
   const metrics = parseModelMetrics(model.metrics);
+  // AUDIT 137 A5 — số trạng thái THẬT từ metrics (QTrainResult.states);
+  // legacy không ghi field → 48 (bản trước F-13).
+  const rlStates = typeof metrics?.states === "number" ? (metrics.states as number) : 48;
   // Tổng episode mọi phiên bản kind rl-q (kể cả archived) — số thật tích luỹ
   const allVersions = await db.mlModel.findMany({
     where: { kind: "rl-q" },
-    select: { metrics: true },
+    select: { id: true, metrics: true },
   });
+  // AUDIT 137 A1 — đếm đúng 1 lần bản serving: trước fix so OBJECT IDENTITY
+  // (m !== metrics) luôn sai vì parseModelMetrics JSON.parse trả object mới
+  // mỗi lần gọi → episodes bản serving bị cộng KÉP (thổi số episode feed A16).
   let episodesTotal = typeof metrics?.episodes === "number" ? (metrics.episodes as number) : 0;
   for (const v of allVersions) {
     const m = parseModelMetrics(v.metrics);
-    if (m !== metrics && typeof m?.episodes === "number") episodesTotal += m.episodes as number;
+    if (v.id !== model.id && typeof m?.episodes === "number") episodesTotal += m.episodes as number;
   }
   const epsilonEnd = typeof metrics?.epsilonEnd === "number" ? metrics.epsilonEnd : null;
   const avgRewardLast50 =
     typeof metrics?.avgRewardLast50 === "number" ? metrics.avgRewardLast50 : null;
   return {
-    content: `Gym Q-learning 48 trạng thái × 3 hành động: đã chạy tổng cộng ${episodesTotal.toLocaleString("vi-VN")} episode qua ${allVersions.length} phiên bản (bản serving v${model.version}, train ${hoursAgo(model.trainedAt)}) — ε khám phá kết thúc ${epsilonEnd != null ? epsilonEnd.toFixed(2) : "—"}, phần thưởng trung bình 50 episode cuối ${avgRewardLast50 != null ? (avgRewardLast50 >= 0 ? "+" : "") + avgRewardLast50.toFixed(3) : "—"} mỗi episode (~230 bước, reward = exposure×lợi nhuận rổ − 0,1% phí điều chỉnh).`,
+    content: `Gym Q-learning ${rlStates} trạng thái × 3 hành động: đã chạy tổng cộng ${episodesTotal.toLocaleString("vi-VN")} episode qua ${allVersions.length} phiên bản (bản serving v${model.version}, train ${hoursAgo(model.trainedAt)}) — ε khám phá kết thúc ${epsilonEnd != null ? epsilonEnd.toFixed(2) : "—"}, phần thưởng trung bình 50 episode cuối ${avgRewardLast50 != null ? (avgRewardLast50 >= 0 ? "+" : "") + avgRewardLast50.toFixed(3) : "—"} mỗi episode (~230 bước, reward = exposure×lợi nhuận rổ − 0,1% phí điều chỉnh).`,
     reasoning: "Đọc MlModel rl-q serving + cộng dồn metrics.episodes mọi phiên bản.",
     sentiment: null,
     output: {
@@ -1103,7 +1115,7 @@ async function runRlGym(): Promise<ServiceRunResult> {
       episodesTotal,
       epsilonEnd,
       avgRewardLast50,
-      states: 48,
+      states: rlStates,
       actions: 3,
     },
   };
@@ -1114,10 +1126,10 @@ async function runRlPolicy(): Promise<ServiceRunResult> {
   const model = await servingModel("rl-q");
   if (!model) {
     return {
-      content: "Chính sách Q-learning chưa huấn luyện — Q-learning chưa có Q-table, khuyến nghị phơi nhiễm giữ mặc định 0,5. Tín hiệu chu kỳ vẫn do Chủ tịch Hội đồng (LLM) quyết định — dùng nút 'Huấn luyện mô hình' trong workspace Tổng hợp hoặc POST /api/ml/train (target rl-q) để nạp Q-table 48×3.",
+      content: `Chính sách Q-learning chưa huấn luyện — Q-learning chưa có Q-table, khuyến nghị phơi nhiễm giữ mặc định 0,5. Tín hiệu chu kỳ vẫn do Chủ tịch Hội đồng (LLM) quyết định — dùng nút 'Huấn luyện mô hình' trong workspace Tổng hợp hoặc POST /api/ml/train (target rl-q) để nạp Q-table ${RL_STATES_V2}×3 (hoặc 48×3 legacy).`,
       reasoning: "Không có MlModel kind rl-q serving.",
       sentiment: null,
-      output: { trained: false, policyVersion: null, states: 48, actions: 3, defaultExposure: 0.5 },
+      output: { trained: false, policyVersion: null, states: RL_STATES_V2, actions: 3, defaultExposure: 0.5 },
     };
   }
   const metrics = parseModelMetrics(model.metrics);
@@ -1165,8 +1177,25 @@ async function runDlTrainer(): Promise<ServiceRunResult> {
   const num = (k: string): number | null =>
     typeof metrics?.[k] === "number" ? (metrics[k] as number) : null;
   const topSymbols = Array.isArray(metrics?.topSymbols) ? (metrics.topSymbols as string[]) : [];
+  // AUDIT 137 A5 — arch THẬT từ weights JSON (pattern F-18B /api/ml/status
+  // #132 — dùng chung parser chuẩn nn.ts), KHÔNG hardcode "10→16→8→3"
+  // (sai thực trạng: serving v61 là 24-48-24-12-3 sau NAS champion C5).
+  // Fail-soft: weights/arch không parse được → "" (chuỗi rơi về "MLP v…").
+  let archStr = "";
+  try {
+    const w = JSON.parse(model.weights) as { arch?: unknown };
+    if (typeof w.arch === "string") archStr = mlpArchString(parseMlpArch(w.arch));
+  } catch {
+    archStr = "";
+  }
+  const archPart = archStr ? `${archStr} ` : "";
   let content: string;
-  let output: Record<string, unknown> = { hasModel: true, version: model.version, metrics };
+  let output: Record<string, unknown> = {
+    hasModel: true,
+    version: model.version,
+    archString: archStr || null,
+    metrics,
+  };
   let sentiment: ServiceRunResult["sentiment"] = null;
   try {
     const mlp = MLP.fromJSON(model.weights);
@@ -1178,7 +1207,7 @@ async function runDlTrainer(): Promise<ServiceRunResult> {
       const diff = avgUp - avgDown;
       const lean =
         diff > 0.05 ? "nghiêng TĂNG" : diff < -0.05 ? "nghiêng GIẢM" : "đi ngang/chưa tách bạch";
-      content = `Mạng MLP 10→16→8→3 v${model.version} đang phục vụ (train ${hoursAgo(model.trainedAt)}): ${num("samples")?.toLocaleString("vi-VN") ?? "—"} mẫu · ${num("epochs") ?? "—"} epoch · chính xác kiểm định ${num("valAcc") != null ? ((num("valAcc") as number) * 100).toFixed(1) + "%" : "—"} · mất mát kiểm định ${num("valLoss")?.toFixed(3) ?? "—"}. Mã đóng góp mạnh: ${topSymbols.slice(0, 5).join(", ") || "—"}. Dự đoán hiện tại trên ${preds.length} mã thanh khoản nhất: p(tăng) ${(avgUp * 100).toFixed(1)}% / p(giảm) ${(avgDown * 100).toFixed(1)}% — mô hình ${lean}.`;
+      content = `Mạng MLP ${archPart}v${model.version} đang phục vụ (train ${hoursAgo(model.trainedAt)}): ${num("samples")?.toLocaleString("vi-VN") ?? "—"} mẫu · ${num("epochs") ?? "—"} epoch · chính xác kiểm định ${num("valAcc") != null ? ((num("valAcc") as number) * 100).toFixed(1) + "%" : "—"} · mất mát kiểm định ${num("valLoss")?.toFixed(3) ?? "—"}. Mã đóng góp mạnh: ${topSymbols.slice(0, 5).join(", ") || "—"}. Dự đoán hiện tại trên ${preds.length} mã thanh khoản nhất: p(tăng) ${(avgUp * 100).toFixed(1)}% / p(giảm) ${(avgDown * 100).toFixed(1)}% — mô hình ${lean}.`;
       sentiment = diff > 0.05 ? "bullish" : diff < -0.05 ? "bearish" : "neutral";
       output = {
         ...output,
@@ -1198,7 +1227,7 @@ async function runDlTrainer(): Promise<ServiceRunResult> {
         output,
       };
     }
-    content = `Mạng MLP 10→16→8→3 v${model.version} đang phục vụ (train ${hoursAgo(model.trainedAt)}): ${num("samples")?.toLocaleString("vi-VN") ?? "—"} mẫu · ${num("epochs") ?? "—"} epoch · chính xác kiểm định ${num("valAcc") != null ? ((num("valAcc") as number) * 100).toFixed(1) + "%" : "—"}. Mã đóng góp mạnh: ${topSymbols.slice(0, 5).join(", ") || "—"}. Chưa đủ dữ liệu phiên cuối để dự đoán serving.`;
+    content = `Mạng MLP ${archPart}v${model.version} đang phục vụ (train ${hoursAgo(model.trainedAt)}): ${num("samples")?.toLocaleString("vi-VN") ?? "—"} mẫu · ${num("epochs") ?? "—"} epoch · chính xác kiểm định ${num("valAcc") != null ? ((num("valAcc") as number) * 100).toFixed(1) + "%" : "—"}. Mã đóng góp mạnh: ${topSymbols.slice(0, 5).join(", ") || "—"}. Chưa đủ dữ liệu phiên cuối để dự đoán serving.`;
   } catch {
     content = `Mạng MLP v${model.version} (train ${hoursAgo(model.trainedAt)}) không nạp được trọng số từ kho — cần huấn luyện lại qua POST /api/ml/train (target dl-mlp).`;
   }
@@ -1293,8 +1322,12 @@ async function runModelRegistry(): Promise<ServiceRunResult> {
     });
   }
   if (rl) {
+    // AUDIT 137 A5 — số trạng thái thật từ metrics (không hardcode 48).
+    const rlMetrics = parseModelMetrics(rl.metrics);
+    const rlStates =
+      typeof rlMetrics?.states === "number" ? (rlMetrics.states as number) : 48;
     models.push({
-      name: "Chính sách Q-learning 48×3 (rl-policy)",
+      name: `Chính sách Q-learning ${rlStates}×3 (rl-policy)`,
       provider: "deterministic",
       status: "serving",
       version: `v${rl.version}`,
@@ -1312,7 +1345,7 @@ async function runModelRegistry(): Promise<ServiceRunResult> {
   ].join(" · ");
 
   return {
-    content: `Sổ đăng ký ${models.length} mô hình đang phục vụ: LLM backbone ${llm.model} (${llm.provider}${llm.free ? ", free-tier" : ""}) · chỉ báo kỹ thuật indicators-v1 (production) · dự báo momentum tuyến tính linreg-v0 (serving) · ${mlPart}. Bandit Thompson sampling 5 arm chạy kèm bộ tổng hợp Bayes (không phải model riêng).`,
+    content: `Sổ đăng ký ${models.length} mô hình đang phục vụ: LLM backbone ${llm.model} (${llm.provider}${llm.free ? ", free-tier" : ""}) · chỉ báo kỹ thuật indicators-v1 (production) · dự báo momentum tuyến tính linreg-v0 (serving) · ${mlPart}. Bandit Thompson sampling ${BANDIT_ARM_CODES.length} arm chạy kèm bộ tổng hợp Bayes (không phải model riêng).`,
     reasoning: "llmStatus() + findMany MlModel status serving (động theo kho thật).",
     sentiment: null,
     output: { models, registryVersion: "2026.1-ml" },

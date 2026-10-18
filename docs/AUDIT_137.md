@@ -106,3 +106,24 @@
 
 ---
 *Audit read-only: 0 file sản phẩm bị sửa trong quá trình rà soát. Báo cáo này + 4 phụ lục là sản phẩm của Task 137.*
+
+## 8. TRIỂN KHAI LỘ TRÌNH (Task 138 — F-23, cùng ngày)
+
+**P0 — World-context risk/exec (138-a) — XONG:**
+- C1 engine.ts + scenario.ts: account paper nạp trước (`accountType != sandbox` + orderBy) → positions theo account; hết paper → 0 vị thế → proxy mode. **Reset `risk-quant-limits` về prior Beta(1,99) (đã nhiễm α:10 β:128) + ack 3 alert EXEC_RECONCILE_MISMATCH giả** (scripts/p137-reset-risk-prior.ts — AuditLog RISK_QUANT_LIMITS_RESET).
+- C2 reconciliation lọc Trade theo `order.brokerAccount.accountType` · C3 committed lọc lệnh PENDING · C5 resetPaperWorld gọi resetReconcileCheckpoint (REV-12) · C7 prune CashSnapshot theo brokerAccountId · C10 KPI/anomaly world filter + slippage giữ 100 mẫu GẦN NHẤT theo thời gian.
+- **Verify script PASS toàn bộ (scripts/p137-verify-world.ts):** runRiskQuantEngine → nav=0 ≠ 29.720.000, proxy=true, topPosPct null · runReconciliation → BALANCED, tradesCount=0 · committedBuyingPower=0 ≠ −3.385.070.
+- A6 fallback positions `[]` · A1 đếm episodes theo `v.id` · A5 broadcast derive arch thật (24-48-24-12-3) + states 96 + 7 arm từ BANDIT_ARM_CODES.length.
+
+**P1 — ML hygiene (138-b) — XONG:**
+- B1 `standardize(X, {nTrain})` — mean/std chỉ trên train split, 3 call-site (dl-mlp · macro-mlp · dl-mtl) khớp công thức cut nn.ts; tự kiểm ví dụ nhỏ PASS. **valAcc từ train kế tiếp sẽ nhạt hơn số cũ (trung thực, không phải sa sút).**
+- B2 rl.ts thiếu ngoặc vá + **retrain rl-q v16 serving: Q-table 96×3, 66/96 hàng được cập nhật (trước vá tối đa 36)** — scripts/p137-verify-rl-states.ts chặn tái diễn.
+- B3 PIT basket `< wk` · B5 calibration gate holdout nửa-đầu/nửa-sau (PAV hết tự pass) · B6 macro reserve 60 phiên cuối + cờ brier60Holdout · B8 một biên nTrainSplit thay cut 0,8 cứng · B9 PSI giám sát đủ 24 chiều v3-macro (phát hiện sống: max PSI 27,6 ΔUS10Y) · A2 cửa sổ reward bandit theo mốc giờ-chốt ICT (mô phỏng PASS 2 nhánh) · B10/B11/B13 dọn vặt · B7 khoá dl-mtl (400 + banner) · B4 docs selection bias §4.4.1.
+
+**P2+P3 — Fail-safe + Realtime (138-c) — XONG:**
+- A3 VETO fail-closed: control agent lỗi → hạ GIỮ + Chủ tịch/digest/Bayes thấy nhãn "chưa kiểm định" · A4 heartbeat 7 điểm sau mỗi wave (watchdog 5' chỉ dọn chu kỳ chết im) · A8 claim chu kỳ điều kiện `status != RUNNING` + count → 409.
+- C4 min-lot: rawQty < 100 → 400 "nhỏ hơn 1 lot" (hết lệnh 22,6% NAV) · C11 gate null chặn cả 2 đường (đồng bộ fail-safe) · A7 wouldBlockRate tử/mẫu cùng cửa sổ + lọc source cycle.
+- D3 error.tsx + global-error.tsx (trước đó 0 boundary) · D1 polling fallback 30s cho ["quotes"] khi WS chết + tooltip trung thực · D4 wiring 8 sự kiện WS → invalidate queryKey tồn tại · D7 guard scheduler trùng bun --hot · D2 serialize path-based (DAG hết "[Circular]" giả — verify 7 ca).
+- Còn: D5 (cold-load flash), D6 (engine CORS) — LOW, giữ nguyên có chủ ý (sandbox); xem phụ lục D.
+
+**DEFER có chủ ý (ghi rõ để không thất lạc):** B4 walk-forward sweep đầy đủ (đã có docs §4.4.1 + ΔBrier paired CI bộ phận) · B12 `@@unique([kind,version])` (cần migration) · B14 (cold-start, latent) · C8/C9 (bộc lộ khi có partial fill / đa process) · B7 viết lại head dl-mtl (khi cần dl-mtl). Lưu ý vận hành: sau B1, cổng sweep điều kiện 1 so valAcc mới (trung thực) với serving v73 (đo dưới chuẩn cũ) → thiên hướng bảo thủ, không promote sai; train Chủ nhật 04:00 tự viết lại baseline. Khuyến nghị chủ sở hữu: retrain macro-mlp (POST /api/ml/macro-forecast {"train":true}) để Brier60 trung thực hóa; cân nhắc purge RiskQuantSnapshot cũ nav=29,72tr (Beta dd học tiếp trên snapshot nhiễm ~66 ngày còn lại trong cửa sổ 400).

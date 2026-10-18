@@ -141,13 +141,23 @@ export async function maybeAutoEnableConsensus(): Promise<{
   });
   // Thống kê tỉ lệ "đã-sẽ-chặn" trong các chu kỳ shadow (review sau khi bật)
   let wouldBlock = 0;
+  // AUDIT 137 A7 — wouldBlockRate sai mẫu: tử số đếm trên ≤200 rows gần nhất
+  // nhưng mẫu số (shadowCycles) là count() VÔ HẠN + gộp cả assessment manual
+  // (POST /api/assessment/synthesize cũng ghi detail.consensus) → khi tổng
+  // chu kỳ > 200, tỉ lệ bị chặn ceiling 200/total (400 chu kỳ 100% chặn →
+  // báo 50%). Sửa semantics: CHỈ đếm assessment source "cycle" (đúng nghĩa
+  // "chu kỳ") và tử/mẫu CÙNG CỬA SỔ — wouldBlock / rows.length (≤200 chu kỳ
+  // cycle mới nhất). shadowCycles giữ nguyên vai trò cũ (đếm tổng cho gate
+  // autoEnableAfter).
+  let scannedRows = 0;
   try {
     const rows = await db.marketAssessment.findMany({
-      where: { detail: { contains: `"consensus":{` } },
+      where: { detail: { contains: `"consensus":{` }, source: "cycle" },
       select: { detail: true },
       take: 200,
       orderBy: { createdAt: "desc" },
     });
+    scannedRows = rows.length;
     for (const r of rows) {
       const parsed = JSON.parse(r.detail) as { consensus?: { wouldBlock?: boolean } };
       if (parsed.consensus?.wouldBlock === true) wouldBlock++;
@@ -155,7 +165,7 @@ export async function maybeAutoEnableConsensus(): Promise<{
   } catch {
     // thống kê tốt-to-have — không chặn luồng bật
   }
-  const wouldBlockRate = shadowCycles > 0 ? wouldBlock / shadowCycles : 0;
+  const wouldBlockRate = scannedRows > 0 ? wouldBlock / scannedRows : 0;
   return {
     enabled: true,
     shadowCycles,

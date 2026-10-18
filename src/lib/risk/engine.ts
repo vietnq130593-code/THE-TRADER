@@ -386,10 +386,23 @@ export async function runRiskQuantEngine(): Promise<RiskQuantResult> {
   // các agent ml khác đã ensureArms trong chu kỳ); (c) rổ proxy top-10
   // cắt sinceDays 800 (~500 phiên — đủ train CRB-6, đừa 30k dòng full-history).
   const posBarCutoff = new Date(Date.now() - 420 * 86_400_000);
-  const [positionRows, account, snapshotRows, limitsBefore, banditArms] = await Promise.all([
+  // AUDIT 137 C1 — world-context paper: P0 quarantine §5.1 — engine phải đo
+  // THẾ GIỚI PAPER, không gộp vị thế sandbox (positions mọi tài khoản + cash
+  // 1 tài khoản tuỳ ý → NAV/VaR/HHI/ngưỡng VETO chạy trên danh mục sandbox).
+  // Nạp tài khoản paper TRƯỚC (accountType != sandbox, orderBy cố định như
+  // orders/portfolio route); hết tài khoản paper → 0 vị thế (thế giới trống →
+  // proxy mode như thiết kế §0.4), KHÔNG lọt sandbox.
+  const account = await db.brokerAccount
+    .findFirst({
+      where: { deletedAt: null, accountType: { not: "sandbox" } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, cashBalance: true, marginUsed: true },
+    })
+    .catch(() => null);
+  const [positionRows, snapshotRows, limitsBefore, banditArms] = await Promise.all([
     db.position
       .findMany({
-        where: { status: "OPEN" },
+        where: { status: "OPEN", brokerAccountId: account?.id ?? "__no_paper_account__" },
         select: {
           quantity: true,
           avgPrice: true,
@@ -404,9 +417,6 @@ export async function runRiskQuantEngine(): Promise<RiskQuantResult> {
         },
       })
       .catch(() => []),
-    db.brokerAccount
-      .findFirst({ where: { deletedAt: null }, select: { cashBalance: true, marginUsed: true } })
-      .catch(() => null),
     db.riskQuantSnapshot
       .findMany({
         orderBy: { createdAt: "desc" },

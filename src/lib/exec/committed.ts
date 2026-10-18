@@ -77,11 +77,16 @@ export async function computeCommittedCashView(
   const signalCommittedBuy = activeBuySignals * input.equity * POSITION_SIZE_PCT;
 
   // ── Lệnh PENDING/PARTIALLY_FILLED — cam kết THẬT (REV-1) ──
+  // AUDIT 137 C3 — world-context paper: caller (portfolioSnapshot/kpi route)
+  // truyền cash/equity của tài khoản non-sandbox → lệnh PENDING của thế giới
+  // sandbox KHÔNG được đếm vào cam kết sức mua của paper (K1 #87 §5.1; 1 lệnh
+  // sandbox từng làm committedBuyingPower paper = −3.385.070 ₫ sai).
   const pendingOrders = await db.order.findMany({
     where: {
       status: { in: ["PENDING", "PARTIALLY_FILLED"] },
       price: { not: null },
       brokerAccountId: { not: null },
+      brokerAccount: { accountType: { not: "sandbox" } },
     },
     select: { side: true, quantity: true, filledQuantity: true, price: true },
   });

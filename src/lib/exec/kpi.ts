@@ -93,8 +93,16 @@ export async function computeExecKpi(days = 30): Promise<ExecKpi> {
       where: { createdAt: { gte: from, lt: to } },
       select: { id: true, direction: true, status: true },
     }),
+    // AUDIT 137 C10 — world-context paper: KPI "Điều hành" đo thế giới paper
+    // (route exec/kpi lọc tài khoản paper cho forecast) — lệnh sandbox không
+    // vào funnel/AOV/slippage. orderBy createdAt asc để slippage lấy được
+    // "100 mẫu gần nhất" theo thời gian (xem dưới).
     db.order.findMany({
-      where: { createdAt: { gte: from, lt: to } },
+      where: {
+        createdAt: { gte: from, lt: to },
+        brokerAccount: { accountType: { not: "sandbox" } },
+      },
+      orderBy: { createdAt: "asc" },
       select: {
         status: true,
         quantity: true,
@@ -158,20 +166,26 @@ export async function computeExecKpi(days = 30): Promise<ExecKpi> {
 
   // Slippage: lệch giá khớp vs giá đặt của lệnh FILLED (engine LIMIT khớp tại
   // giá đặt → thường 0; khác 0 = dấu bất thường đáng nhìn [DA D5/D8])
-  const slipSamples = ordersFilled
+  // AUDIT 137 C10 — "100 điểm gần nhất": giữ 100 mẫu MỚI NHẤT theo thời gian
+  // TRƯỚC (orders đã orderBy createdAt asc) rồi mới sort GIÁ TRỊ. Trước fix:
+  // sort tăng dần rồi slice(-100) lấy 100 giá trị LỚN NHẤT (đuôi trên phân
+  // phối) — box-plot/strip UI vẽ trên mẫu lệch, ngược comment "gần nhất".
+  const slipAll = ordersFilled
     .filter((o) => o.price != null && o.avgFillPrice != null && o.price > 0)
     .map((o) => Math.round(((o.avgFillPrice! - o.price!) / o.price!) * 10000) / 100);
-  slipSamples.sort((a, b) => a - b);
+  const slipRecent = slipAll.slice(-100); // 100 mẫu gần nhất theo thời gian
+  slipAll.sort((a, b) => a - b); // sort giá trị (toàn bộ — quantile như cũ)
+  slipRecent.sort((a, b) => a - b); // sort giá trị cho box plot UI
   const slippage: ExecKpiSlippage | null =
-    slipSamples.length > 0
+    slipAll.length > 0
       ? {
-          n: slipSamples.length,
-          minPct: slipSamples[0],
-          p25Pct: Math.round(quantile(slipSamples, 0.25) * 100) / 100,
-          medianPct: Math.round(quantile(slipSamples, 0.5) * 100) / 100,
-          p75Pct: Math.round(quantile(slipSamples, 0.75) * 100) / 100,
-          maxPct: slipSamples[slipSamples.length - 1],
-          valuesPct: slipSamples.slice(-100),
+          n: slipAll.length,
+          minPct: slipAll[0],
+          p25Pct: Math.round(quantile(slipAll, 0.25) * 100) / 100,
+          medianPct: Math.round(quantile(slipAll, 0.5) * 100) / 100,
+          p75Pct: Math.round(quantile(slipAll, 0.75) * 100) / 100,
+          maxPct: slipAll[slipAll.length - 1],
+          valuesPct: slipRecent,
         }
       : null;
 
