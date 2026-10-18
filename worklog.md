@@ -4475,3 +4475,26 @@ Stage Summary:
 - **UI giờ tự giải thích:** 3 nơi (tab Mạng thần kinh / Học máy / Tự động tìm kiếm) đều hiện arch serving "ANN 10-16-8-3" từ cùng một nguồn sự thật (weights JSON) + dải đối chiếu serving↔draft nói rõ khi nào hội tụ — khoảng trống "hai phần khác nhau mà không ai giải thích" đã bịt.
 - Sản phẩm: 6 file sửa (status route · sweep route · 2 hook · nn-tab · mlp-block · sweep-tab) · additive field archString tương thích FE cũ · 0 break change.
 - Push commit "132: F-18B ..." lên origin/main.
+
+---
+Task ID: 133
+Agent: main-orchestrator (Z.ai Code)
+Task: F-19 SAMPLE-CALIBRATED PARAM CAP — trả lời câu hỏi chủ sở hữu "'thắng vì to' thì có làm sao, chính xác hơn mà to thì áp dụng đi" + kiểm tra sandbox có bản mới nhất
+
+Work Log:
+- Xác minh phiên bản: HEAD 6526170 (commit 132) == origin/main — sandbox LÀ bản mới nhất; đợt sweep mới nhất 2026-10-17 21:22 UTC chạy SAU commit cuối (dữ liệu sống, không phải code cũ)
+- Truy vấn DB Supabase đối chứng số liệu thật: serving v8 valAcc 39,42% (chủ sở hữu đọc 38,9%) · champion C5 (sweep f2vzdd) arch 24-48-24-12-3, valAcc 42,88%, brier 0,6286, paramCount 2.715, featureSet v3-macro — C5 pass Điều kiện 1 (valAcc +δ) + Điều kiện 2 (ΔBrier CI95 [−0,0195;−0,0141] < 0) + Điều kiện 4 (windowHash), CHỈ bị chặn Điều kiện 3 (2.715 > cap 678 = 2 × 339 serving) — đúng như chủ sở hữu nghi ngờ
+- Phân tích thống kê: serving train trên 60.000 mẫu (meta PIT) → nTrain 48.000, val 12.000 — gap valAcc 3,46 điểm % ≈ 7,7σ (ngoài nhiễu); 2.715 tham số / 48.000 mẫu = 17,7 mẫu/tham số (trong quy tắc cổ điển 10–20) — mô hình KHÔNG "to" so với dữ liệu; cap 2× serving (678) hiệu chỉnh cho chế độ dữ liệu nhỏ không tồn tại ở đây → chủ sở hữu ĐÚNG
+- Sửa sweep.ts: cap Điều kiện 3 = max(hệ số × tham số serving; ⌊nTrain ÷ 15⌋) — MIN_SAMPLES_PER_PARAM = 15 (bảo thủ); ChampionGateParams thêm nTrain; thông điệp fail giải thích cap nào bị vượt; nTrain 0 → giữ nguyên hành vi cũ (verify script tương thích)
+- Cập nhật scripts/ml-sweep-verify.ts (5 call site + base thêm nTrain: 0 — ngữ nghĩa cũ) — chạy 15/15 PASS hermetic
+- Cập nhật UI sweep-tab.tsx (hint "Hệ số cap tham số" + card Cổng 4 điều kiện: cap = max(hệ số × serving; nTrain ÷ 15) + ví dụ kho 60k mẫu cap 3.200) + docs/ML_AUTOML_BLUEPRINT.md §4.4
+- Fix kèm 1 lỗi hiển thị phát hiện khi verify: quick-read.tsx badge "đặc trưng vào" ưu tiên features.count tĩnh 16 (bộ mặc định) thay vì chiều vào thật của serving — đổi sang mlp.arch.in → hiển thị "24 đặc trưng vào" đúng v3-macro
+- bun run lint sạch; npx tsc --noEmit chỉ còn lỗi có sẵn (skills/ + script cũ BigInt, không liên quan thay đổi)
+- Chạy lại đợt sweep POST /api/ml/sweep {force: true, featureSet: "v3-macro"} — deterministic tái hiện C5 y hệt từng số (valAcc 0,4288 · score 0,4388 · 374 giây) → CỔNG PASS → swapped: true → serving v8 → v61 (24-48-24-12-3) + tuningSync synced (arch + hyper + seed 20261012 + v3-macro xuống AppSetting ml-tuning, marker nasSync C5)
+- Xác minh DB sau swap: MlModel serving v61 valAcc 0,4288 arch 24-48-24-12-3 · ml-tuning.mlp hidden [48,24,12] relu×3 lr 0,01 60 epoch batch 32 · nasSync {tag C5, modelVersion 61} · AuditLog ML_SWEEP_SWAP + ML_SWEEP_SYNC_TUNING
+- Browser E2E (agent-browser): Champion board "C5 — đã hoán đổi sang serving (qua cổng 4 điều kiện) — điểm 0,44 · valAcc 42,9%" · Bench serving ANN 24-48-24-12-3 42,9% · tab Mạng thần kinh: banner "Thiết lập này do NAS cập nhật tự động — 11:37 18-10 · Champion C5 (arch 24-48-24-12-3) — bản v61 đang serving" + trình chỉnh sửa 48/24/12 + sơ đồ trọng số thật v61 + "24 đặc trưng vào" · tab Học máy: MLP serving v61 (v3-macro) valAcc 42,9% · ML dự báo 5 phiên ANN 24-48-24-12-3 · mobile 390px OK · 0 console/page error · screenshot /tmp/p133-*.png
+
+Stage Summary:
+- TRẢ LỜI: sandbox = bản mới nhất; "thắng vì to" là lính gác hiệu chỉnh cho dữ liệu nhỏ — với kho 60k mẫu thì chặn C5 (2.715 tham số, thắng ý nghĩa thống kê cả valAcc lẫn ΔBrier CI95) là SAI MÚC, đã vá theo hướng chủ sở hữu yêu cầu
+- F-19: cap tham số giờ scale theo dữ liệu (nTrain/15) — mô hình to được áp dụng khi dữ liệu đủ lớn chứng minh; dữ liệu nhỏ vẫn bị kẹp (nTrain 5.000 → cap 333); ứng viên 3.931 tham số của đợt trước vẫn bị chặn (cap 3.200) — lính gác còn răng
+- C5 ĐÃ ĐƯỢC ÁP DỤNG THẬT: serving v61 (24-48-24-12-3, valAcc 42,9% so với 39,4% của v8) + tab Mạng thần kinh tự cập nhật đúng arch/hyper/featureSet của champion (F-18 auto-promote hoạt động end-to-end) — chuỗi Champion board → serving → ML dự báo 5 phiên → trình chỉnh sửa ANN giờ đồng bộ một số duy nhất 24-48-24-12-3

@@ -196,6 +196,7 @@ async function main() {
     championParamCount: 800,
     servingParamCount: 747,
     maxParamFactor: 2,
+    nTrain: 0, // F-19 #133: 0 → bỏ nhánh sample-cap, giữ ngữ nghĩa cap hệ số cũ
   });
   if (!pass.pass || pass.reasons.length !== 0) {
     fail("T7", `phải pass rỗng reasons — nhận pass=${pass.pass} reasons=[${pass.reasons.join("; ")}]`);
@@ -212,6 +213,7 @@ async function main() {
     championParamCount: 800,
     servingParamCount: 747,
     maxParamFactor: 2,
+    nTrain: 0, // F-19 #133: cap hệ số cũ (không nhánh mẫu)
   };
   const g1 = championGateCheck({ ...base, championValAcc: 0.395 }); // 0,395 < 0,39+0,01
   if (g1.pass || !g1.reasons.some((r) => r.includes("Điều kiện 1"))) {
@@ -243,6 +245,7 @@ async function main() {
     championParamCount: 9500, // ≤ 2 × 5.000 = 10.000
     servingParamCount: null,
     maxParamFactor: 2,
+    nTrain: 0,
   });
   if (!cleanPass.pass) {
     fail("T9", `DB sạch phải pass với default — [${cleanPass.reasons.join("; ")}]`);
@@ -256,6 +259,7 @@ async function main() {
     championParamCount: 9500,
     servingParamCount: null,
     maxParamFactor: 2,
+    nTrain: 0,
   });
   if (cleanFail.pass || !cleanFail.reasons.some((r) => r.includes("Điều kiện 1"))) {
     fail("T9", `valAcc 0,34 < 1/3 + δ phải fail đk1 — [${cleanFail.reasons.join("; ")}]`);
@@ -269,6 +273,7 @@ async function main() {
     championParamCount: 10001, // > 2 × 5.000
     servingParamCount: null,
     maxParamFactor: 2,
+    nTrain: 0,
   });
   if (capFail.pass || !capFail.reasons.some((r) => r.includes("10.000") || r.includes("10000"))) {
     fail("T9", `cap 2 × 5.000 = 10.000 phải được nêu — [${capFail.reasons.join("; ")}]`);

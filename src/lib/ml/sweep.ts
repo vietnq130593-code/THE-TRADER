@@ -12,8 +12,11 @@
  *   (1) valAcc_champ ≥ valAcc_serving + δ (serving null → baseline 1/3);
  *   (2) ΔBrier paired bootstrap CI95 hoàn toàn < 0 (serving null → baseline
  *       uniform 0,667 — F4);
- *   (3) paramCount_champ ≤ maxParamFactor × paramCount_serving (serving null
- *       → cap maxParamFactor × paramWarnThreshold — F4);
+ *   (3) paramCount_champ ≤ max(maxParamFactor × paramCount_serving,
+ *       ⌊nTrain / MIN_SAMPLES_PER_PARAM⌋) — cap hiệu chỉnh theo MẨU DỮ LIỆU
+ *       (F-19 #133): dữ liệu lớn đủ chứng minh cho mô hình lớn; dữ liệu nhỏ
+ *       vẫn bị kẹp bởi cap hệ số (serving null → cap maxParamFactor ×
+ *       paramWarnThreshold — F4);
  *   (4) skip-guard windowHash như A4 — áp LUÔN cho mọi đợt (F8, xử TRƯỚC
  *       khi tạo hàng SweepRun — không có bar mới = không có gì mới để tìm).
  *
@@ -72,7 +75,8 @@ export interface SweepConfig {
   seed: number;
   /** δ swap điều kiện 1 (điểm valAcc champion phải vượt serving). */
   deltaSwap: number;
-  /** Hệ số cap tham số điều kiện 3 (chống "thắng vì to"). */
+  /** Hệ số cap tham số điều kiện 3 (chống "thắng vì to" khi dữ liệu nhỏ —
+   *  F-19 #133: cap thực = max(hệ số này × serving, nTrain ÷ 15)). */
   maxParamFactor: number;
   /** Mốc đợt sweep gần nhất chạy xong (ISO) — hiển thị UI. */
   lastRunAt: string | null;
@@ -564,6 +568,9 @@ export interface ChampionGateParams {
   /** null = DB sạch → cap maxParamFactor × paramWarnThreshold (F4). */
   servingParamCount: number | null;
   maxParamFactor: number;
+  /** F-19 (#133): số mẫu TRAIN của đợt — cơ sở cap theo dữ liệu (0 → bỏ
+   *  nhánh sample-cap, giữ nguyên hành vi cap hệ số cũ). */
+  nTrain: number;
 }
 
 export interface ChampionGateResult {
@@ -595,6 +602,18 @@ function fmtViFactor(n: number): string {
   return String(n).replace(".", ",");
 }
 
+/**
+ * F-19 (#133) — MIN_SAMPLES_PER_PARAM: quy tắc thống kê cổ điển (10–20 mẫu
+ * cho mỗi tham số) — lấy đầu bảo thủ 15. nTrain 48.000 mẫu → cap 3.200
+ * tham số: mô hình 24-48-24-12-3 (2.715 tham số, valAcc +3,5 điểm %, ΔBrier
+ * CI95 < 0) được phép áp dụng vì DỮ LIỆU đủ lớn chứng minh cho nó. Chỉ khi
+ * mẫu ít (nTrain 5.000 → cap 333) cap mới kẹp chặt — đúng lúc mô hình to
+ * có nguy cơ học vẹt val block (winner's curse). 
+ * Cap thực tế = max(cap hệ số, cap mẫu) — hai lính gác độc lập, tha cái
+ * được dữ liệu chứng minh, chặn cái dữ liệu không nuôi nổi.
+ */
+export const MIN_SAMPLES_PER_PARAM = 15;
+
 export function championGateCheck(p: ChampionGateParams): ChampionGateResult {
   const reasons: string[] = [];
   const baselineValAcc = p.servingValAcc ?? 1 / 3;
@@ -608,10 +627,17 @@ export function championGateCheck(p: ChampionGateParams): ChampionGateResult {
       `Điều kiện 2 — ΔBrier CI 95% [${fmtVi(p.deltaBrierCiLow, 4)}; ${fmtVi(p.deltaBrierCiHigh, 4)}] không hoàn toàn < 0 (champion chưa thắng có ý nghĩa thống kê)`
     );
   }
-  const paramCap = p.maxParamFactor * (p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold);
+  // F-19 (#133): cap hiệu chỉnh theo dữ liệu — max(cap hệ số cũ, nTrain/15).
+  const factorCap = p.maxParamFactor * (p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold);
+  const sampleCap = p.nTrain > 0 ? Math.floor(p.nTrain / MIN_SAMPLES_PER_PARAM) : 0;
+  const paramCap = Math.max(factorCap, sampleCap);
   if (!(p.championParamCount <= paramCap)) {
+    const capExplain =
+      sampleCap > factorCap
+        ? `nTrain ${fmtVi(p.nTrain)} ÷ ${MIN_SAMPLES_PER_PARAM} mẫu/tham số`
+        : `${fmtViFactor(p.maxParamFactor)} × ${fmtVi(p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold)}`;
     reasons.push(
-      `Điều kiện 3 — ${fmtVi(p.championParamCount)} tham số vượt cap ${fmtVi(paramCap)} (= ${fmtViFactor(p.maxParamFactor)} × ${fmtVi(p.servingParamCount ?? MLP_ARCH_LIMITS.paramWarnThreshold)}) — chống "thắng vì to"`
+      `Điều kiện 3 — ${fmtVi(p.championParamCount)} tham số vượt cap ${fmtVi(paramCap)} (=${capExplain}) — chống "thắng vì to" khi dữ liệu không đủ mẫu nuôi mô hình`
     );
   }
   return { pass: reasons.length === 0, reasons };
@@ -1154,6 +1180,8 @@ export async function runSweepOnce(opts: {
         championParamCount: ce.entry.params ?? 0,
         servingParamCount,
         maxParamFactor: config.maxParamFactor,
+        // F-19 (#133): cap theo dữ liệu — chính tập đã train champion đợt này.
+        nTrain,
       });
 
       // (8) Cổng PASS → SWAP trong MỘT $transaction (updateMany serving →

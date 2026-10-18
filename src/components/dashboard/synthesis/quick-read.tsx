@@ -236,7 +236,10 @@ export function NetworkQuickRead() {
               status.data?.dlMlp?.metrics.valLoss != null
                 ? `loss xác thực ${nf2.format(status.data.dlMlp.metrics.valLoss)}`
                 : null,
-              `${nf0.format(arch.data?.features.count ?? mlp.arch.in)} đặc trưng vào`,
+              // F-19 (#133): chiều vào THẬT của bản serving (archString parse —
+              // v3-macro 24) — không dùng features.count tĩnh của bộ mặc định
+              // (16) khi champion v3-macro đang phục vụ (hai số lệch nhau).
+              `${nf0.format(mlp.arch.in || (arch.data?.features.count ?? 0))} đặc trưng vào`,
             ]}
           />
         </>

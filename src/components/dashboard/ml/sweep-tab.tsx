@@ -145,7 +145,7 @@ const CONFIG_FIELDS: FieldSpec[] = [
     max: 10,
     step: 0.5,
     integer: false,
-    hint: "Điều kiện 3: tham số champion ≤ hệ số × tham số serving (mặc định 2).",
+    hint: "Điều kiện 3: cap = max(hệ số × tham số serving; nTrain ÷ 15 mẫu/tham số) — dữ liệu lớn đủ chứng minh cho mô hình lớn.",
   },
 ];
 
@@ -798,8 +798,10 @@ export function SweepTab() {
           </p>
           <p>
             <span className="font-semibold text-foreground">Điều kiện 3</span> — số tham
-            số champion ≤ hệ số cap × tham số serving (chưa có serving → cap 2 ×
-            5.000) — chống &quot;thắng vì to&quot;.
+            số champion ≤ max(hệ số cap × tham số serving; nTrain ÷ 15 mẫu/tham
+            số) — chống &quot;thắng vì to&quot; chỉ khi dữ liệu không đủ mẫu nuôi mô
+            hình: kho 60.000 mẫu (nTrain 48.000) cấp cap 3.200 tham số, mô
+            hình to hơn vẫn bị chặn khi dữ liệu nhỏ.
           </p>
           <p>
             <span className="font-semibold text-foreground">Điều kiện 4</span> — skip-guard

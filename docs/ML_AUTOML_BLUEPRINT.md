@@ -223,7 +223,7 @@ Champion của đợt chỉ được **đề xuất swap** khi thoả MỌI đi�
 
 1. `valAcc_champion ≥ valAcc_serving + δ` với **δ = 0,01** (1 điểm % — vượt hẳn ngoài nhiễu 60k mẫu; kèm Wilson CI cho tỉ lệ — A2). **F4:** serving == null (DB sạch) → baseline = 1/3 (ngẫu nhiên);
 2. ΔBrier CI 95% hoàn toàn < 0 (bootstrap 1.000× — cùng phương pháp cổng B2). **F4:** serving == null → Brier baseline uniform 0,667;
-3. `paramCount ≤ maxParamFactor × paramCount_serving` (chống "thắng vì to" — mặc định maxParamFactor = 2). **F4:** serving == null → cap `2 × paramWarnThreshold` = 10.000;
+3. `paramCount ≤ max(maxParamFactor × paramCount_serving; ⌊nTrain / 15⌋)` (chống "thắng vì to" — mặc định maxParamFactor = 2). **F4:** serving == null → cap hệ số `2 × paramWarnThreshold` = 10.000. **F-19 (#133):** cap hiệu chỉnh theo mẫu dữ liệu — quy tắc cổ điển 10–20 mẫu/tham số, lấy bảo thủ 15: dữ liệu 60k mẫu (nTrain 48.000) cấp cap 3.200 tham số — mô hình lớn được áp dụng khi **dữ liệu đủ lớn chứng minh** cho nó (valAcc + ΔBrier CI95 đã bảo vệ ý nghĩa thống kê); dữ liệu nhỏ (nTrain 5.000 → cap 333) vẫn bị kẹp chặn;
 4. **F8:** skip-guard windowHash như A4 áp dụng LUÔN cho mọi đợt — cùng windowHash với đợt trước ⇒ không sweep lại (không có bar mới = không có gì mới để tìm).
 
 Không thoả → champion nằm lại bảng với nhãn *"không đủ vượt cổng"* — trung thực, không ép.
