@@ -9,7 +9,10 @@
     "lint": "eslint",
     "db:push": "env -u DATABASE_URL prisma db push",
     "db:generate": "env -u DATABASE_URL prisma generate",
-    "db:studio": "env -u DATABASE_URL prisma studio"
+    "db:studio": "env -u DATABASE_URL prisma studio",
+    "env:backup": "bun run scripts/env-crypt.ts encrypt",
+    "env:restore": "bun run scripts/env-crypt.ts decrypt",
+    "prepare": "bun run scripts/install-git-hooks.ts"
   },
   "dependencies": {
     "@prisma/client": "^6",

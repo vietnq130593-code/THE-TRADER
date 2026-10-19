@@ -41,10 +41,13 @@ logs/
 # dependencies (cả mini-services)
 node_modules/
 
-# env files — #113: TRACK .env theo yêu cầu chủ repo (khôi phục cấu hình Supabase tức thì sau sandbox reset);
-# vẫn ignore các biến thể khác (.env.local, .env.production, ...)
+# env files — #113 ĐÃ DỠ (Task 144 · P0): .env (plaintext secret) KHÔNG còn được
+# track — secret cũ nằm trong git history nên mọi key phải rotate (docs/SECURITY.md).
+# Khôi phục sau sandbox reset: bun run env:restore (giải mã .env.enc — được track).
+.env
 .env.*
 !.env.example
+!.env.enc
 
 # debug
 npm-debug.log*

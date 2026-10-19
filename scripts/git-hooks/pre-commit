@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# scripts/git-hooks/pre-commit (Task 144 · P0) — chặn .env plaintext vô tình
+# bị track lại sau khi #113 đã dỡ (secret từng nằm trong git history —
+# xem docs/SECURITY.md). Khôi phục cấu hình sau sandbox reset dùng
+# `bun run env:restore` (.env.enc mã hoá), KHÔNG phải commit .env.
+#
+# Chỉ chặn đúng `.env` (theo path root); .env.example / .env.enc được phép.
+
+if git diff --cached --name-only --diff-filter=ACMR | grep -qx '\.env'; then
+  echo "❌ [pre-commit] .env bị staged — secret plaintext KHÔNG được commit (Task 144 · docs/SECURITY.md)"
+  echo "   · Khôi phục sau sandbox reset: bun run env:restore"
+  echo "   · Nếu THẬT SỰ muốn track lại (không khuyến khích): git commit --no-verify"
+  exit 1
+fi
+exit 0
