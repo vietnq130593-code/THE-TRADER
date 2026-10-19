@@ -4947,3 +4947,23 @@ Stage Summary:
 - Sản phẩm: `public/cv/cv-nguyen-quoc-viet-vi.pdf` (46,5 KB) + `public/cv/cv-nguyen-quoc-viet-en.pdf` (42,0 KB) — PDF vector 1 trang ATS-safe, text chọn được, đặt trong public/ để chủ sở hữu mở/tải trực tiếp qua preview panel
 - Thiếu có chủ ý (không bịa): kinh nghiệm làm việc + học vấn (chưa được cung cấp) · trình độ tiếng Anh ghi thận trọng "đọc hiểu tài liệu kỹ thuật" · sẵn sàng thêm mục Projects (THE TRADER — hệ thống 24 AI agents) khi chủ sở hữu yêu cầu
 - File generate_cv.py giữ lại làm nguồn tái sinh: sửa nội dung → `python3 public/cv/generate_cv.py` → 2 PDF cập nhật cùng lúc
+
+---
+Task ID: 146
+Agent: main-orchestrator (Z.ai Code)
+Task: YÊU CẦU PHỤ TIẾP THEO Task 145 — tạo bản CV .docx chỉnh sửa được, đảm bảo mở bằng Google Docs không lỗi (chủ sở hữu muốn tự chỉnh sửa)
+
+Work Log:
+- Nạp skill docx → route Create + scene resume (Template B: banner tối + đơn cột cho CV nhiều nội dung) + common-rules (WPS/Office compat) — mọi tính năng chọn lọc đều nằm nhóm SAFE cho Google Docs: font Calibri duy nhất (Google map sang Carlito cùng metric, đủ Latin Extended cho tiếng Việt) · bảng WidthType.PERCENTAGE · ShadingType.CLEAR · paragraph borders · không image/SmartArt/text-box/TOC/field phức tạp · chỉ 1 field PAGE đơn giản ở footer
+- Cài docx@9.12.0 self-contained trong public/cv/docx-gen (package.json riêng) — KHÔNG đụng dependencies của THE TRADER; toàn bộ nằm trong rule /public/cv/ đã gitignore từ Task 145 (bảo vệ PII)
+- Nội dung: tái sử dụng nguyên văn nội dung VI đã duyệt trong Task 145 (tóm tắt + 6 nhóm kỹ năng + Kaggle 3 đấu trường + ngôn ngữ) + BỔ SUNG mục DỰ ÁN TIÊU BIỂU THE TRADER (6 bullet định lượng: ~89.000 LOC · 24 agents đồng thuận 80% + VETO fail-closed · ML TypeScript thuần 0 thư viện · Brier/PSI/Beta-Bernoulli · GLM-4.6 + NIM · Bun/PM2 realtime tick 10s) + 2 mục placeholder 【】 Kinh nghiệm làm việc & Học vấn để chủ sở hữu tự điền khi chỉnh sửa
+- Palette kế thừa ACCENT #AA2C41 từ bản PDF Task 145 — 2 bản CV đồng bộ nhận diện; banner than mận #2B1E23; HEADING_1 cho 7 tiêu đề mục (Google Docs outline panel nhận diện); titlePage:true → trang 2+ có name-bar mảnh + số trang ở footer cả 2 trang
+- Verify 3 lớp độc lập: (1) postcheck.py PASS 9/9 — 0 lỗi 0 cảnh báo (blank-pages · line-spacing 276 · font-fallback 1 loại · heading 7 cấp liên tục · shading · bảng); (2) LibreOffice engine thật parse + render 2 trang PDF sạch; (3) VLM glm-5v-turbo soát 2 ảnh render — PASS 7/7 hạng mục (không overflow/clip · dấu tiếng Việt chuẩn ễ ố ệ ấ ị · banner tương phản tốt · bảng Kaggle 3 cột rõ · gạch chân mục nhất quán · name-bar + số trang trang 2) — điểm chuyên nghiệp 9/10 (trừ 1 điểm do placeholder có chủ ý)
+- Dev server phục vụ file đúng content-type application/vnd.openxmlformats-...wordprocessingml.document (HTTP 200, 16,5 KB) qua /cv/cv-nguyen-quoc-viet-vi.docx
+- Không đụng app THE TRADER: 0 dòng src/ sửa · không đụng PM2/dev server/market-engine · dev.log sạch
+
+Stage Summary:
+- Sản phẩm: public/cv/cv-nguyen-quoc-viet-vi.docx (16,5 KB, 2 trang) — mở trực tiếp bằng Google Docs / MS Word, chỉnh sửa được, cấu trúc 7 mục: Banner cá nhân → Tóm tắt năng lực → Kỹ năng chuyên môn (6 nhóm) → Dự án tiêu biểu THE TRADER (mới) → Kaggle (bảng) → Kinh nghiệm làm việc (placeholder) → Học vấn (placeholder) → Ngôn ngữ
+- Nguồn tái sinh: public/cv/docx-gen/generate.cjs — sửa nội dung → cd public/cv/docx-gen && bun generate.cjs
+- Điểm khác Task 145: PDF (chỉ đọc, 1 trang, không có dự án) vs DOCX (chỉnh sửa được, 2 trang, có THE TRADER làm flagship + placeholder tự điền)
+- Commit: chỉ worklog.md (toàn bộ file CV + generator nằm trong /public/cv/ đã gitignore theo đúng kỷ luật PII của Task 145)
