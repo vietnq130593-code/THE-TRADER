@@ -74,3 +74,8 @@ dev-engine.log
 /public/logo.svg
 /public/robots.txt
 mini-services/.gitkeep
+
+# Task 145 — CV cá nhân trong public/cv/ chứa PII (SĐT/email/ngày sinh).
+# Chỉ để xem/tải cục bộ qua preview — TUYỆT ĐỐI không track/push lên repo
+# (bài học P0: mọi thứ push lên GitHub coi như đã công khai).
+/public/cv/
