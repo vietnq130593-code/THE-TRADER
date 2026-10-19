@@ -346,7 +346,14 @@ const http = createServer((req, res) => {
 });
 
 const io = new Server(http, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  // D6 (Task 144 · P3): CORS cấu hình hoá qua ENGINE_CORS_ORIGIN.
+  // Mặc định "*" vì trong sandbox client chỉ tới engine qua gateway Caddy
+  // (cùng origin) hoặc nội bộ — không expose trực tiếp. TRƯỚC KHI mở public:
+  // đặt ENGINE_CORS_ORIGIN=https://<domain-thật> (xem docs/SECURITY.md §6).
+  cors: {
+    origin: process.env.ENGINE_CORS_ORIGIN ?? "*",
+    methods: ["GET", "POST"],
+  },
 });
 
 io.on("connection", (socket) => {

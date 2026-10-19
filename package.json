@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "env -u DATABASE_URL next start",
     "lint": "eslint",
+    "test": "bun test tests/",
+    "smoke": "bun run scripts/p144-smoke-routes.ts",
     "db:push": "env -u DATABASE_URL prisma db push",
     "db:generate": "env -u DATABASE_URL prisma generate",
     "db:studio": "env -u DATABASE_URL prisma studio",

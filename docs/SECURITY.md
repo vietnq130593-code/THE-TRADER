@@ -80,20 +80,25 @@ bun run env:backup                    # mã hoá lại .env.enc bằng passphras
   ↔ `.env` trên đĩa bằng `timingSafeEqual`.
 - 0 dependency ngoài `node:crypto`.
 
-## 5. Lộ trình P0-P3 còn lại (Task 144)
+## 5. Lộ trình P0-P3 (Task 144) — ĐÃ HOÀN TẤT
 
-- ✅ **P0** — untrack `.env` + `.env.enc` + hook + doc này.
-- **P1** — Vitest Tier 1 (hàm thuần tiền tệ/fee/lot/risk) + smoke 68 routes.
-- **P2** — extract-by-seam 3 file monolith (`agents/run/route.ts` ·
-  `agent-context.ts` · `synthesis-workspace.tsx`).
-- **P3** — engine CORS cấu hình hoá (D6) + đánh giá HA (§6 dưới).
+- ✅ **P0** — untrack `.env` + `.env.enc` + hook + doc này (commit `face483`).
+- ✅ **P1** — bun test Tier 1: 8 file · 213 test · 480 expect (fee/lot/băng
+  ±7%/HHI/Kelly/Brier/PAV/RSI-MACD/session ICT/Bayes/cổng 80%) + smoke script
+  68/68 routes alive — `bun test` · `bun run smoke`.
+- ✅ **P2** — extract-by-seam: `agents/run/route.ts` 1.637→338 (5 module
+  `src/lib/agents-run/`) · `agent-context.ts` 1.373→29 barrel (12 module
+  `src/lib/context/`) · `synthesis-workspace.tsx` 1.921→333 (12 component
+  `src/components/dashboard/synthesis/`) — pure-move kiểm chứng md5/multiset.
+- ✅ **P3** — engine CORS cấu hình hoá (D6) + đánh giá HA (§6 dưới).
 
-## 6. P3 — CORS engine & HA (đánh giá trung thực)
+## 6. P3 — CORS engine & HA (đã triển khai Task 144)
 
-- **D6 CORS `origin: "*"`** (engine :3003, dòng ~349 `index.ts`): trong sandbox
-  engine chỉ tiếp cận được qua gateway Caddy (cùng origin) hoặc nội bộ — rủi ro
-  THẤP hiện tại. Trước khi mở public: set `ENGINE_CORS_ORIGIN` thành domain
-  thật (biến môi trường, đã cấu hình hoá ở Task 144 P3).
+- **D6 CORS** (`mini-services/market-engine/index.ts`): đã cấu hình hoá qua
+  biến `ENGINE_CORS_ORIGIN` (mặc định `*` — sandbox chỉ truy cập qua gateway
+  Caddy cùng-origin; PM2 --watch restart sạch đã verify: ticks chảy lại, state
+  P0-5 phục hồi từ DB). **Trước khi mở public**: đặt
+  `ENGINE_CORS_ORIGIN=https://<domain-thật>` trong env engine.
 - **HA**: kiến trúc single-instance (1 dev server + 1 engine + PM2 restart +
   giám sát badge 75s + RiskAlert ENGINE_SCHEDULER_STALE). Đủ cho sandbox &
   vận hành nhỏ; lên production thật cần: engine tách process pool + DB
