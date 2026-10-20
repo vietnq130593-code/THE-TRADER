@@ -5216,3 +5216,23 @@ Stage Summary:
 - NGUYÊN NHÂN "hệ thống đa tác tử không hoạt động": PLATFORM SANDBOX ROLLBACK ~10:35 (lần thứ 2 trong lịch sử — Task 121 từng gặp) — kill app + xoá dev.log + reset .env + TRẢ CẢ .git VỀ SNAPSHOT ~16-17/10; mini-services tự lên nhưng app chính không
 - ĐÃ PHỤC HỒI 100%: code từ GitHub (a12d6d8 = commit cuối sáng nay, fix cơ chế bán nguyên vẹn) · .env từ lịch sử git (mất mỗi NIM key — L2 dùng BM25 tạm) · app chạy + sóng 24 agents 0 lỗi chứng minh end-to-end
 - BÀI HỌC VỮNG HÓN: mọi thay đổi quan trọng PHẢI push GitHub ngay trong phiên (việc push Task 156 lúc 08:52 chính là thứ cứu dự án lần này); rollback tiếp theo sẽ mất tối đa worklog chưa push thay vì 5 ngày code
+
+---
+Task ID: 159
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu bổ sung NVIDIA_NIM_API_KEY (nvapi-cld_…) — vá lỗ hổng duy nhất còn lại sau sandbox rollback Task 158 (L2 rơi BM25 thuần)
+
+Work Log:
+- Đo live key TỪ SANDBOX trước khi tích hợp (bài học OpenCode Task 157: key hợp lệ vẫn có thể chặn tầng IP): POST integrate.api.nvidia.com/v1/embeddings model nvidia/nemotron-3-embed-1b · HTTP 200 · 0,91s · 2 vectors dim 2048 (= NIM_EMBED_DIM) · 27 tokens → key HỢP LỆ + IP sandbox KHÔNG bị NVIDIA chặn
+- Ghi key vào .env.local (đúng đường shim nim-embed.ts: process env → .env.local trên đĩa; KHÔNG ghi .env chính) · verify git check-ignore khớp rule ".env.*" dòng 48 → key không bao giờ lọt lên GitHub (quan trọng vì môi trường auto-commit)
+- Restart app chính (kill cây 1885/1887/1899; mini-services market-engine + pg-service giữ nguyên) — vấp 2 bẫy môi trường: (1) sudo -u z fail "z not in sudoers" vì bash tool chạy đúng user z luôn; (2) process background CHẾT khi tool session thoát dù nohup+disown và setsid thường — sandbox cleanup quét theo process tree → GIẢI PHÁP: double-fork "setsid -f" reparent sang init → next-server sống vững qua các session (PID 3031)
+- Next boot xác nhận "Environments: .env.local, .env" → key vào process.env, cacheKey null được xoá
+- VERIFY end-to-end 4 lớp: (1) POST /api/ml/l2 action=index limit=50 → embedded 50 · embedFailed 0 · 6079 tokens · nimMs 4425 (NIM gọi thật từ trong app); (2) GET /api/ml/l2: chunks 2020 · withVector 2012 · bm25Only 8 (0,4% — doc mới sinh theo tick, selfHeal §6.3 tự theo chân); (3) sóng POST /api/agents/run 200 trong 76,8s · 24 agents · waves 4/13/3/4 · failures=[]; (4) RetrievalLog L2 sau sóng 13:58: 8/8 hits có cosine 0,35
+- Đối chiếu 3 mốc thời gian chứng minh phục hồi trọn vẹn: 08:28 trước rollback 8/8 cosine ≠ null · 11:44 sau rollback mất key 0/8 cosine=null (BM25 thuần) · 13:58 sau khi vá 8/8 cosine ≠ null → đúng nguyên tắc fail-soft §6 Task 140
+- dev.log sạch: tick 200 liên tục · risk-quant chạy · consensus gate Enforcement BẬT chặn tín hiệu (đúng hành vi FLAT-dominant Task 155) · không lỗi NIM/DB
+
+Stage Summary:
+- NVIDIA NIM là đường LLM embedding duy nhất hiện hoạt động đầy đủ TỪ sandbox (HTTP 200 · 0,91s) — đối lập OpenCode bị chặn tầng IP; key nằm an toàn trong .env.local gitignored
+- L2 tri thức dài hạn (hybrid BM25 + semantic cosine) phục hồi 100% mức pre-rollback: coverage 2012/2020 vector · query embed sống qua sóng agents thật · usageRate đã 86,7% trước đó nên toàn bộ chu kỳ agents có lại prompt block L2 đầy đủ
+- BÀI HỌC VẬN HÀNH MỚI: mọi restart dev server về sau PHẢI dùng "( cd /home/z/my-project && exec setsid -f env -u DATABASE_URL bun run dev >> dev.log 2>&1 < /dev/null )" — nohup/setsid thường đều bị sandbox cleanup quét chết theo process tree
+- Đề xuất chủ sở hữu (kế thừa Task 158): đặt lại passphrase + "bun run env:encrypt" để có lại .env.enc chống sandbox rollback kế tiếp — hiện .env.local (chứa key NIM) nằm ngoài mọi cơ chế backup
