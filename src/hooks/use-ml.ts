@@ -117,6 +117,22 @@ export interface MlHoldoutMetrics {
   sweepRunId: string | null;
 }
 
+/** W3 (#164) — trạng thái cơ chế auto-retrain theo PSI (GET /api/ml/status). */
+export interface MlAutoRetrainStatus {
+  /** Kill-switch AppSetting "ml-psi-retrain" (mặc định BẬT khi chưa có key). */
+  enabled: boolean;
+  /** Ngưỡng PSI kích hoạt (0,25 — "dịch-chuyển" A3). */
+  psiWarn: number;
+  /** Cooldown giữa 2 lần trigger (giờ). */
+  cooldownHours: number;
+  /** Lần trigger gần nhất (ISO) — null = chưa từng. */
+  lastAt: string | null;
+  /** trained-promoted | trained-not-promoted | no-new-window | … */
+  lastOutcome: string | null;
+  /** Mô tả lịch engine (chỉ hiển thị). */
+  schedule: string;
+}
+
 export interface MlStatusResponse {
   /** null khi chưa huấn luyện lần nào. */
   dlMlp: MlModelStatus<DlMlpMetrics> | null;
@@ -125,6 +141,9 @@ export interface MlStatusResponse {
   bandit: { arms: BanditArm[]; lastSettleAt: string | null } | null;
   /** Số phiếu LLM chờ kết toán reward. */
   pendingSettles: number;
+  /** W3 (#164) — trạng thái cơ chế auto-retrain theo PSI (BẬT mặc định;
+  *  additive — FE cũ bỏ qua). */
+  autoRetrain?: MlAutoRetrainStatus | null;
   /** B2 (#81) — verdict cổng bằng chứng chuỗi (additive; chưa đo →
    *  available:false + reason). */
   gate?: MlGateStatus;

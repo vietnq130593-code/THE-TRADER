@@ -23,6 +23,7 @@ import {
   useMlStatus,
   useSettleMl,
   useTrainMl,
+  type MlAutoRetrainStatus,
 } from "@/hooks/use-ml";
 import { MlpBlock } from "./ml/mlp-block";
 import { GateBlock } from "./ml/gate-block";
@@ -65,6 +66,10 @@ export function MlOverviewTab() {
   // A3 — field `drift` additive trên payload; đọc qua cast cục bộ tolerant.
   const drift =
     (data as ({ drift?: DriftStatus } | undefined))?.drift ?? null;
+  // W3 (#164) — field `autoRetrain` additive (trạng thái cơ chế auto-retrain
+  // theo PSI) — đọc qua cast cục bộ như drift.
+  const autoRetrain =
+    (data as ({ autoRetrain?: MlAutoRetrainStatus } | undefined))?.autoRetrain ?? null;
 
   if (isLoading) {
     return <MlOverviewSkeleton />;
@@ -86,7 +91,7 @@ export function MlOverviewTab() {
       <OverviewStrip data={data} drift={drift} />
 
       {/* Khối 1 — MLP dự báo 5 phiên (học sâu) */}
-      <MlpBlock model={data?.dlMlp ?? null} drift={drift} />
+      <MlpBlock model={data?.dlMlp ?? null} drift={drift} autoRetrain={autoRetrain} />
 
       <Separator />
 

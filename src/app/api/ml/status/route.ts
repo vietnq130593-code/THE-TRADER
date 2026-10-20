@@ -11,22 +11,18 @@ import { intradayStats } from "@/lib/intraday";
 // C2-pipeline (#99 — ML_AUTOML_BLUEPRINT §5.1/Q4): tiến độ cổng dữ liệu
 // "tin tức → đặc trưng v3-news22" — đo từ NewsItem (PIT-strict), TTL cache 60s.
 import { newsCoverageReport } from "@/lib/ml/news-coverage";
+// W3 (#164) — logic đo PSI trích sang lib drift.ts: route status và route
+// psi-retrain (auto-retrain có guard) dùng CHUNG một phép đo + TTL cache 15s
+// (pure refactor — hành vi GET này giữ nguyên như #79/#137-B9).
+import { driftForServing } from "@/lib/ml/drift";
+// W3 (#164) — trạng thái cơ chế auto-retrain theo PSI (kill-switch + audit
+// gần nhất) hiển thị cùng drift cho FE.
 import {
-  featureAt,
-  loadMacroContexts,
-  loadTopSeries,
-  ML_WARMUP_BARS,
-  rollingFeatures,
-  type MacroContext,
-} from "@/lib/ml/features";
-import {
-  bucketProportions,
-  featureName,
-  psi,
-  PSI_WARN,
-  psiLevel,
-  type PsiLevel,
-} from "@/lib/ml/psi";
+  PSI_RETRAIN_AUDIT_ACTION,
+  PSI_RETRAIN_COOLDOWN_HOURS,
+  PSI_RETRAIN_SETTING_KEY,
+} from "@/lib/ml/psi-retrain";
+import { PSI_WARN } from "@/lib/ml/psi";
 // F-18B (#132): đọc arch-string thật của bản serving từ weights JSON — dùng
 // chung parser chuẩn với /api/ml/architecture (nn.ts) thay vì đoán.
 import { mlpArchString, parseMlpArch } from "@/lib/ml/nn";
@@ -93,268 +89,6 @@ function parseMetrics<T extends Record<string, unknown>>(
   } catch {
     return null;
   }
-}
-
-/* ─────────────────── A3 · PSI drift (ML_OPS_BLUEPRINT §3) ─────────────────── */
-
-/** Hợp đồng cốt meta.featureHist — route train (79-A1A4) ghi, route này CHỈ ĐỌC:
- * edges[d] = điểm cắt tăng dần (9 cắt → 10 bucket) · train[d] = tỷ lệ bucket
- * lúc train (tổng ≈ 1). Số chiều theo edges.length — hôm nay 10, B1 có thể 16
- * (code theo length, không hardcode 10). */
-interface FeatureHist {
-  edges: number[][];
-  train: number[][];
-}
-
-/** Một chiều đặc trưng trong payload drift. */
-interface DriftDim {
-  name: string;
-  psi: number;
-  level: PsiLevel;
-}
-
-/** Field `drift` trong payload — unavailable kèm reason trung thực. */
-type DriftPayload =
-  | { available: false; reason: string }
-  | {
-      available: true;
-      /** Ngày phiên cuối của cửa sổ đo (YYYY-MM-DD). */
-      asOf: string;
-      /** Số mẫu pooled (mã × phiên) — kèm n theo nguyên tắc §1.4. */
-      samples: number;
-      dims: DriftDim[];
-      maxPsi: number;
-      maxDim: string;
-      retrainRecommended: boolean;
-      /** AUDIT 137 B9 — có mặt CHỈ khi đặc trưng sống thiếu chiều so histogram
-       *  (mô tả chiều chưa giám sát — additive, FE cũ bỏ qua). */
-      psiDimsNote?: string;
-    };
-
-/** Reason chuẩn khi serving chưa có histogram (bản train trước A3). */
-const DRIFT_NO_HISTOGRAM =
-  "chưa có histogram — sẽ có sau lần train kế tiếp";
-
-function driftUnavailable(reason: string): DriftPayload {
-  return { available: false, reason };
-}
-
-/** Kiểm tra shape featureHist chặt (9 cắt · train tổng ≈ 1 bucket) — meta sai
- * shape coi như chưa có, không đo PSI trên số rác.
- * AUDIT 137 B9 — cho phép cuts BẰNG NHAU (không giảm): computeFeatureHist
- * (bên GHI) chính đáng sinh quantile trùng trên chiều có khối điểm —
- * logret lag = 0 khi giá không đổi (dims 9-12), chiều vĩ mô = 0 khi thiếu
- * context (dims 16-20/22-23 của v3-macro). Bên đọc cũ đòi tăng NGHIÊM →
- * histogram do chính route train ghi bị từ chối → drift unavailable vĩnh
- * viễn cho serving v3-macro (đo thực tế v73: 12/24 chiều có cuts trùng).
- * Chỉ từ chối khi cuts GIẢM (số rác thật). Bucket trùng → bucket giữa rỗng
- * cả hai phía, PSI xử lý qua PSI_EPS (psi.ts) an toàn. */
-function parseFeatureHist(metaJson: string): FeatureHist | null {
-  try {
-    const m = JSON.parse(metaJson) as { featureHist?: unknown } | null;
-    const fh = m?.featureHist;
-    if (fh == null || typeof fh !== "object") return null;
-    const { edges, train } = fh as { edges?: unknown; train?: unknown };
-    if (!Array.isArray(edges) || !Array.isArray(train)) return null;
-    if (edges.length === 0 || edges.length !== train.length) return null;
-    const isNum = (v: unknown): v is number =>
-      typeof v === "number" && Number.isFinite(v);
-    for (let d = 0; d < edges.length; d++) {
-      const e = edges[d];
-      const t = train[d];
-      if (!Array.isArray(e) || !Array.isArray(t)) return null;
-      if (e.length === 0 || t.length !== e.length + 1) return null;
-      if (!e.every(isNum) || !t.every(isNum)) return null;
-      for (let i = 1; i < e.length; i++) {
-        if (!(e[i] >= e[i - 1])) return null; // điểm cắt phải KHÔNG GIẢM
-      }
-    }
-    return { edges, train };
-  } catch {
-    return null;
-  }
-}
-
-/* Perf — TTL cache 15s cùng kỷ luật snapCache bandit (#64): drift chỉ đổi khi
- * có bar EOD mới (15:45 ICT hằng ngày) hoặc train lại (đổi version) — cache
- * keyed theo version+trainedAt của bản serving, stale tối đa 15s; UI poll
- * 30s/lần nên cache hấp thụ 1/2 request. Drift nằm TRONG payload trả về,
- * không tính ngoài cache. */
-let driftCache: { at: number; key: string; value: DriftPayload } | null = null;
-const DRIFT_TTL_MS = 15_000;
-
-/** Số phiên gần đây lấy mẫu (pooled (mã × phiên) — mỗi cặp = 1 mẫu). */
-const DRIFT_SESSIONS = 30;
-/** Rổ đo drift — cùng rổ train/serving (P0-2 · B5 HOSE-STOCK). */
-const DRIFT_TOP_N = 20;
-/** Cửa sổ nạp chuỗi: cần ≥ warmup 60 + 30 phiên đo ≈ 90 PHIÊN ≈ 131 ngày
- * lịch — spec ghi sinceDays 90 (ngày lịch ≈ 62 phiên, KHÔNG đủ warmup),
- * dùng 200 ngày lịch (≈138 phiên, đủ biên lễ/T6-CN). */
-const DRIFT_LOOKBACK_DAYS = 200;
-/** Nguyên tắc §1.4 — n < 30 hiển thị "chưa đủ mẫu", không đo PSI rác. */
-const DRIFT_MIN_SAMPLES = 30;
-
-/**
- * Đo PSI: nạp rổ top-20 (O(N) loadTopSeries + rollingFeatures — FeatureContract
- * P0-3, không đường tính thứ 2) → featureAt cho 30 phiên cuối của các ngày
- * chung rổ (distinct dates, lấy 30 cuối) → bin theo edges → so histogram
- * train. Fail-soft: lỗi DB/đo → available:false + reason, KHÔNG 500 route.
- *
- * AUDIT 137 B9 — featureSet của bản serving quyết định bộ đặc trưng sống:
- * v3-macro (24 chiều) nạp loadMacroContexts(recent) và gọi featureAt(roll, t,
- * ctx) — 8 chiều vĩ mô (dus10y20, slope, DXY, VND, cmdty, breadth, flow,
- * sent7) giờ ĐƯỢC giám sát drift thay vì bị min(24,16) cắt âm thầm. Macro
- * loader lỗi → đo 16 chiều giá + psiDimsNote khai báo chiều thiếu.
- */
-async function computeDrift(hist: FeatureHist, featureSet: string): Promise<DriftPayload> {
-  const series = await loadTopSeries(DRIFT_TOP_N, {
-    sinceDays: DRIFT_LOOKBACK_DAYS,
-  });
-  if (series.length === 0) {
-    return driftUnavailable("rổ thanh khoản trống — chưa đo được drift");
-  }
-
-  // Distinct dates của rổ (union) → 30 phiên cuối làm mốc lấy mẫu pooled.
-  const allDates = new Set<string>();
-  for (const s of series) {
-    for (const b of s.bars) allDates.add(b.date.toISOString().slice(0, 10));
-  }
-  const recent = [...allDates].sort().slice(-DRIFT_SESSIONS);
-  if (recent.length === 0) {
-    return driftUnavailable("không có bar EOD gần đây");
-  }
-  const recentSet = new Set(recent);
-
-  // AUDIT 137 B9 — serving v3-macro: nạp MacroContext cho đúng 30 phiên đo
-  // (loadMacroContexts trả entry MỌI ngày được hỏi — thiếu dữ liệu nguồn thì
-  // giá trị trung tính, features.ts N2; lỗi loader → null → đo 16 chiều).
-  let macroByDate: Map<string, MacroContext> | null = null;
-  if (featureSet === "v3-macro") {
-    try {
-      macroByDate = await loadMacroContexts(recent);
-    } catch (err) {
-      console.error(
-        "[api/ml/status] loadMacroContexts lỗi (drift v3-macro đo 16 chiều giá):",
-        err
-      );
-    }
-  }
-
-  // Pooled samples: mỗi cặp (mã, phiên trong 30 cuối) đủ warmup = 1 mẫu raw.
-  const perDim: number[][] = [];
-  let samples = 0;
-  for (const s of series) {
-    if (s.closes.length < ML_WARMUP_BARS) continue;
-    const roll = rollingFeatures(s.closes, s.volumes);
-    for (let t = ML_WARMUP_BARS - 1; t < s.closes.length; t++) {
-      const dateStr = s.bars[t].date.toISOString().slice(0, 10);
-      if (!recentSet.has(dateStr)) continue;
-      // AUDIT 137 B9 — 24 chiều khi có macro context của đúng ngày đó; thiếu
-      // context (loader trả null entry — không xảy ra theo hợp đồng N2) → bỏ
-      // mẫu, KHÔNG trộn vector 16 chiều vào perDim 24 chiều.
-      let x: number[] | null;
-      if (macroByDate != null) {
-        const ctx = macroByDate.get(dateStr) ?? null;
-        x = ctx != null ? featureAt(roll, t, ctx) : null;
-      } else {
-        x = featureAt(roll, t);
-      }
-      if (x == null) continue;
-      samples++;
-      for (let d = 0; d < x.length; d++) {
-        (perDim[d] ??= []).push(x[d]);
-      }
-    }
-  }
-  if (samples < DRIFT_MIN_SAMPLES) {
-    return driftUnavailable(
-      `chưa đủ mẫu đo drift (n=${samples} < ${DRIFT_MIN_SAMPLES})`
-    );
-  }
-
-  // PSI từng chiều — số chiều theo edges.length (16 v2-lag16 · 24 v3-macro).
-  const dims: DriftDim[] = [];
-  const nDims = Math.min(hist.edges.length, perDim.length);
-  // AUDIT 137 B9 — đặc trưng sống thiếu chiều so histogram → khai báo trung
-  // thực thay vì cắt âm thầm (additive psiDimsNote — FE cũ bỏ qua).
-  const psiDimsNote =
-    perDim.length < hist.edges.length
-      ? `đo được ${perDim.length}/${hist.edges.length} chiều — ${
-          hist.edges.length - perDim.length
-        } chiều vĩ mô chưa giám sát drift (macro loader lỗi — audit 137 B9)`
-      : undefined;
-  let maxPsi = 0;
-  let maxDim = featureName(0);
-  let retrainRecommended = false;
-  for (let d = 0; d < nDims; d++) {
-    const pNew = bucketProportions(perDim[d] ?? [], hist.edges[d]);
-    const v = psi(pNew, hist.train[d] ?? []);
-    dims.push({ name: featureName(d), psi: v, level: psiLevel(v) });
-    if (v > maxPsi) {
-      maxPsi = v;
-      maxDim = featureName(d);
-    }
-    if (v >= PSI_WARN) retrainRecommended = true;
-  }
-
-  return {
-    available: true,
-    asOf: recent[recent.length - 1],
-    samples,
-    dims,
-    maxPsi,
-    maxDim,
-    retrainRecommended,
-    ...(psiDimsNote != null ? { psiDimsNote } : {}),
-  };
-}
-
-/**
- * Drift cho bản serving dl-mlp: chưa có featureHist → unavailable trung thực
- * (0 query thêm). Có → đo (TTL cache 15s keyed theo version+trainedAt —
- * train mới tự vô hiệu hoá cache). Lỗi đo nuốt thành reason (fail-soft §1.6).
- * AUDIT 137 B9 — featureSet của bản serving (meta JSON) quyết định bộ đặc
- * trưng sống dùng đo (v3-macro → 24 chiều gồm 8 chiều vĩ mô).
- */
-async function driftForServing(dlRow: {
-  version: number;
-  trainedAt: Date;
-  meta: string | null;
-} | null): Promise<DriftPayload> {
-  if (!dlRow || !dlRow.meta) return driftUnavailable(DRIFT_NO_HISTOGRAM);
-  const hist = parseFeatureHist(dlRow.meta);
-  if (!hist) return driftUnavailable(DRIFT_NO_HISTOGRAM);
-  // AUDIT 137 B9 — featureSet bản serving (cùng cách đọc dlFeatureSet bên GET).
-  const servingFeatureSet = (() => {
-    try {
-      const m = JSON.parse(dlRow.meta!) as { featureSet?: unknown };
-      return typeof m.featureSet === "string" ? m.featureSet : "v1-lag10";
-    } catch {
-      return "v1-lag10";
-    }
-  })();
-
-  const key = `${dlRow.version}:${dlRow.trainedAt.getTime()}`;
-  const now = Date.now();
-  if (
-    driftCache &&
-    driftCache.key === key &&
-    now - driftCache.at < DRIFT_TTL_MS
-  ) {
-    return driftCache.value;
-  }
-
-  let value: DriftPayload;
-  try {
-    value = await computeDrift(hist, servingFeatureSet);
-  } catch (err) {
-    console.error("[api/ml/status] drift measurement failed:", err);
-    value = driftUnavailable(
-      `lỗi khi đo drift — ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`
-    );
-  }
-  driftCache = { at: now, key, value };
-  return value;
 }
 
 /* ───────── B2/B3 · Cổng bằng chứng + GRU (đọc AppSetting, additive) ───────── */
@@ -493,6 +227,67 @@ async function holdoutForServing(version: number | null): Promise<HoldoutPayload
   }
 }
 
+/* ───────── W3 (#164) — trạng thái auto-retrain theo PSI (additive) ───────── */
+
+/** Field `autoRetrain` — cơ chế W3: PSI ≥ 0,25 → engine :3003 đôn đốc
+ *  POST /api/ml/psi-retrain (5 guard — xem lib psi-retrain.ts). FE hiển thị
+ *  trạng thái bật/tắt + lần trigger gần nhất ngay dưới khối drift. */
+interface AutoRetrainPayload {
+  enabled: boolean;
+  psiWarn: number;
+  cooldownHours: number;
+  lastAt: string | null;
+  lastOutcome: string | null;
+  /** Lịch engine (doc/hiển thị — không phải cấu hình chạy được). */
+  schedule: string;
+}
+
+const AUTO_RETRAIN_SCHEDULE =
+  "engine :3003 — T2–T6 từ 17:00 ICT sau EOD-sync, nhịp check 15 phút";
+
+/** Đọc AppSetting ml-psi-retrain + AuditLog ML_PSI_RETRAIN gần nhất (2 query
+ *  nhẹ, fail-soft null — FE ẩn khối, KHÔNG bịa trạng thái). */
+async function autoRetrainPayload(): Promise<AutoRetrainPayload | null> {
+  try {
+    const [settingRow, auditRow] = await Promise.all([
+      db.appSetting.findUnique({ where: { key: PSI_RETRAIN_SETTING_KEY } }),
+      db.auditLog.findFirst({
+        where: { action: PSI_RETRAIN_AUDIT_ACTION },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, after: true },
+      }),
+    ]);
+    let enabled = true; // thiếu key → BẬT (lý do tồn tại của W3)
+    if (settingRow) {
+      try {
+        const s = JSON.parse(settingRow.value) as { enabled?: unknown };
+        enabled = s.enabled !== false;
+      } catch {
+        // JSON hỏng → giữ BẬT (không bịa TẮT)
+      }
+    }
+    let lastOutcome: string | null = null;
+    if (auditRow?.after) {
+      try {
+        const a = JSON.parse(auditRow.after) as { outcome?: unknown };
+        if (typeof a.outcome === "string") lastOutcome = a.outcome;
+      } catch {
+        // after hỏng → null trung thực
+      }
+    }
+    return {
+      enabled,
+      psiWarn: PSI_WARN,
+      cooldownHours: PSI_RETRAIN_COOLDOWN_HOURS,
+      lastAt: auditRow ? auditRow.createdAt.toISOString() : null,
+      lastOutcome,
+      schedule: AUTO_RETRAIN_SCHEDULE,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Field `gru` — null khi chưa từng train dl-gru (cổng chưa mở, B4 trung thực). */
 interface GruPayload {
   version: number;
@@ -582,7 +377,7 @@ export async function GET() {
       .then((dlRow) => holdoutForServing(dlRow?.version ?? null))
       .catch(() => null);
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift, holdout, gate, gru, rag, intraday, newsGate, l2] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, holdout, gate, gru, rag, intraday, newsGate, l2, autoRetrain] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -601,6 +396,8 @@ export async function GET() {
       newsCoverageReport(),
       // Task 142 — fail-soft như rag (FE cũ bỏ qua field l2)
       l2Stats().catch(() => null),
+      // W3 (#164) — trạng thái auto-retrain theo PSI (fail-soft null)
+      autoRetrainPayload(),
     ]);
 
     const dlMetrics = dlRow
@@ -689,6 +486,9 @@ export async function GET() {
       pendingSettles,
       // A3 — additive field: FE cũ bỏ qua, FE mới (ml-panel badge Drift) đọc.
       drift,
+      // W3 (#164) — additive: trạng thái auto-retrain theo PSI (FE mới đọc,
+      // FE cũ bỏ qua — hiển thị cùng khối drift).
+      autoRetrain,
       // B2/B3 (#81) — additive: cổng bằng chứng + GRU (FE mới đọc, FE cũ bỏ qua)
       gate,
       gru,

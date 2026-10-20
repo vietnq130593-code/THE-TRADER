@@ -8,7 +8,7 @@
 import { Activity, Layers } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { DlMlpMetrics, MlModelStatus } from "@/hooks/use-ml";
+import type { DlMlpMetrics, MlAutoRetrainStatus, MlModelStatus } from "@/hooks/use-ml";
 import {
   EmptyNote,
   Stat,
@@ -90,8 +90,15 @@ function DriftBadge({ drift }: { drift: DriftStatus | null }) {
   return <Badge className={cn("text-[10px]", visual.className)}>Drift: {visual.label}</Badge>;
 }
 
-/** Khối phụ: top-3 chiều PSI cao nhất + n/asOf + dòng "đề xuất train lại". */
-function DriftDetail({ drift }: { drift: DriftStatus | null }) {
+/** Khối phụ: top-3 chiều PSI cao nhất + n/asOf + dòng "đề xuất train lại" +
+ *  trạng thái cơ chế auto-retrain W3 (#164) — engine tự train khi PSI ≥ 0,25. */
+function DriftDetail({
+  drift,
+  autoRetrain,
+}: {
+  drift: DriftStatus | null;
+  autoRetrain: MlAutoRetrainStatus | null;
+}) {
   if (!drift) return null; // API chưa có field drift (bản cũ) — ẩn im lặng
   if (!drift.available) {
     return (
@@ -134,6 +141,24 @@ function DriftDetail({ drift }: { drift: DriftStatus | null }) {
       {drift.retrainRecommended && (
         <p className="mt-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
           Đề xuất train lại mô hình — PSI ≥ 0,25 ({drift.maxDim})
+          {autoRetrain?.enabled === true
+            ? " — engine sẽ tự train trong khung 17:00 ICT (W3), hoặc bấm Huấn luyện ngay"
+            : ""}
+        </p>
+      )}
+      {/* W3 (#164) — minh bạch cơ chế: auto-retrain theo PSI có guard (5 tầng:
+          kill-switch · cooldown 24h · ngưỡng · windowHash · mutex train). */}
+      {autoRetrain && (
+        <p className="mt-1.5 border-t pt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          Tự train lại khi trôi dịch (W3):{" "}
+          <strong className={autoRetrain.enabled ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-semibold text-rose-600 dark:text-rose-400"}>
+            {autoRetrain.enabled ? "BẬT" : "TẮT (kill-switch AppSetting ml-psi-retrain)"}
+          </strong>
+          {` · ngưỡng PSI ≥ ${autoRetrain.psiWarn} · cooldown ${autoRetrain.cooldownHours}h`}
+          {autoRetrain.lastAt
+            ? ` · lần gần nhất: ${new Date(autoRetrain.lastAt).toLocaleString("vi-VN")} (${autoRetrain.lastOutcome ?? "?"})`
+            : " · chưa từng trigger"}
+          <span className="sr-only"> — {autoRetrain.schedule}</span>
         </p>
       )}
     </div>
@@ -145,9 +170,11 @@ function DriftDetail({ drift }: { drift: DriftStatus | null }) {
 export function MlpBlock({
   model,
   drift,
+  autoRetrain,
 }: {
   model: MlModelStatus<DlMlpMetrics> | null;
   drift: DriftStatus | null;
+  autoRetrain?: MlAutoRetrainStatus | null;
 }) {
   const m = model?.metrics;
   const topSymbols = (m?.topSymbols ?? []).filter(Boolean).slice(0, 8);
@@ -219,8 +246,9 @@ export function MlpBlock({
               : 'Chưa có số ngoài mẫu cho bản này (lên serving qua train tay). Áp chính xác "xác thực (selection)" là số post-selection — chọn kiến trúc + early-stop trên cùng val block, thiên lệch LÊN so với khả năng dự báo thật.'}
           </p>
 
-          {/* A3 — giám sát drift đặc trưng (PSI 30 phiên gần nhất) */}
-          <DriftDetail drift={drift} />
+          {/* A3 — giám sát drift đặc trưng (PSI 30 phiên gần nhất) + W3 trạng
+              thái auto-retrain theo PSI */}
+          <DriftDetail drift={drift} autoRetrain={autoRetrain ?? null} />
 
           {/* F-18B (#132) — ghi chú phân vai: arch này là bản ĐANG phục vụ,
               tách biệt trình chỉnh sửa tab Mạng thần kinh (lần train kế tiếp). */}

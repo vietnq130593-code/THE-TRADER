@@ -157,6 +157,20 @@ const ML_TRAIN_DISABLED = process.env.ML_TRAIN_DISABLED === "1";
  *  sống nên phải chạy sau; A4 <5 phút nên guard !mlTrainInFlight đủ thứ tự). */
 const ML_SWEEP_AT = process.env.ML_SWEEP_AT ?? "SUN:04:15";
 const ML_SWEEP_DISABLED = process.env.ML_SWEEP_DISABLED === "1";
+/** W3 (#164 · review #162) — auto-retrain THEO PSI (vá "PSI chỉ cảnh báo,
+ *  model đóng băng vô thời hạn nếu không ai bấm train tay"): nhịp due-check
+ *  (mặc định 15 phút), chỉ trong khung T2–T6 từ 17:00 ICT (sau mọi job EOD
+ *  chiều: settle 16:15 · k1 16:30 · council 16:45 — tránh tranh lock; gate
+ *  EOD hôm đó ĐÃ sync vì PSI chỉ đổi khi có bar mới; Chủ nhật nhường cho A4
+ *  04:00 + sweep 04:15). Route /api/ml/psi-retrain TỰ đo PSI + 5 guard
+ *  (kill-switch AppSetting ml-psi-retrain · cooldown 24h · ngưỡng 0,25 ·
+ *  windowHash · mutex train dùng chung) — engine chỉ đôn đốc, KHÔNG quyết định. */
+const ML_PSI_RETRAIN_DISABLED = process.env.ML_PSI_RETRAIN_DISABLED === "1";
+const ML_PSI_RETRAIN_AT = process.env.ML_PSI_RETRAIN_AT ?? "17:00";
+const ML_PSI_RETRAIN_CHECK_MINUTES = (() => {
+  const raw = Number(process.env.ML_PSI_RETRAIN_CHECK_MINUTES ?? 15);
+  return Number.isFinite(raw) && raw >= 5 ? raw : 15;
+})();
 /** K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): giờ ICT kết toán sandbox hằng ngày
  *  (16:30 — SAU settle bandit 16:15 đúng 15 phút để không tranh lock DB; job
  *  4-việc: kênh-2 reward → CashSnapshot → telemetry → audit tổng kết). */
@@ -230,6 +244,8 @@ const ML_TRAIN_SCHEDULE: { dow: number; minutes: number } =
 // bài học #42: schedule null → TypeError mỗi phút giết event loop engine).
 const ML_SWEEP_SCHEDULE: { dow: number; minutes: number } =
   parseWeekly(ML_SWEEP_AT) ?? parseWeekly("SUN:04:15") ?? { dow: 0, minutes: 4 * 60 + 15 };
+// W3 (#164) — fail-safe parseHhMm như các slot hằng ngày khác (17:00 ICT).
+const ML_PSI_RETRAIN_MINUTES = parseHhMm(ML_PSI_RETRAIN_AT) ?? parseHhMm("17:00")!;
 // #107 — job hội nghị phân bổ CN 05:50 đã THÁO cùng E-ALLOC (vẽ rắn thêm chân).
 
 function ictNow(): { date: string; minutes: number; dow: number } {
@@ -276,6 +292,14 @@ const stats = {
   lastMlSweepSunday: null as string | null,
   lastMlSweepError: null as string | null,
   sweepRuns: 0,
+  // W3 (#164) — auto-retrain theo PSI: nhịp check 15' (throttle nội bộ —
+  // KHÔNG cần persist engine-state: route tự guard bằng AuditLog cooldown
+  // 24h + AppSetting kill-switch; mất khi restart chỉ khiến 1 lần check sớm)
+  lastPsiRetrainCheckAt: null as string | null,
+  lastPsiRetrainAt: null as string | null,
+  lastPsiRetrainOutcome: null as string | null,
+  lastPsiRetrainError: null as string | null,
+  psiRetrainRuns: 0,
   // K1 (#87 — §5.4): lịch settle-equity sandbox 16:30 ICT (P0-5 sống sót restart)
   lastK1EquityAt: null as string | null,
   lastK1EquityDate: null as string | null,
@@ -332,6 +356,9 @@ const http = createServer((req, res) => {
         settleAt: SETTLE_AT,
         mlTrainAt: ML_TRAIN_AT,
         mlSweepAt: ML_SWEEP_AT,
+        mlPsiRetrainAt: ML_PSI_RETRAIN_DISABLED
+          ? `${ML_PSI_RETRAIN_AT} ICT (TẮT)`
+          : `${ML_PSI_RETRAIN_AT} ICT t2–t6 · check ${ML_PSI_RETRAIN_CHECK_MINUTES}phút`,
         k1EquityAt: K1_EQUITY_AT,
         councilEvalAt: COUNCIL_EVAL_AT,
         macroVnAt: MACRO_VN_AT,
@@ -1315,6 +1342,65 @@ function mlSweepDue(): boolean {
   return stats.lastMlSweepSunday !== slotDate.toISOString().slice(0, 10);
 }
 
+/** W3 (#164 · review #162) — auto-retrain theo PSI: POST /api/ml/psi-retrain.
+ *  Route TỰ đo PSI (cùng lớp lib drift.ts như status) + 5 guard (kill-switch
+ *  AppSetting ml-psi-retrain · cooldown 24h AuditLog ML_PSI_RETRAIN · ngưỡng
+ *  PSI 0,25 · windowHash skip-guard mirror A4 · mutex/cooldown train dùng
+ *  chung train tay + sweep) rồi mới trainDlMlp (serving-swap guard nội tại —
+ *  bản mới thua valAcc thì archived, serving giữ nguyên). Engine chỉ đôn đốc
+ *  như K2/K3 — KHÔNG tự quyết định. Timeout 280s như A4 (train 30-60s).
+ *  Log + broadcast WS "ml-psi-retrain" CHỈ khi outcome KHÔNG phải
+ *  skip-psi-below (trạng thái bình thường — tránh spam log mỗi 15 phút; FE
+ *  invalidate ml-status khi có hành động thật). Thất bại POST → KHÔNG đánh
+ *  dấu gì, nhịp check sau thử lại (fail-soft, pattern settle). */
+let psiRetrainInFlight = false;
+const ML_PSI_RETRAIN_POST_TIMEOUT_MS = 280_000;
+async function psiRetrainAndBroadcast(): Promise<void> {
+  psiRetrainInFlight = true;
+  try {
+    const data = await postJson("/api/ml/psi-retrain", undefined, {
+      timeoutMs: ML_PSI_RETRAIN_POST_TIMEOUT_MS,
+    });
+    stats.lastPsiRetrainAt = new Date().toISOString();
+    stats.psiRetrainRuns++;
+    stats.lastPsiRetrainError = null;
+    const outcome = typeof data.outcome === "string" ? data.outcome : "?";
+    stats.lastPsiRetrainOutcome = outcome;
+    if (outcome !== "skip-psi-below") {
+      io.emit("ml-psi-retrain", data);
+      log(
+        "ml-psi",
+        `auto-retrain PSI W3: ${outcome} — ${String(data.reason ?? "")}`
+      );
+    }
+  } catch (err) {
+    stats.lastPsiRetrainError = err instanceof Error ? err.message : String(err);
+    log("ml-psi", `LỖI (thử lại nhịp sau): ${stats.lastPsiRetrainError}`);
+  } finally {
+    psiRetrainInFlight = false;
+  }
+}
+
+/** Throttle nội bộ 15' — module-level (mất khi restart chỉ khiến 1 lần check
+ *  sớm, vô hại: route tự guard bằng AuditLog cooldown + AppSetting). */
+let psiRetrainLastCheckMs = 0;
+/** W3 (#164) — due: t2–t6 (CN nhường A4/sweep · T7 không EOD mới) · ≥ 17:00
+ *  ICT (sau settle 16:15 · k1 16:30 · council 16:45 — tránh tranh lock) ·
+ *  EOD hôm nay ĐÃ sync (PSI chỉ đổi khi có bar mới) · nhịp check 15'. */
+function psiRetrainDue(): boolean {
+  if (ML_PSI_RETRAIN_DISABLED) return false;
+  if (psiRetrainInFlight) return false;
+  if (Date.now() - psiRetrainLastCheckMs < ML_PSI_RETRAIN_CHECK_MINUTES * 60_000) {
+    return false;
+  }
+  const ict = ictNow();
+  if (ict.dow === 0 || ict.dow === 6) return false; // CN=0 · T7=6
+  return (
+    ict.minutes >= ML_PSI_RETRAIN_MINUTES &&
+    stats.lastEodSyncDate === ict.date
+  );
+}
+
 /** B12 — đã qua 06:15 ICT hôm nay và chưa sync ngày này → sync.
  * F-441-01: lần gần nhất LỖI thì phải đủ backoff nhân đôi (30p → cap 4h)
  * mới được thử lại — chống retry mỗi phút suốt ngày (đấm Yahoo 429). */
@@ -1397,7 +1483,7 @@ http.on("error", (err) => {
 function logBootSchedule(): void {
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · ml-psi-retrain ${ML_PSI_RETRAIN_AT} ICT t2–t6${ML_PSI_RETRAIN_DISABLED ? " (TẮT)" : ` (check ${ML_PSI_RETRAIN_CHECK_MINUTES}phút)`} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
@@ -1451,6 +1537,14 @@ const dueCheckTimer = setInterval(() => {
     // C1 (#99 — ML_AUTOML_BLUEPRINT §4.6/F3): sweep AutoML L1 CN 04:15 ICT
     // (sau A4 04:00 — cùng try/catch chung, lỗi 1 lịch không giết cả khối)
     if (mlSweepDue()) void mlSweepAndBroadcast();
+    // W3 (#164) — auto-retrain theo PSI (t2–t6 ≥ 17:00 ICT sau EOD-sync, nhịp
+    // check 15'): cập nhật mốc throttle NGAY khi bắn (in-flight guard chống
+    // POST chồng; route tự guard bằng AuditLog cooldown + AppSetting).
+    if (psiRetrainDue()) {
+      psiRetrainLastCheckMs = Date.now();
+      stats.lastPsiRetrainCheckAt = new Date().toISOString();
+      void psiRetrainAndBroadcast();
+    }
     // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
     // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
     if (k1EquityDue()) void k1EquityAndBroadcast();
