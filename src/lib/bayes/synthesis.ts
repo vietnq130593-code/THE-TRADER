@@ -250,6 +250,9 @@ function computeConsensus(votes: AgentVote[], enforce: boolean): ConsensusSnapsh
 
   return {
     ratio: Number(ratio.toFixed(6)),
+    // F-151-1 (Task 152) — đưa dominant ra snapshot để persist bind vào Signal:
+    // gate CONSENSUS chỉ được duyệt lệnh khi hướng số đông khớp hướng tín hiệu.
+    dominant,
     gate,
     gateLabel,
     tally,

@@ -86,7 +86,7 @@ function PendingSignalRow({
 }) {
   const dir = SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD;
   const DirIcon = dir.icon;
-  const cons = consensusMeta(s.consensusGate, s.consensusRatio);
+  const cons = consensusMeta(s.consensusGate, s.consensusRatio, s.consensusDominant);
   const st = statusMeta(s);
   return (
     <li className="transition-colors hover:bg-accent/40">
@@ -254,7 +254,7 @@ function DoneSignalRow({
 function CompactSignalRow({ s }: { s: SignalRow }) {
   const dir = SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD;
   const DirIcon = dir.icon;
-  const cons = consensusMeta(s.consensusGate, s.consensusRatio);
+  const cons = consensusMeta(s.consensusGate, s.consensusRatio, s.consensusDominant);
   // PHIÊN #91 (tái triển khai): "Đã chuyển lệnh" chỉ khi CÓ lệnh paper THẬT
   // (paperOrdered) — auto-duyệt đủ đồng thuận nhưng paper 0 ₫ → chỉ "Đã duyệt".
   const acted = s.status === "ACTED" || s.actedAt != null;

@@ -626,6 +626,8 @@ export interface AutoConvertResult {
  *   - k-sandbox bật + không tạm dừng + tài khoản sandbox sống
  *   - tín hiệu BUY/SELL (HOLD bỏ) + TRẠNG THÁI ACTIVE
  *   - tín hiệu ĐÃ QỔ CỔNG ĐỒNG THUẬN B9 (consensusGate === "CONSENSUS")
+ *   - F-151-1 (Task 152): hướng số đông KHỚP hướng tín hiệu
+ *     (consensusDominant: SELL ↔ DOWN · BUY ↔ UP — thiếu snapshot → bỏ qua)
  *   - idempotent: AuditLog K1_SANDBOX_AUTO_ORDER (entity Signal) đã có → bỏ
  *   - hạn mức: sizePct ≤ maxBudgetPctPerCycle (1 tín hiệu/chu kỳ nên
  *     maxOrdersPerCycle phòng xa cho tương lai nhiều tín hiệu)
@@ -654,7 +656,7 @@ export async function autoConvertSignalToSandbox(signalId: string): Promise<Auto
 
     const signal = await db.signal.findUnique({
       where: { id: signalId },
-      select: { direction: true, status: true, consensusGate: true },
+      select: { direction: true, status: true, consensusGate: true, consensusDominant: true },
     });
     if (!signal) {
       out.skipped.push({ reason: "tin-hieu-khong-ton-tai" });
@@ -671,6 +673,17 @@ export async function autoConvertSignalToSandbox(signalId: string): Promise<Auto
     // Q1 §8: CHỈ tín hiệu qua cổng đồng thuận B9 mới auto-thực thi.
     if (signal.consensusGate !== "CONSENSUS") {
       out.skipped.push({ reason: `cong-dong-thuan-${signal.consensusGate ?? "null"}` });
+      return out;
+    }
+    // F-151-1 (Task 152): đồng thuận còn phải KHỚP HƯỚNG — sandbox K1 không tự
+    // thực thi khi hội đồng đồng thuận "đi ngang"/ngược hướng (đóng kẽ tương
+    // tự auto-decision #91: gate chứng minh độ tập trung, hướng do dominant).
+    // Thiếu snapshot dominant (tín hiệu cũ trước fix) → fail-safe bỏ qua.
+    const expectedDominant = signal.direction === "SELL" ? "DOWN" : "UP";
+    if (signal.consensusDominant !== expectedDominant) {
+      out.skipped.push({
+        reason: `huong-so-dong-khong-khop-${signal.consensusDominant ?? "null"}`,
+      });
       return out;
     }
 

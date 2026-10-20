@@ -428,6 +428,10 @@ model Signal {
   consensusGate String?
   /** B9 — ratio trọng số tối đa 0..1 tại snapshot (để audit + hiển thị). */
   consensusRatio Float?
+  /** F-151-1 (Task 152) — hướng số đông tại snapshot (UP/DOWN/FLAT) mà ratio
+   *  đề cập; null = tín hiệu cũ trước fix. Gate CONSENSUS chỉ duyệt lệnh khi
+   *  hướng số đông KHỚP hướng tín hiệu (SELL cần DOWN · BUY cần UP). */
+  consensusDominant String?
   expiresAt DateTime?
   actedAt DateTime? // khi được chuyển thành lệnh
   // PHASE3_BLUEPRINT §4.1 — vòng đời tín hiệu: ACTIVE | ACTED | REJECTED | EXPIRED

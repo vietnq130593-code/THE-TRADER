@@ -247,13 +247,22 @@ export async function persistSignalAndExecution(
         rationale: sig.rationale,
         agentId: strategistAgent.id,
         targetPrice: sig.direction === "HOLD" ? null : sig.targetPrice,
-        stopLoss: sig.direction === "BUY" ? sig.stopLoss : null,
-        takeProfit: sig.direction === "BUY" ? sig.takeProfit : null,
+        // F-151-2 (Task 152): mốc cắt lỗ/chốt lời lưu cho CẢ MUA lẫn BÁN — với
+        // SELL đây là mốc của CHÍNH quyết định bán (stop = giá vượt LÊN làm vô
+        // hiệu hoá kèo bán · take = mục tiêu GIẢM). Chairman parse + Kelly hint
+        // (agent-loop CRB-9) vốn đã dùng stopLoss cho SELL — trước đây persist
+        // bỏ chữ khiến D-LEDGER không hậu kiểm được "đáng lẽ chặn lỗ ở đâu".
+        stopLoss: sig.direction === "HOLD" ? null : sig.stopLoss,
+        takeProfit: sig.direction === "HOLD" ? null : sig.takeProfit,
         // B9 — SNAPSHOT cổng đồng thuận lúc Chủ tịch SINH tín hiệu: gate bind
         // theo assessment TẠO RA tín hiệu — convert ở chu kỳ sau KHÔNG bị đánh
         // giá lại bằng consensus mới hơn (ổn định + kiểm chứng theo tín hiệu)
         consensusGate: bayesView?.consensus?.gate ?? null,
         consensusRatio: bayesView?.consensus?.ratio ?? null,
+        // F-151-1 (Task 152) — bind luôn HƯỚNG SỐ ĐÔNG của snapshot: auto-decision
+        // + convert + K1 chỉ duyệt lệnh khi dominant khớp hướng tín hiệu
+        // (SELL ↔ DOWN · BUY ↔ UP) — đóng kẽ "đồng thuận đi ngang vẫn duyệt BÁN".
+        consensusDominant: bayesView?.consensus?.dominant ?? null,
         expiresAt,
         status: "ACTIVE", // chờ phê duyệt của trader (mặc định schema)
       },

@@ -1,7 +1,8 @@
-# REVIEW CƠ CHẾ BÁN — THE TRADER (Task 151 · 20/10/2026)
+# REVIEW CƠ CHẾ BÁN — THE TRADER (Task 151 · 20/10/2026 — sửa xong Task 152 · 20/10/2026)
 
 > Yêu cầu chủ sở hữu: "Điều kiện để các agent thống nhất thực hiện lệnh bán là gì, và cơ chế này có đang hoạt động đúng không?"
 > Phương pháp: đọc code toàn chuỗi (consensus → persist → auto-decision → order → fill → D-LEDGER) + đo DB thật bằng `scripts/review-sell-mechanism.ts` (read-only). Nguyên tắc Fixbug §5: không tin lời comment, chỉ tin phép đo.
+> **Task 152 đã vá F-151-1 + F-151-2 và verify end-to-end F-151-3 — xem §4 cuối file.**
 
 ---
 
@@ -57,8 +58,30 @@ Toàn sổ: **0 lệnh SELL từng được đặt** (chỉ BUY/FILLED = 9, toà
 - **Mọi tên model đều được phục vụ bởi CÙNG một lõi** — response trả `model: "glm-4-plus"` ở cả 8 trường hợp. Tham số `model` bị gateway bỏ qua: gọi "glm-5.3-flash" vẫn silently nhận GLM-4.6.
 - → **GLM 5.3 Flash KHÔNG có thật trong sandbox z.ai này.** Lõi chat duy nhất: **GLM-4.6** (glm-4-plus nội bộ), miễn phí theo sandbox.
 - Năng lực riêng khác của SDK (endpoint khác, không phải lõi chat): **glm-5v-turbo** (VLM nhìn ảnh — đã dùng chấm verify CV), TTS, ASR, image-generation.
-- Danh sách **12 model free** (`space-bunny-free` = fine-tune GLM-4.6, `ling-3.1-flash-free`, `mimo-v2.6-flash-free`, `nemotron-3.5-lightning-free`, `step-5-preview-free`…) thuộc **Zen gateway** (provider `opencode-zen`) — cần `OPENCODE_ZEN_API_KEY` đang CHƯA cấu hình, và trong danh sách đó cũng không có GLM-5.3-flash. GLM-5.3-flash mà các app CRM/TMO dùng là qua gateway khác (OpenRouter/Zen bên ngoài), không phải sandbox z.ai.
+- Danh sách **model free** (`glm-5.3-flash-free`, `nemotron-3.5-lightning-free`, `deepseek-v4.1-flash-free`…) thuộc **Zen gateway** (`https://opencode.ai/zen/v1` — provider opencode-zen). **Cập nhật Task 152 (đo bằng key oc_sk thật):** gateway đang liệt kê 44 model, CÓ `glm-5.3-flash` + `glm-5.3-flash-free`; key xác thực hợp lệ nhưng **paid → 402 "Insufficient account funds"** (hết credit), **free → 403 "free tier can only be used from within OpenCode"** với curl thô, và qua CLI OpenCode trong sandbox thì bị **chặn tầng IP** ("abusive traffic from this IP") — không dùng được từ sandbox này. GLM-5.3-flash mà các app CRM/TMO dùng là qua gateway bên ngoài (OpenRouter/Zen có credit), không phải sandbox z.ai.
 
 ---
 
-*Task 151 · read-only review · script `scripts/review-sell-mechanism.ts` + output `scripts/review-sell-output.txt` · không đụng src/*
+## 4. Task 152 (20/10/2026) — VÁ F-151-1 · F-151-2 + VERIFY E2E F-151-3
+
+**F-151-1 (MEDIUM) — ĐÃ VÁ (4 tầng guard, defense-in-depth):**
+
+| Tầng | File | Cơ chế |
+|---|---|---|
+| Sinh tín hiệu | `agents-run/persist.ts` | Bind thêm `consensusDominant` (cột mới schema Signal) vào snapshot B9 |
+| Auto-decision #91 | `signal-execution.ts` autoDecideSignalByConsensus | Duyệt chỉ khi `dominant` khớp hướng (SELL↔DOWN · BUY↔UP); lệch → TỪ CHỐI + audit `consensus-direction-mismatch`; thiếu snapshot → fail-safe `missing-dominant-snapshot` |
+| Chốt lệnh (hội tụ 3 đường: auto #91 · duyệt tay · K1) | `signal-execution.ts` createPaperOrderFromSignal | 409 "chặn hướng" khi gate CONSENSUS nhưng dominant lệch/null (chỉ khi enforce=true, đồng bộ khối B9 cũ) |
+| K1 sandbox | `k-sandbox.ts` autoConvertSignalToSandbox | Skip có lý do `huong-so-dong-khong-khop-{FLAT/null}` |
+
+`computeConsensus` (bayes/synthesis.ts) giờ trả `dominant` ra snapshot; UI chip đồng thuận hiển thị luôn hướng ("Đồng thuận 85,2% · giảm").
+
+**F-151-2 (LOW) — ĐÃ VÁ:** `persist.ts` lưu `stopLoss/takeProfit` cho cả MUA lẫn BÁN (SELL = mốc của chính quyết định bán; Kelly hint vốn đã dùng).
+
+**F-151-3 (QUAN SÁT) — ĐÃ VERIFY E2E:** `scripts/p152-sell-e2e-verify.ts` — hermetic trên schema Postgres scratch `p152e2e` (cùng DB Supabase, cách ly tuyệt đối, dọn sạch sau chạy): **23/23 PASS** — synth tín hiệu SELL đồng thuận DOWN → auto-duyệt → lệnh LIMIT 200cp @29.700 (nav5pct · cap vị thế · kẹp dải ±7%) → fill engine khớp (fee 8.910/thuế 5.940/realized +340.000/cash 105.925.150/audit ORDER_FILLED/equity) → 5 guard hướng đều chặn đúng (FLAT · BUY-ngược · null · K1-skip · manual-409). Đường bán CHÍNH THỨC đã chạy hết ray trong môi trường kiểm soát.
+
+*Điều phối chạy lại: CREATE SCHEMA p152e2e → `DATABASE_URL=<url>?schema=p152e2e bunx prisma db push --skip-generate` → `DATABASE_URL=<url>?schema=p152e2e bun scripts/p152-sell-e2e-verify.ts` → DROP SCHEMA CASCADE.*
+
+---
+
+*Task 151 · read-only review · script `scripts/review-sell-mechanism.ts` + output `scripts/review-sell-output.txt`
+*Task 152 · fix + E2E · `scripts/p152-sell-e2e-verify.ts` · 0 dòng hành vi cũ bị đổi ngoài guard hướng + stop/take SELL*

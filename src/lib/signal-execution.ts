@@ -106,6 +106,8 @@ export interface SignalWithRefs {
   /** #110 M4.2 — chip đồng thuận CONSENSUS/WEAK_MAJORITY/NO_CONSENSUS. */
   consensusGate: string | null;
   consensusRatio: number | null;
+  /** F-151-1 (Task 152) — hướng số đông snapshot (UP/DOWN/FLAT · null dữ liệu cũ). */
+  consensusDominant: string | null;
 }
 
 /** Map SignalRow (đủ 15 trường cũ + 3 trường mới PHASE3 §4.1) — dùng chung 3 route signals. */
@@ -131,6 +133,7 @@ export function mapSignalRow(s: SignalWithRefs) {
     rejectNote: s.rejectNote,
     consensusGate: s.consensusGate ?? null,
     consensusRatio: s.consensusRatio ?? null,
+    consensusDominant: s.consensusDominant ?? null,
   };
 }
 
@@ -277,6 +280,35 @@ export async function createPaperOrderFromSignal(
             ? "Tín hiệu chưa có snapshot cổng đồng thuận (dữ liệu cũ trước B9) — không thể chuyển lệnh; fail-safe đồng bộ với auto-decision."
             : `Tín hiệu bị CỔNG ĐỒNG THUẬN chặn (${signal.consensusGate === "WEAK_MAJORITY" ? "đa số yếu" : "không đồng thuận"} — tỉ lệ trọng số số đông ${signal.consensusRatio != null ? `${(signal.consensusRatio * 100).toFixed(1).replace(".", ",")}%` : "?"} < 80%). Tín hiệu sinh ra khi hội đồng chưa đạt đồng thuận 80% → giữ GIỮ, không tạo lệnh.`,
       };
+    }
+    // F-151-1 (Task 152): đồng thuận PHẢI KHỚP HƯỚNG — gate CONSENSUS chỉ chứng
+    // minh độ tập trung ≥80% của số đông, còn hướng lệnh phải do dominant quyết
+    // định. Hội đồng đồng thuận "đi ngang" (FLAT) hay ngược hướng thì KHÔNG được
+    // chuyển lệnh; thiếu snapshot dominant (tín hiệu cũ trước fix) → fail-safe
+    // chặn đồng bộ semantics gate-null ở trên. Áp cho CẢ 3 đường vào lệnh hội tụ ở
+    // hàm này: auto-decision #91 · trader duyệt tay · K1 sandbox auto-convert.
+    if (
+      setting.enforce &&
+      signal.consensusGate === "CONSENSUS" &&
+      signal.direction !== "HOLD"
+    ) {
+      const expected = signal.direction === "SELL" ? "DOWN" : "UP";
+      const dom = signal.consensusDominant;
+      if (dom !== expected) {
+        const domVi =
+          dom === "UP" ? "tăng" : dom === "DOWN" ? "giảm" : dom === "FLAT" ? "đi ngang" : null;
+        const ratioTxt =
+          signal.consensusRatio != null
+            ? `${(signal.consensusRatio * 100).toFixed(1).replace(".", ",")}%`
+            : "?";
+        return {
+          ok: false,
+          status: 409,
+          error: domVi
+            ? `Tín hiệu bị CỔNG ĐỒNG THUẬN chặn hướng: hội đồng đồng thuận ${ratioTxt} nhưng nghiêng ${domVi} — lệnh ${signal.direction === "SELL" ? "BÁN cần số đông GIẢM" : "MUA cần số đông TĂNG"} (F-151-1: gate chặt hướng số đông).`
+            : `Tín hiệu đủ đồng thuận 80% nhưng thiếu snapshot hướng số đông (dominant — dữ liệu cũ trước F-151-1) — fail-safe không chuyển lệnh.`,
+        };
+      }
     }
   }
   // F-207 (audit 19-b): tín hiệu đã có lệnh trong sổ (dù actedAt thiếu) → chặn tạo trùng.
@@ -900,6 +932,7 @@ export async function autoDecideSignalByConsensus(signalId: string): Promise<Aut
         status: true,
         consensusGate: true,
         consensusRatio: true,
+        consensusDominant: true,
         instrument: { select: { symbol: true } },
       },
     });
@@ -919,7 +952,18 @@ export async function autoDecideSignalByConsensus(signalId: string): Promise<Aut
 
     const ratio = signal.consensusRatio;
     const gate = signal.consensusGate;
+    const dominant = signal.consensusDominant;
     const symbol = signal.instrument.symbol;
+
+    // F-151-1 (Task 152): gate CONSENSUS phải còn KHỚP HƯỚNG SỐ ĐÔNG — đồng
+    // thuận "đi ngang" (dominant FLAT) hay ngược hướng KHÔNG duyệt lệnh. Trước
+    // fix, kẽ này cho phép Chủ tịch đề xuất SELL khi hội đồng đồng thuận FLAT
+    // 85% và auto-decision vẫn duyệt ngay — ràng buộc hướng lúc đó chỉ là
+    // advisory trong prompt. Thiếu snapshot dominant (tín hiệu cũ trước fix)
+    // → fail-safe TỪ CHỐI như gate null (không chứng minh được hướng).
+    const expectedDominant =
+      signal.direction === "SELL" ? "DOWN" : signal.direction === "BUY" ? "UP" : null;
+    const dirMatch = expectedDominant != null && dominant === expectedDominant;
 
     // ── Nhánh 1: BUY/SELL đủ đồng thuận ≥80% → DUYỆT NGAY ──────────────
     // QUYẾT ĐỊNH tách khỏi KHẢ NĂNG ĐẶT LỆNH: "duyệt" là phán quyết của cổng
@@ -929,7 +973,8 @@ export async function autoDecideSignalByConsensus(signalId: string): Promise<Aut
     // hiệu vẫn ĐÓNG BẰNG DUYỆT (ACTED) — không treo ACTIVE chờ ai bấm nút.
     if (
       (signal.direction === "BUY" || signal.direction === "SELL") &&
-      gate === "CONSENSUS"
+      gate === "CONSENSUS" &&
+      dirMatch
     ) {
       const res = await createPaperOrderFromSignal(signalId, { sizing: "nav5pct" });
       if (res.ok) {
@@ -1022,6 +1067,16 @@ export async function autoDecideSignalByConsensus(signalId: string): Promise<Aut
         gate === "CONSENSUS"
           ? `Tự động TỪ CHỐI: tín hiệu GIỮ — hội đồng đồng thuận ${pctVN(ratio)} nhưng chiến lược giữ nguyên vị thế, không có lệnh để duyệt (quy tắc 1 duyệt · 2 từ chối).`
           : `Tự động TỪ CHỐI: tín hiệu GIỮ (không tạo lệnh) — cổng đồng thuận ${gate === "WEAK_MAJORITY" ? `đa số yếu ${pctVN(ratio)} < 80%` : gate === "NO_CONSENSUS" ? "không đồng thuận" : "chưa có snapshot"} ép giữ.`;
+    } else if (gate === "CONSENSUS") {
+      // F-151-1 (Task 152): đủ ≥80% nhưng hướng số đông KHÔNG khớp hướng tín
+      // hiệu (BUY/SELL chỉ rơi vào đây khi !dirMatch) — hoặc thiếu snapshot
+      // dominant (tín hiệu cũ) → fail-safe. Đồng thuận "đi ngang" là GIỮ,
+      // không phải duyệt BÁN/MUA.
+      const domVi =
+        dominant === "UP" ? "tăng" : dominant === "DOWN" ? "giảm" : dominant === "FLAT" ? "đi ngang" : null;
+      reason = domVi
+        ? `Tự động TỪ CHỐI theo cổng đồng thuận: hội đồng đồng thuận ${pctVN(ratio)} nhưng nghiêng ${domVi} — không khớp hướng ${signal.direction === "SELL" ? "BÁN (cần số đông GIẢM)" : "MUA (cần số đông TĂNG)"} (F-151-1: gate chặt hướng số đông).`
+        : "Tự động TỪ CHỐI (fail-safe): gate CONSENSUS nhưng thiếu snapshot hướng số đông (dominant) — không chứng minh được hướng đồng thuận khớp hướng tín hiệu (F-151-1).";
     } else if (gate === "WEAK_MAJORITY") {
       reason = `Tự động TỪ CHỐI theo cổng đồng thuận: ${pctVN(ratio)} < 80% (đa số yếu) — không đủ đồng thuận để duyệt lệnh.`;
     } else if (gate === "NO_CONSENSUS") {
@@ -1063,11 +1118,15 @@ export async function autoDecideSignalByConsensus(signalId: string): Promise<Aut
           reason:
             signal.direction === "HOLD"
               ? "hold-no-order"
-              : gate === "WEAK_MAJORITY"
-                ? "weak-majority"
-                : gate === "NO_CONSENSUS"
-                  ? "no-consensus"
-                  : "missing-snapshot",
+              : gate === "CONSENSUS"
+                ? dominant == null
+                  ? "missing-dominant-snapshot"
+                  : "consensus-direction-mismatch"
+                : gate === "WEAK_MAJORITY"
+                  ? "weak-majority"
+                  : gate === "NO_CONSENSUS"
+                    ? "no-consensus"
+                    : "missing-snapshot",
           note: reason,
         }),
       },

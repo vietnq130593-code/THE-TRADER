@@ -105,27 +105,34 @@ const nfConsensus = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 })
 export function consensusMeta(
   gate: string | null | undefined,
   ratio: number | null | undefined,
+  dominant?: string | null,
 ): ConsensusMeta | null {
   if (!gate) return null;
   const pct = ratio != null ? `${nfConsensus.format(ratio * 100)}%` : null;
+  // F-151-1 (Task 152) — hướng số đông của snapshot gắn lên chip ("tăng"/
+  // "giảm"/"đi ngang") để trader thấy vì sao tín hiệu khớp hướng bị duyệt/
+  // bị chặn (gate chỉ duyệt lệnh KHỚP hướng số đông).
+  const dirVi =
+    dominant === "UP" ? "tăng" : dominant === "DOWN" ? "giảm" : dominant === "FLAT" ? "đi ngang" : null;
+  const dirSuffix = dirVi ? ` · ${dirVi}` : "";
   switch (gate) {
     case "CONSENSUS":
       return {
-        label: pct ? `Đồng thuận ${pct}` : "Đồng thuận",
+        label: pct ? `Đồng thuận ${pct}${dirSuffix}` : `Đồng thuận${dirSuffix}`,
         tone: "primary",
-        title: `Hội đồng đồng thuận${pct ? ` ${pct} trọng số phiếu` : ""} (đạt ngưỡng 80%) — cổng enforcement cho phép thực thi MUA/BÁN.`,
+        title: `Hội đồng đồng thuận${pct ? ` ${pct} trọng số phiếu` : ""}${dirVi ? ` nghiêng ${dirVi}` : ""} (đạt ngưỡng 80%) — cổng enforcement chỉ duyệt lệnh MUA/BÁN khớp hướng số đông${dirVi ? ` (${dirVi})` : ""} (F-151-1).`,
       };
     case "WEAK_MAJORITY":
       return {
-        label: pct ? `Đa số yếu ${pct}` : "Đa số yếu",
+        label: pct ? `Đa số yếu ${pct}${dirSuffix}` : `Đa số yếu${dirSuffix}`,
         tone: "flat",
-        title: `Đa số yếu${pct ? ` ${pct} trọng số phiếu` : ""} (50–80%, chưa đạt 80%) — enforcement hạ mọi MUA/BÁN về GIỮ.`,
+        title: `Đa số yếu${pct ? ` ${pct} trọng số phiếu` : ""}${dirVi ? ` nghiêng ${dirVi}` : ""} (50–80%, chưa đạt 80%) — enforcement hạ mọi MUA/BÁN về GIỮ.`,
       };
     case "NO_CONSENSUS":
       return {
-        label: pct ? `Không đồng thuận ${pct}` : "Không đồng thuận",
+        label: pct ? `Không đồng thuận ${pct}${dirSuffix}` : `Không đồng thuận${dirSuffix}`,
         tone: "neutral",
-        title: `Hội đồng không đạt đa số${pct ? ` (${pct} trọng số phiếu)` : ""} — không có xu hướng chung.`,
+        title: `Hội đồng không đạt đa số${pct ? ` (${pct} trọng số phiếu)` : ""}${dirVi ? `, xu hướng yếu nghiêng ${dirVi}` : ""} — không có xu hướng chung.`,
       };
     default:
       return null;
@@ -242,7 +249,7 @@ export function SignalDetailDialog({ signal, onOpenChange }: SignalDetailDialogP
   const s = signal;
   const dir = s ? (SIGNAL_DIRECTION[s.direction] ?? SIGNAL_DIRECTION.HOLD) : null;
   const conf = s ? (SIGNAL_CONFIDENCE[s.confidence] ?? SIGNAL_CONFIDENCE.MEDIUM) : null;
-  const cons = s ? consensusMeta(s.consensusGate, s.consensusRatio) : null;
+  const cons = s ? consensusMeta(s.consensusGate, s.consensusRatio, s.consensusDominant) : null;
   const st = s ? statusMeta(s) : null;
   const evaln = s?.evaluation ?? null;
   const canReject = s != null && s.status === "ACTIVE" && !s.actedAt && !s.rejectedAt;
@@ -298,6 +305,7 @@ export function SignalDetailDialog({ signal, onOpenChange }: SignalDetailDialogP
         takeProfit: s.takeProfit,
         consensusGate: s.consensusGate ?? null,
         consensusRatio: s.consensusRatio ?? null,
+        consensusDominant: s.consensusDominant ?? null,
         status: s.status,
         sandboxExecuted: s.sandboxExecuted ?? false,
         paperOrdered: s.paperOrdered ?? false,

@@ -128,7 +128,7 @@ function SessionClosePanel() {
   // Tín hiệu mới nhất — signals[0] (API trả mới nhất trước).
   const latest = signalsQuery.data?.signals[0];
   const dir = latest ? (SIGNAL_DIRECTION[latest.direction] ?? SIGNAL_DIRECTION.HOLD) : null;
-  const cons = latest ? consensusMeta(latest.consensusGate, latest.consensusRatio) : null;
+  const cons = latest ? consensusMeta(latest.consensusGate, latest.consensusRatio, latest.consensusDominant) : null;
   const signalTone: StatTileTone = latest
     ? latest.direction === "BUY"
       ? "up"

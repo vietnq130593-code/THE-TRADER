@@ -693,6 +693,9 @@ export interface SignalRow {
   consensusGate?: string | null;
   /** #110 M4.2.1 — tỉ lệ trọng số số đông (0..1) kèm consensusGate. */
   consensusRatio?: number | null;
+  /** F-151-1 (Task 152) — hướng số đông tại snapshot (UP/DOWN/FLAT; null =
+   *  tín hiệu cũ trước fix). Gate CONSENSUS chỉ duyệt lệnh khớp hướng này. */
+  consensusDominant?: string | null;
   /** #110 M4.2.3 — phán quyết sổ đánh giá D-LEDGER (#106) gắn lên tín hiệu
    *  đã đánh giá (null = chưa đánh giá). Chip "LỢI +2,3%"/"TỔN THẤT −1,1%". */
   evaluation?: {
@@ -1115,6 +1118,11 @@ export interface ConsensusSnapshot {
   ratio: number;
   /** CONSENSUS (≥0,80) | WEAK_MAJORITY ([0,50·0,80)) | NO_CONSENSUS (<0,50) | pool < 4 cử tri. */
   gate: "CONSENSUS" | "WEAK_MAJORITY" | "NO_CONSENSUS";
+  /** F-151-1 (Task 152) — hướng số đông mà ratio đề cập (UP/DOWN/FLAT).
+   *  Gate CONSENSUS chỉ có nghĩa thực thi khi hướng khớp hướng tín hiệu
+   *  (SELL ↔ DOWN · BUY ↔ UP). Optional: assessment detail JSON cũ (trước
+   *  fix) không có trường này — consumer phải xử lý undefined. */
+  dominant?: "UP" | "DOWN" | "FLAT";
   /** Nhãn tiếng Việt hiển thị. */
   gateLabel: string;
   tally: ConsensusVote[];
