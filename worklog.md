@@ -5131,3 +5131,22 @@ Stage Summary:
 - F-151-3 ĐÃ VERIFY: đường bán lần đầu chạy TRỌN VẸN (signal → auto-duyệt → lệnh → khớp → sổ: fee/thuế/realized/cash/equity/audit) trong schema scratch — 23/23 PASS, dọn sạch sau chạy
 - Nguyên tắc giữ: hành vi cũ không đổi ngoài guard hướng + stop/take SELL; 0 tín hiệu ACTIVE bị ảnh hưởng lúc deploy; app chạy liên tục không restart
 
+
+---
+Task ID: 153
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu hỏi xác nhận: "nếu tích hợp Opencode CLI thì có dùng được các lõi free không?" — test lại toàn bộ chuỗi free-tier từ trong CLI bằng chứng cứ mới nhất
+
+Work Log:
+- Khôi phục ngữ cảnh từ worklog Task 151/152 (phiên bị đứt context): Task 152 đã test key Zen oc_sk_…cI6R — hợp lệ nhưng free bị chặn IP ("abusive traffic"), paid 402 hết tiền; F-151-1/2/3 đã vá + verify E2E 23/23
+- Kiểm tra môi trường: OpenCode CLI 1.19.3 còn cài (npm -g), auth.json đã mất → ghi lại auth local ngoài repo (key KHÔNG in ra output, redact oc_sk_*** trong mọi log)
+- Đo gateway trực tiếp bằng key: GET /zen/v1/models → 200, 45 model (9 model free: glm-5.3-flash-free · deepseek-v4.1-flash-free · beam-free · mimo-v2.6-flash-free · minimax-m3.1-flash-free · nemotron-3.5-super-vl-free · nemotron-3.5-lightning-free · nemotron-3-ultra-free · longcat-2.5-preview-free); curl completion free → 403 FreeTierError (tier chỉ chạy trong OpenCode); paid glm-5.3-flash → 402 hết credit — KHỚP Task 152
+- Phát hiện kỹ thuật: provider prefix đúng trong CLI là `opencode/` (không phải `zen/` — lần đầu chạy zen/ bị ProviderModelNotFoundError treo/viết nhầm là lỗi server); `opencode models` list đúng 10 model (9 free + big-pickle)
+- TEST ĐƯỜNG CHÍNH (con đường user hỏi): `opencode run -m opencode/glm-5.3-flash-free` từ trong CLI → KẾT QUẢ: "OpenCode's free models aren't available from your current network because we've detected abusive traffic from this IP address. This isn't related to your account… subscribe to OpenCode Go" — chặn TẦNG IP, không phải account
+- Bài học shell: `cmd1 && cmd2 & next-cmd` background hoá CẢ chuỗi && → các lần đọc log "không thấy file" là wc chạy sai cwd; vá bằng subshell riêng + absolute path
+- Dev server liên tục khỏe (tick market 200), không đụng src/ — task thuần điều tra + trả lời
+
+Stage Summary:
+- ĐÁP CÂU HỎI CHỦ SỞ HỮU: TÍCH HỢP OPENCODE CLI KHÔNG GIÚP DÙNG LÕI FREE TRONG SANDBOX NÀY — free tier đã chạy đúng từ trong CLI (provider opencode/ hợp lệ, key xác thực OK) nhưng bị chặn ở TẦNG IP của sandbox z.ai ("abusive traffic from this IP address. This isn't related to your account") — IP chia sẻ nhiều người dùng nên bị OpenCode blacklist; tích hợp CLI vào THE TRADER không đổi IP xuất phát → vẫn chặn
+- 3 đường thực tế để dùng lõi đó: (1) chạy từ IP sạch (máy nhà/VPS riêng) — khi đó vẫn phải chạy QUA OpenCode CLI/serve vì free tier chặn REST trực tiếp; (2) nạp credit Zen → gọi REST trực tiếp OpenAI-compatible từ backend THE TRADER (glm-5.3, glm-5.3-flash, claude-haiku-4-5, grok… — hợp kiến trúc REST-first, không cần CLI); (3) subscribe OpenCode Go (gợi ý chính thức trong thông báo lỗi); lưu ý 402 hiện tại trả về bình thường cho IP này nên paid-tier sau khi nạp tiền CÓ KHẢ NĂNG dùng được từ sandbox, nhưng chưa verify được do account hết credit
+- Key oc_sk_…cI6R: vẫn còn sống, xác thực tốt (45 model) — chỉ IP là vấn đề với free tier
