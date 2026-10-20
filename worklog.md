@@ -4967,3 +4967,42 @@ Stage Summary:
 - Nguồn tái sinh: public/cv/docx-gen/generate.cjs — sửa nội dung → cd public/cv/docx-gen && bun generate.cjs
 - Điểm khác Task 145: PDF (chỉ đọc, 1 trang, không có dự án) vs DOCX (chỉnh sửa được, 2 trang, có THE TRADER làm flagship + placeholder tự điền)
 - Commit: chỉ worklog.md (toàn bộ file CV + generator nằm trong /public/cv/ đã gitignore theo đúng kỷ luật PII của Task 145)
+
+---
+Task ID: 147-2
+Agent: general-purpose (docs image cleanup)
+Task: Dọn ảnh verify task cũ trong docs/ theo yêu cầu chủ sở hữu — giữ diagram/screenshot tuyển chọn + ảnh được tài liệu tham chiếu
+
+Work Log:
+- Đọc 150 dòng cuối worklog (context: Task 146 vừa sinh CV docx; Task 147 cha = chủ sở hữu yêu cầu dọn "quá nhiều ảnh" trong docs/)
+- Baseline đo: docs/ 29M · 229 ảnh tracked (222 PNG verify ở gốc docs/ + 1 sơ đồ diagrams/ + 6 screenshots/) · 29 file non-image (24 md gốc + 4 audit/*.md + diagrams html) · git status sạch (0 untracked)
+- Viết script python tại /home/z/tmp147-2/cleanup_docs_images.py (NGOÀI repo, không thêm file mới vào repo): os.walk docs/ gom mọi *.png/jpg/jpeg/gif/webp/svg → mỗi ảnh lấy basename, dò substring trong toàn bộ 466 file text tracked (git ls-files, tự bỏ binary chứa NUL) + worklog.md xử lý tách riêng → phân loại KEEP/DELETE; chạy dry-run xem danh sách đầy đủ TRƯỚC khi áp
+- Cross-check độc lập bằng rg: pattern "docs/<name>.png" và cú pháp markdown ![..](..png) quét toàn repo (ngoại trừ worklog.md) = 0 match → không một file tài liệu/code nào (README, docs/**/*.md, src, scripts, *.json, *.ts/tsx, diagrams html) tham chiếu ảnh nào trong docs/ — 222 ảnh gốc docs/ chỉ được nhắc trong worklog (34) hoặc không được nhắc đâu cả (188)
+- Phân loại cuối: KEEP 7 ảnh = RULE2 vô điều kiện (docs/diagrams/the-trader-architecture-vi.png + 6 screenshot sản phẩm docs/screenshots/01-06); DELETE 222 ảnh = RULE4 (34 worklog-only + 188 unreferenced) — đúng bản chất screenshot verify task lịch sử, log văn bản vẫn đủ trong worklog
+- Xoá bằng git rm -q -- (chia batch 100): 222 tracked, 0 untracked; TUYỆT ĐỐI KHÔNG commit/push (orchestrator commit)
+- Verify sau xoá 4 phép: (a) 7/7 ảnh KEEP vẫn tồn tại trên đĩa; (b) quét docs/**/*.md + README + root *.md (trừ worklog) tìm tham chiếu tới ảnh đã xoá = 0, dangling pre-existing = 0; (c) số ảnh còn trên đĩa = 7 = đúng số KEEP; (d) git status đúng 222 dòng "D" toàn docs/*.png — không file non-image nào bị đụng (24 md + audit/4 + diagrams html + CV_THE_TRADER.md giữ nguyên byte)
+- Không đụng gì ngoài docs/ + worklog append: public/cv, src, prisma, scripts, mini-services, PM2/dev server nguyên vẹn; không chạy lint/test (không cần cho xoá ảnh)
+
+Stage Summary:
+- Số ảnh: 229 → 7 (xoá 222 = 34 chỉ-referenced-bởi-worklog + 188 không-referenced; giữ 7 = 1 sơ đồ kiến trúc diagrams/the-trader-architecture-vi.png + 6 screenshot sản phẩm screenshots/01-06 theo rule vô điều kiện — cross-check rg xác nhận 0 file tài liệu ngoài worklog tham chiếu bất kỳ ảnh docs/ nào, nên không ảnh nào đủ điều kiện KEEP theo rule tham chiếu)
+- Dung lượng: docs/ 29M → 3,7M (giải phóng ~25,3MB); lịch sử verify bằng văn bản vẫn đầy đủ trong worklog.md — mất mỗi pixel, giữ nguyên chứng từ chữ
+- Tham chiếu gãy sau dọn = 0 (verify 2 lớp độc lập: script substring toàn file tracked + rg pattern repo-wide); xoá qua git rm để orchestrator review + commit; working tree sạch ngoài 222 D + worklog.md append
+
+---
+Task ID: 147
+Agent: main-orchestrator (Z.ai Code)
+Task: YÊU CẦU CHỦ SỞ HỮU — đặt CV docx vào docs/ (không thấy ở public/cv vì thư mục đó gitignored) · dọn "quá nhiều ảnh" trong docs/ · bổ sung dự án CRM Level 1 Haircare vào CV (nghiên cứu app thật + repo GitHub)
+
+Work Log:
+- Khảo sát: file docx Task 146 vẫn tồn tại ở public/cv (16,8 KB — chủ sở hữu không thấy vì public/cv bị gitignore nên không hiện trên GitHub) → theo yêu cầu đặt thêm bản chính tại docs/ + giữ bản sao public/cv/ để tải qua preview panel
+- Subagent 147-2 dọn ảnh docs/: 229 → 7 ảnh (giữ docs/diagrams/the-trader-architecture-vi.png + 6 screenshot tuyển chọn docs/screenshots/), xoá 222 ảnh verify task lịch sử bằng git rm (188 không tham chiếu + 34 chỉ worklog tham chiếu), giải phóng ~25,3 MB (29M → 3,7M), kiểm tra tham chiếu gãy = 0, mọi file non-image nguyên vẹn
+- Nghiên cứu CRM (agent-browser + clone repo /tmp/crm-repo): đăng nhập thật level1-haircare.vercel.app (tài khoản chủ sở hữu cung cấp) → duyệt 7 trang: Thu ngân POS (hóa đơn/nhanh/dịch vụ-sản phẩm-gói) · Khách hàng (4.199+ KH thật, lọc nhóm/nguồn, xuất Excel, GIỮ KHÁCH TỰ ĐỘNG) · AT3 (trợ lý tư vấn giọng nói 3 bước + luyện tập + offline) · Chấm điểm (đánh giá bản ghi âm tư vấn theo rubric) · Báo cáo BI 9 phân hệ · AI Config 8 tab (ANN 58→96/96/48→20 dự đoán no-show + churn 30 ngày · NAS · RL Q-table · LLM GLM-5.3-flash + reasoning_effort) · repo: ~341K dòng TS/TSX · 225 API routes · ai-engine ~22K dòng (NAS supernet+hypernetwork+surrogate ~11K) · Supabase (auth + migrations) · R2/S3 · xlsx/pdf-lib · leaflet · PWA · Bun/PM2/Caddy
+- Cập nhật generate.cjs: thêm dự án LEVEL 1 HAIRCARE CRM (4 bullet định lượng) song song THE TRADER (6 bullet giữ nguyên) · Tóm tắt nâng cấp "tác giả độc lập của hai hệ thống sản phẩm đang vận hành" · kỹ năng bổ sung Vercel · Supabase Auth+migrations · NAS supernet/hypernetwork · ASR rubric · xuất 2 vị trí docs/ + public/cv/
+- Verify 3 lớp: postcheck.py PASS 9/9 (0 lỗi 0 cảnh báo) · LibreOffice render 2 trang sạch · VLM 9,2/10 PASS 7/7 (CRM block tách bạch rõ · dấu tiếng Việt chuẩn · bảng Kaggle đẹp · name-bar + số trang đúng)
+- .gitignore: thêm rule /docs/cv-*.docx (PII — CV chứa SĐT/email/DOB không push GitHub, comment hướng dẫn cách công khai nếu chủ sở hữu muốn)
+- PAT chủ sở hữu dán trong chat (repo CRM, account nguyenquocviety2c-code): dùng đúng 1 lần cho git clone vào /tmp — KHÔNG lưu vào bất kỳ file nào của repo; khuyến nghị rotate vì đã lộ trong hội thoại
+
+Stage Summary:
+- Sản phẩm: docs/cv-nguyen-quoc-viet-vi.docx (17,2 KB, 2 trang — CHÍNH theo yêu cầu) + bản sao public/cv/cv-nguyen-quoc-viet-vi.docx (tải qua preview /cv/cv-nguyen-quoc-viet-vi.docx) — Google Docs-safe, chỉnh sửa tự do, 2 dự án tiêu biểu: THE TRADER (~89K LOC, 24 agents) + LEVEL 1 HAIRCARE CRM (~341K LOC, 225 API, 4.200+ KH thật, AI engine 22K dòng)
+- docs/ gọn từ 29M → 3,7M (chỉ còn 24 blueprint md + 4 audit md + diagram + 6 screenshot tuyển chọn + CV docx)
+- Commit: 222 ảnh deleted (subagent git rm) + .gitignore rule mới + worklog — KHÔNG push được (PAT cũ trong remote đã hết hạn do chủ sở hữu rotate — đúng hướng P0)
