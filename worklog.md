@@ -5021,3 +5021,24 @@ Work Log:
 Stage Summary:
 - Remote THE-TRADER đồng bộ trở lại: 5 commit (P0-P3 lộ trình + CV PDF + CV docx + dọn ảnh docs) đã lên GitHub
 - PAT chỉ tồn tại ở .git/config (local) — không file tracked nào chứa token
+
+---
+Task ID: 149
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu KHÔNG tìm thấy CV trên GitHub lẫn cây thư mục sandbox → chẩn đoán + tạo repo GitHub PRIVATE riêng cho CV + xác nhận PAT còn giữ
+
+Work Log:
+- Chẩn đoán nguyên nhân kép: (1) Trên GitHub — CV được chủ đích gitignore từ Task #145/#147 (PII: SĐT/email/DOB không bao giờ push repo công khai THE-TRADER, bài học P0) nên không thể tìm thấy; (2) Trong cây thư mục sandbox — file CÒN NGUYÊN VẸN nhưng thư mục/file bị gitignore (/public/cv/, /docs/cv-*.docx) nên cây duyệt file ẩn chúng
+- Xác nhận file CV nguyên vẹn trên đĩa: public/cv/cv-nguyen-quoc-viet-vi.pdf (47.654B, PDF 1 trang) · cv-nguyen-quoc-viet-en.pdf (43.037B) · cv-nguyen-quoc-viet-vi.docx (17.626B, v2 mới nhất 20/10 có CRM Haircare) · generate_cv.py · docs/cv-nguyen-quoc-viet-vi.docx (md5 290a5814 khớp bản public/cv) · docs/CV_THE_TRADER.md (đã có trên GitHub)
+- Verify PAT trong git remote (40 ký tự, tài khoản vietnq130593-code) còn sống: GET /user HTTP 200; liệt kê 7 repo hiện có (chưa có repo CV nào)
+- TẠO REPO PRIVATE MỚI qua GitHub API: vietnq130593-code/CV — private:true, mô tả cảnh báo không public — HTTP 201 thành công
+- Push 6 file lên repo CV (init /tmp/cv-push, identity noreply): README.md (hướng dẫn bản nào mới nhất + info nộp hồ sơ NEXGEN + lý do bảo mật) · cv-nguyen-quoc-viet-vi.docx ⭐ · cv-nguyen-quoc-viet-vi.pdf · cv-nguyen-quoc-viet-en.pdf · generate_cv.py · CV_THE_TRADER.md — push exit 0
+- Verify sau push: repo.private=true · default_branch=main · 6 file hiển thị đúng trong /contents
+- Kiểm tra đường tải trực tiếp từ app đang chạy: GET localhost:3000/cv/cv-nguyen-quoc-viet-vi.pdf → 200 (47.654B) · /cv/cv-nguyen-quoc-viet-vi.docx → 200 (17.626B) — chủ sở hữu tải CV được ngay qua preview panel mà không cần GitHub
+- Dev server khỏe: tick market chảy liên tục trong dev.log, 0 lỗi
+- Không đụng src/ · không đụng repo THE-TRADER (main = origin/main đồng bộ sẵn) · PAT không ghi ra bất kỳ file/output nào
+
+Stage Summary:
+- CV giờ truy cập được 3 đường: (1) GitHub repo PRIVATE https://github.com/vietnq130593-code/CV (đăng nhập tài khoản chủ sở hữu mới thấy) · (2) tải trực tiếp từ preview app tại /cv/cv-nguyen-quoc-viet-vi.docx · (3) file vật lý sandbox public/cv/ + docs/ (ẩn trong cây duyệt vì gitignore — đúng chủ đích bảo mật)
+- Bản nộp hồ sơ nên dùng: cv-nguyen-quoc-viet-vi.docx (v2 20/10, có thêm dự án CRM Level 1 Haircare) — PDF 2 bản là v1 19/10 chưa có CRM
+- PAT GitHub: còn sống, lưu trong .git/config remote URL (đã rotate Task #148), chủ sở hữu yêu cầu giữ để dùng khi cần — đã dùng đúng 1 lần cho việc tạo repo + push CV này
