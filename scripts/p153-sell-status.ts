@@ -172,7 +172,9 @@ async function main() {
   p(`Tổng kết: ${postCount} tín hiệu sau vá · ${sellPosts.length} SELL · ${mismatch.length + missing.length} guard bắn · ${sellOrders.length} lệnh SELL đặt`);
 
   await db.$disconnect();
-  require("fs").writeFileSync("/tmp/p153-sell-status-output.txt", out.join("\n"));
+  await import("node:fs").then((fs) =>
+    fs.writeFileSync("/tmp/p153-sell-status-output.txt", out.join("\n"))
+  );
 }
 
 main().catch(async (e) => {

@@ -277,10 +277,9 @@ async function main() {
   await fs_write(out.join("\n"));
 }
 
-function fs_write(text: string): Promise<void> {
-  const fs = require("node:fs") as typeof import("node:fs");
+async function fs_write(text: string): Promise<void> {
+  const fs = await import("node:fs");
   fs.writeFileSync("/home/z/my-project/scripts/review-sell-output.txt", text);
-  return Promise.resolve();
 }
 
 main()

@@ -38,6 +38,80 @@ export const BANDIT_ARM_CODES = [
 
 /** Số phiên chờ trước khi kết toán reward. */
 const SETTLE_SESSIONS = 5;
+/** Rổ chấm kết quả — 10 mã thanh khoản (P0-2). */
+const SETTLE_BASKET_N = 10;
+/* ── W1 (#163 · review #162) — RỔ PIT TẠI NGÀY CAST ────────────────────────
+ * Trước đây: rổ chấm kết quả = top-10 theo QUOTE VOLUME MỚI NHẤT tại lúc
+ * settle → 2 lỗi cộng dồn cho mọi phiếu bầu:
+ *   (a) phi-PIT — phiếu bầu 5 phiên trước bị chấm bằng rổ đã TRƯỢT THÀNH PHẦN
+ *       (thanh khoản dồn mã khác trong 5 ngày đó) — cử tri bị thưởng/phạt
+ *       theo vũ trụ họ KHÔNG hề bầu;
+ *   (b) sai định nghĩa so với rổ ML (topByAdtv ADTV-45 EOD — P0-2 "định
+ *       nghĩa rổ duy nhất" của toàn hệ thống) → nhãn realized nhiễu, credit
+ *       assignment của cả 7 arm bandit + meta-learner F-02 đều nhòe.
+ * Giờ: MỖI phiếu chấm bằng top-10 ADTV 45 phiên EOD (Bar.value) tính đúng
+ * tại castDate — đúng rổ cử tri đã thấy khi bầu (agent-context dùng
+ * topByAdtv hiện tại mỗi chu kỳ). Mirror tinh topByAdtv tail-45: mean 45
+ * bar CUỐI ≤ castDate, tối thiểu 10 bar, close>0, value=close×volume khi
+ * cột null. Hoàn tác an toàn: phiếu đã settled giữ nguyên (idempotent
+ * keys) — chỉ phiếu settle TỪ phiên bản này dùng rổ PIT. */
+/** Mirror ADTV_SESSIONS (dated-series P0-2) — 45 phiên EOD. */
+const PIT_ADTV_SESSIONS = 45;
+/** Mirror ADTV_MIN_BARS — mã dưới 10 bar trong cửa sổ tự loại. */
+const PIT_ADTV_MIN_BARS = 10;
+/** Cửa sổ nạp bar: 45 phiên ≈ 77 ngày lịch (×1,7) + đệm lễ. */
+const PIT_ADTV_LOOKBACK_DAYS = 85;
+
+/**
+ * Rổ top-10 ADTV PIT cho từng castDate (W1 #163). 1 truy vấn instrument +
+ * 1 truy vấn bar trên toàn bộ vùng [castMin−85d, castMax] — chạy trong đợt
+ * settle (≤1 lần/ngày), KHÔNG nằm trên đường nóng status. Trả Map keyed
+ * theo castDate.getTime() để vòng settle O(1) tra rổ của từng phiếu.
+ */
+async function pitTopIdsByCast(castDates: Date[]): Promise<Map<number, string[]>> {
+  const out = new Map<number, string[]>();
+  const distinct = [...new Set(castDates.map((d) => d.getTime()))].sort((a, b) => a - b);
+  if (distinct.length === 0) return out;
+  const from = new Date(distinct[0] - PIT_ADTV_LOOKBACK_DAYS * 86_400_000);
+  const to = new Date(distinct[distinct.length - 1]);
+  const instruments = await db.instrument.findMany({
+    where: { isActive: true, market: "HOSE", type: "STOCK" },
+    select: { id: true },
+  });
+  if (instruments.length === 0) return out;
+  const bars = await db.bar.findMany({
+    where: { instrumentId: { in: instruments.map((i) => i.id) }, date: { gte: from, lte: to } },
+    orderBy: [{ instrumentId: "asc" }, { date: "asc" }],
+    select: { instrumentId: true, date: true, close: true, volume: true, value: true },
+  });
+  // Chuỗi value từng mã (date tăng dần — orderBy đảm bảo)
+  const seriesById = new Map<string, { ms: number; value: number }[]>();
+  for (const b of bars) {
+    if (!(b.close > 0)) continue;
+    const value = b.value != null ? Number(b.value) : b.close * b.volume;
+    if (!(value > 0)) continue;
+    const arr = seriesById.get(b.instrumentId) ?? [];
+    arr.push({ ms: b.date.getTime(), value });
+    seriesById.set(b.instrumentId, arr);
+  }
+  for (const castMs of distinct) {
+    const ranked: { id: string; adtv: number }[] = [];
+    for (const [id, arr] of seriesById) {
+      // tail-45 phiên ≤ castDate (mirror topByAdtv — quét từ cuối, skip bar
+      // sau castDate vì chuỗi tăng dần)
+      const vals: number[] = [];
+      for (let i = arr.length - 1; i >= 0 && vals.length < PIT_ADTV_SESSIONS; i--) {
+        if (arr[i].ms > castMs) continue;
+        vals.push(arr[i].value);
+      }
+      if (vals.length < PIT_ADTV_MIN_BARS) continue;
+      ranked.push({ id, adtv: vals.reduce((s, v) => s + v, 0) / vals.length });
+    }
+    ranked.sort((a, b) => b.adtv - a.adtv);
+    out.set(castMs, ranked.slice(0, SETTLE_BASKET_N).map((r) => r.id));
+  }
+  return out;
+}
 /** Ngưỡng realized direction của rổ (±0,5%). */
 const SETTLE_THRESHOLD = 0.005;
 /** Số mã tối thiểu có giá tại 2 mốc thời gian để kết toán. */
@@ -296,21 +370,15 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
     select: { date: true },
   });
 
-  // Rổ top-10 thanh khoản theo quote volume mới nhất — B5 §3.4: khoá về
-  // HOSE-STOCK (chuỗi settle lịch sử + tránh volume index ~2,1 tỷ tràn vào top)
-  const instruments = await db.instrument.findMany({
-    where: { isActive: true, market: "HOSE", type: "STOCK" },
-    select: {
-      id: true,
-      quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { volume: true } },
-    },
-  });
-  const topIds = instruments
-    .map((i) => (i.quotes[0] ? { id: i.id, volume: i.quotes[0].volume } : null))
-    .filter((r): r is { id: string; volume: number } => r !== null)
-    .sort((a, b) => b.volume - a.volume)
-    .slice(0, 10)
-    .map((r) => r.id);
+  // W1 (#163): rổ chấm kết quả = PIT tại castDate từng phiếu (xem pitTopIdsByCast).
+  // castDate mỗi assessment tính TRƯỚC vòng (pastDates đã có) → 1 truy vấn bar
+  // gộp cho mọi castDate khác nhau.
+  const castDateById = new Map<string, Date>();
+  for (const a of pending) {
+    const castDate = pastDates.find((d) => ictCloseMs(d.date) <= a.createdAt.getTime())?.date;
+    if (castDate != null) castDateById.set(a.id, castDate);
+  }
+  const pitBasket = await pitTopIdsByCast([...castDateById.values()]);
 
   let settled = 0;
   let votes = 0;
@@ -358,11 +426,17 @@ async function settlePendingRewardsRaw(): Promise<SettleResult> {
     const after = futureDates
       .filter((f) => ictCloseMs(f.date) >= a.createdAt.getTime())
       .slice(0, SETTLE_SESSIONS);
-    const castDate = pastDates.find((d) => ictCloseMs(d.date) <= a.createdAt.getTime())?.date;
+    const castDate = castDateById.get(a.id) ?? null;
     if (after.length < SETTLE_SESSIONS || castDate == null) continue;
     const realizedDate = after[SETTLE_SESSIONS - 1].date;
 
-    // Realized direction rổ top-10: equal-weight ret mỗi mã cast → realized
+    // W1 (#163): rổ PIT của riêng phiếu này — top-10 ADTV-45 EOD tại castDate.
+    // Không dựng được rổ (lỗ dữ liệu) → HOÃN, tuyệt đối không fallback về rổ
+    // khác kiểu cũ (chấm sai còn tệ hơn chậm).
+    const topIds = pitBasket.get(castDate.getTime());
+    if (!topIds || topIds.length < SETTLE_MIN_SYMBOLS) continue;
+
+    // Realized direction rổ PIT: equal-weight ret mỗi mã cast → realized
     const bars = await db.bar.findMany({
       where: { instrumentId: { in: topIds }, date: { in: [castDate, realizedDate] } },
       select: { instrumentId: true, date: true, close: true },

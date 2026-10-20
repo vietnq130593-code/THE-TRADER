@@ -5283,3 +5283,24 @@ Stage Summary:
 - Câu trả lời trung thực cho "hoàn toàn chặt chẽ chưa?": KHÔNG — và không hệ thống ML thật nào "không còn điểm yếu"; điểm mạnh thật của kiến trúc này là MỌI cạnh học đều có gate/kill-switch/audit + số yếu được hiển thị không che
 - 5 điểm yếu mở đều vá được có chủ đích: W1 tách reward theo instrument · W2 TTL/decay chunk L2 · W3 auto-retrain có guard · W4 holdout Q-table · W5 status hiển thị số holdout
 - Không đổi code — thuần điều tra read-only + báo cáo
+
+---
+Task ID: 163
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu duyệt "tiến hành vá theo thứ tự" — vá W2 → W1 → W5 từ review kiến trúc học #162
+
+Work Log:
+- ĐỈNH CHÍNH TRUNG THỰC trước khi vá: review #162 nói "L2 không có TTL/decay" là KHÔNG CHÍNH XÁC — l2.ts sẵn có recency30 (W_RECENCY=0,1, nửa đời 30 ngày). Điểm yếu THẬT thu hẹp lại: 90% trọng số còn lại thuần tương đồng + KHÔNG phân biệt bảng tự-tham-chếu với bảng kiểm chứng → echo vẫn đứng đầu chỉ cần trùng từ khoá
+- W2 · src/lib/ml/l2.ts — KIỂM SOÁT ECHO CHAMBER: hệ số echoDecay nhân SAU cộng hybrid, chỉ áp bảng tự tham chiếu {AgentMessage, MarketAssessment} (output hội đồng index lại), nửa đời 45 ngày sàn 0,25 (90d còn 25% — tương thích sổ sống D-LEDGER); bảng kiểm chứng/ngoài (NewsItem · DecisionEvaluation · Signal · RelationInsight) GIỮ trọng lượng nguyên — giáng cấp chứ không xoá trí nhớ dài hạn; L2Hit + RetrievalLog results thêm field echoMul (additive); tuổi không hợp lệ → sàn (fail-safe không-bịa-chất-lượng)
+- W1 · src/lib/ml/bandit.ts — RỔ PIT + ĐỊNH NGHĨA RỔ DUY NHẤT: bỏ top-10 theo quote volume MỚI NHẤT tại lúc settle (2 lỗi: phi-PIT rổ trượt thành phần trong 5 phiên chấm + sai định nghĩa so với rổ ADTV-45 EOD của ML/features — vi phạm P0-2); thay bằng pitTopIdsByCast: MỖI phiếu chấm bằng top-10 ADTV 45 phiên EOD (Bar.value, mirror tinh topByAdtv tail-45, min 10 bar) tính tại castDate CỦA PHIÊU ĐÓ — đúng vũ trụ cử tri đã thấy khi bầu; 1 truy vấn instrument + 1 truy vấn bar gộp toàn vùng [castMin-85d, castMax] (settle ≤1 lần/ngày, đo thật 3,97s); lỗ dữ liệu → HOÃN chứ không fallback rổ khác; phiếu đã settled giữ nguyên (idempotent keys)
+- W5 · /api/ml/status + hooks/use-ml.ts + mlp-block.tsx — MINH BẠCH SELECTION vs HOLDOUT: dlMlp thêm metricsNote (giải thích valAcc là số selection thiên lệch LÊN) + holdout (quét 20 AuditLog ML_SWEEP_SWAP parse after.promotedVersion khớp version serving — fail-soft null khi lên serving qua train tay, không bịa số); FE đổi nhãn "Độ chính xác xác thực (selection)" + ô "Holdout ngoài mẫu (n=…)" + ô Brier holdout + note luôn hiển thị
+- Kèm: vá 2 lỗi lint sẵn có từ Task 153 (require() → await import trong scripts/p153-sell-status.ts + review-sell-mechanism.ts) — repo lint sạch toàn cục
+- VERIFY W2 (script p163-verify-l2-echo.ts, thuần logic 0 DB): 5/5 PASS — T1 DecisionEvaluation 120d > AgentMessage 120d cùng nội dung (0,9018 vs 0,2255) · T2 AgentMessage tươi > cũ · T3 NewsItem 200d > AgentMessage 120d dù già hơn 80 ngày · T4 AgentMessage 400d vẫn trong hits (sàn 0,25, không xoá) · T5 đối chứng công thức cũ tự lộ echo: AM-old 0,3151 > NEWS-old 0,3134 (nhận định cũ của hội đồng đè bằng chứng ngoài) → sau vá đảo 4×
+- VERIFY W1 (script p163-verify-pit-basket.ts, đo DB thật read-only): rổ cũ (quote volume lúc chạy) SHB,TCB,HPG,PNJ,SSI,TPB,VHM,VPB,MBB,VND vs rổ PIT tại 07-10 VIC,VHM,TCB,SHB,SSI,HPG,VPB,FPT,MSN,VCB → KHÁC 4/10 mã — bằng chứng 40% vũ trụ chấm nhãn bị trượt dưới logic cũ
+- VERIFY LIVE sau restart (setsid -f): GET /api/ml/status 200 với metricsNote + holdout:null đúng trung thực (v73 lên serving qua train tay) · POST /api/ml/settle 200 chạy đường mới 3,97s settled:0 (26 pending đều <5 phiên — hợp lệ) · sóng POST /api/agents/run 200 trong 78,8s · 24 agents · waves 4/13/3/4 · failures=[] · RetrievalLog L2 17:41: 8/8 hits có echoMul · 6/8 bị giáng cấp 0,994-0,996 (corpus còn trẻ — decay sẽ mạnh dần theo tuổi, đúng thiết kế phòng ngừa) vs log 13:58 trước vá không có trường này
+- VERIFY UI (agent-browser): tab Học máy render "Độ chính xác xác thực (selection)" + ô "Holdout ngoài mẫu" + note "Chưa có số ngoài mẫu cho bản này (lên serving qua train tay)…" · 0 lỗi console/page · dev.log sạch (tick 200 liên tục, consensus gate FLAT 71,1% Enforcement bật — đúng hành vi Task 155)
+
+Stage Summary:
+- 3 điểm yếu nặng nhất của review #162 đã vá xong với bằng chứng đo thật từng tầng (logic-unit / DB-đo / API-live / sóng-agents / browser-UI); W3 (auto-retrain có guard) + W4 (holdout Q-table) để phiên sau theo thứ tự ưu tiên đã đề xuất
+- Nguyên tắc giữ trọn: mọi vá additive (field mới FE/API cũ bỏ qua được) · fail-soft · phiếu settled không hồi lại (idempotent) · không đổi hành vi ngoài phạm vi điểm yếu
+- Tài sản mới: 2 script kiểm định p163-verify-l2-echo.ts + p163-verify-pit-basket.ts (read-only, chạy lại được bất cứ lúc nào)

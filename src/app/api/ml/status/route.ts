@@ -420,6 +420,79 @@ async function gatePayload(): Promise<GatePayload> {
   }
 }
 
+/* ───────── W5 (#163 · review #162) — HOLDOUT CỦA BẢN SERVING ───────────── */
+
+/** Metrics ngoài mẫu của bản serving khi nó được thăng cấp qua sweep —AuditLog
+ *  ML_SWEEP_SWAP.after JSON ghi {promotedVersion, holdout: {size, dateFrom,
+ *  dateTo, championAcc, championBrier}}. Bản lên serving qua train tay
+ *  (serving-swap guard) không có số này → null + metricsNote giải thích. */
+interface HoldoutPayload {
+  /** Số mẫu holdout walk-forward (cùng cut thời gian — audit 137 B4). */
+  size: number;
+  dateFrom: string | null;
+  dateTo: string | null;
+  /** valAcc đo trên holdout — SỐ TRUNG THỰC ngoài mẫu (khác metrics.valAcc
+ *  post-selection phía trên). */
+  valAcc: number;
+  /** Brier trên holdout (càng nhỏ càng tốt). */
+  brier: number | null;
+  /** Id đợt sweep thăng cấp bản này (truy vết SweepRun). */
+  sweepRunId: string | null;
+}
+
+/** Note chuẩn W5 — giải thích bản chất số metrics.valAcc đang hiển thị. */
+const METRICS_NOTE_SELECTION =
+  "valAcc/valLoss là số SELECTION (early-stop + chọn kiến trúc trên cùng val block — thiên lệch LÊN so với khả năng ngoài mẫu). Số ngoài mẫu trung thực nằm ở holdout khi bản serving được thăng cấp qua cổng sweep.";
+
+/** Tìm holdout cho version serving: quét 20 AuditLog ML_SWEEP_SWAP gần nhất,
+ *  parse after JSON, khớp promotedVersion. Fail-soft tuyệt đối: lỗi parse/DB
+ *  → null (hiển thị note selection, không bịa số holdout). */
+async function holdoutForServing(version: number | null): Promise<HoldoutPayload | null> {
+  if (version == null) return null;
+  try {
+    const rows = await db.auditLog.findMany({
+      where: { action: "ML_SWEEP_SWAP" },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { after: true },
+    });
+    for (const row of rows) {
+      if (!row.after) continue;
+      try {
+        const a = JSON.parse(row.after) as Record<string, unknown>;
+        if (a.promotedVersion !== version) continue;
+        const h = a.holdout as Record<string, unknown> | undefined;
+        if (
+          !h ||
+          typeof h.size !== "number" ||
+          !Number.isFinite(h.size) ||
+          typeof h.championAcc !== "number" ||
+          !Number.isFinite(h.championAcc)
+        ) {
+          continue; // sweep cũ không lưu holdout → tiếp tục tìm (không phóng đo)
+        }
+        const brier =
+          typeof h.championBrier === "number" && Number.isFinite(h.championBrier)
+            ? h.championBrier
+            : null;
+        return {
+          size: h.size,
+          dateFrom: typeof h.dateFrom === "string" ? h.dateFrom : null,
+          dateTo: typeof h.dateTo === "string" ? h.dateTo : null,
+          valAcc: h.championAcc,
+          brier,
+          sweepRunId: typeof a.sweepRunId === "string" ? a.sweepRunId : null,
+        };
+      } catch {
+        continue; // JSON hỏng của 1 dòng → thử dòng kế
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** Field `gru` — null khi chưa từng train dl-gru (cổng chưa mở, B4 trung thực). */
 interface GruPayload {
   version: number;
@@ -503,8 +576,13 @@ export async function GET() {
       orderBy: { version: "desc" },
     });
     const driftPromise = dlRowPromise.then((dlRow) => driftForServing(dlRow));
+    // W5 (#163) — holdout của bản serving (fail-soft; null khi lên serving
+    // qua train tay — metricsNote luôn giải thích).
+    const holdoutPromise = dlRowPromise
+      .then((dlRow) => holdoutForServing(dlRow?.version ?? null))
+      .catch(() => null);
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift, gate, gru, rag, intraday, newsGate, l2] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, holdout, gate, gru, rag, intraday, newsGate, l2] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -513,6 +591,7 @@ export async function GET() {
       banditSnapshot(),
       pendingSettleCount(),
       driftPromise,
+      holdoutPromise,
       gatePayload(),
       gruPayload(),
       // #83 — fail-soft nội bộ (lỗi DB → số 0 trung thực, không chặn status)
@@ -585,6 +664,10 @@ export async function GET() {
                   ? dlMetrics.topSymbols
                   : [],
               },
+              // W5 (#163) — additive: FE cũ bỏ qua; FE mới hiện số ngoài mẫu
+              // holdout khi có + luôn hiện note giải thích thiên lệch selection.
+              metricsNote: METRICS_NOTE_SELECTION,
+              holdout,
             }
           : null,
       rlQ:

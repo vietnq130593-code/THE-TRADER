@@ -181,8 +181,26 @@ export function MlpBlock({
             <Stat label="Epochs" value={nf0.format(m.epochs)} />
             <Stat label="Mẫu dữ liệu" value={nf0.format(m.samples)} />
             <Stat label="Độ chính xác train" value={pct(m.trainAcc)} tone={accTone(m.trainAcc)} />
-            <Stat label="Độ chính xác xác thực" value={pct(m.valAcc)} tone={accTone(m.valAcc)} />
+            {/* W5 (#163) — đổi nhãn trung thực: đây là số selection (thiên lệch
+                lên); số ngoài mẫu hiện ở ô Holdout khi có. */}
+            <Stat label="Độ chính xác xác thực (selection)" value={pct(m.valAcc)} tone={accTone(m.valAcc)} />
             <Stat label="Loss xác thực" value={nf2.format(m.valLoss)} />
+            {model.holdout ? (
+              <Stat
+                label={`Holdout ngoài mẫu (n=${nf0.format(model.holdout.size)})`}
+                value={pct(model.holdout.valAcc)}
+                tone={accTone(model.holdout.valAcc)}
+              />
+            ) : (
+              <Stat label="Holdout ngoài mẫu" value="—" />
+            )}
+            {model.holdout && model.holdout.brier != null && (
+              <Stat
+                label="Brier holdout"
+                value={nf2.format(model.holdout.brier)}
+                tone={model.holdout.brier <= 0.667 ? "ok" : "neutral"}
+              />
+            )}
             <Stat
               label="Cấu hình"
               value={
@@ -192,6 +210,14 @@ export function MlpBlock({
               }
             />
           </div>
+
+          {/* W5 (#163) — note thiên lệch selection: luôn hiện để người đọc
+              không lấy valAcc selection làm tuyên bố ngoài mẫu. */}
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {model.holdout
+              ? 'Ô "Holdout ngoài mẫu" là số trung thực (walk-forward, cùng cut thời gian — đo khi bản này qua cổng sweep). Ô "xác thực" là số selection, thiên lệch LÊN.'
+              : 'Chưa có số ngoài mẫu cho bản này (lên serving qua train tay). Áp chính xác "xác thực (selection)" là số post-selection — chọn kiến trúc + early-stop trên cùng val block, thiên lệch LÊN so với khả năng dự báo thật.'}
+          </p>
 
           {/* A3 — giám sát drift đặc trưng (PSI 30 phiên gần nhất) */}
           <DriftDetail drift={drift} />

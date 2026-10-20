@@ -96,6 +96,25 @@ export interface MlModelStatus<TMetrics> {
    *  undefined khi weights không parse được (UI ẩn badge — không phóng đo). */
   archString?: string;
   metrics: TMetrics;
+  /** W5 (#163) — note giải thích metrics.valAcc là số selection (thiên lệch
+   *  lên). Additive: API cũ thiếu → UI chỉ hiện holdout khi có. */
+  metricsNote?: string;
+  /** W5 (#163) — số ngoài mẫu khi bản serving lên qua cổng sweep; null khi
+   *  lên qua train tay (không có số trung thực ngoài mẫu để báo). */
+  holdout?: MlHoldoutMetrics | null;
+}
+
+/** W5 (#163) — metrics ngoài mẫu của bản serving (AuditLog ML_SWEEP_SWAP). */
+export interface MlHoldoutMetrics {
+  /** Số mẫu holdout walk-forward. */
+  size: number;
+  dateFrom: string | null;
+  dateTo: string | null;
+  /** valAcc đo trên holdout — trung thực ngoài mẫu. */
+  valAcc: number;
+  /** Brier trên holdout (nhỏ = tốt). */
+  brier: number | null;
+  sweepRunId: string | null;
 }
 
 export interface MlStatusResponse {

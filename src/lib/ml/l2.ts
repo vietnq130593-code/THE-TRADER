@@ -64,6 +64,28 @@ const L2_TOP_K = 8;
 const W_BM25 = 0.45;
 const W_VECTOR = 0.45;
 const W_RECENCY = 0.1;
+
+/* ── W2 (#163 · review #162) — KIỂM SOÁT ECHO CHAMBER ──────────────────────
+ * Review #162 phát hiện: 619/2.044 chunks là CHÍNH output hội đồng
+ * (AgentMessage) được index lại làm tri thức → chu kỳ sau truy hồi nhận định
+ * cũ của chính mình làm bằng chứng → rủi ro information cascade (thiên kiến
+ * tự củng cố). Thành phần recency30 sẵn có (W_RECENCY=0,1) quá yếu để chống:
+ * 90% trọng số còn lại thuần theo độ tương đồng — echo 3 tháng tuổi vẫn đứng
+ * đầu chỉ cần trùng từ khoá.
+ *
+ * GIẢI PHÁP phẫu thuật (không phải xoá trí nhớ dài hạn): GIÁNG CẤP điểm của
+ * bảng TỰ THAM CHIẾU theo tuổi bằng hệ số nhân nửa đời 45 ngày, sàn 0,25 —
+ * tức echo 45 ngày cũ còn 50%, 90 ngày còn 25% (tương thích sổ sống D-LEDGER
+ * 90 ngày), nhưng KHÔNG bao giờ về 0: nhận định cũ thật sự liên quan vẫn
+ * được truy hồi khi không còn gì tươi hơn. Bảng KIỂM CHỨNG/NGOÀI giữ nguyên
+ * trọng lượng: NewsItem (bằng chứng bên ngoài) · DecisionEvaluation (bài
+ * học ĐÃ settle theo realized) · Signal · RelationInsight — đây mới là trí
+ * nhớ dài hạn thật của hệ thống, tuổi càng lớn giá trị càng bền. */
+const ECHO_TABLES = new Set<L2RefTable>(["AgentMessage", "MarketAssessment"]);
+/** Nửa đời echo (ngày) — 45d: 90d còn 0,25 · 135d chạm sàn. */
+const ECHO_HALF_LIFE_DAYS = 45;
+/** Sàn hệ số echo — giáng cấp chứ không xoá (tránh mất trí nhớ dài hạn). */
+const ECHO_FLOOR = 0.25;
 /** Nửa đời độ tươi L2: 30 ngày (L1 là 72h — L2 là trí nhớ dài hạn). */
 const RECENCY_HALF_LIFE_H = 30 * 24;
 /** Ngưỡng cosine để doc được coi "liên quan ngữ nghĩa" khi BM25 = 0. */
@@ -145,6 +167,9 @@ export interface L2Hit {
   bm25: number;
   cosine: number | null;
   recency: number;
+  /** W2 (#163) — hệ số giáng cấp echo (1 cho bảng kiểm chứng; <1 theo tuổi
+   *  cho AgentMessage/MarketAssessment). Additive: caller cũ bỏ qua được. */
+  echoMul?: number;
 }
 
 export interface L2Retrieval {
@@ -1082,6 +1107,18 @@ function recency30(datedAt: Date, now = Date.now()): number {
   return Math.exp(-ageH / RECENCY_HALF_LIFE_H);
 }
 
+/** W2 (#163): hệ số giáng cấp echo theo tuổi — 1 cho bảng kiểm chứng/ngoài;
+ * bảng tự tham chiếu giảm nửa đời 45 ngày, sàn 0,25. Tuổi không hợp lệ →
+ * sàn (fail-safe "không bịa chất lượng": doc không xác định được tuổi coi
+ * như cũ, không cho nó đứng đầu bằng cách nào). */
+function echoDecay(refTable: L2RefTable, datedAt: Date, now = Date.now()): number {
+  if (!ECHO_TABLES.has(refTable)) return 1;
+  const t = datedAt.getTime();
+  if (!Number.isFinite(t)) return ECHO_FLOOR;
+  const ageDays = Math.max(0, (now - t) / 86_400_000);
+  return Math.max(ECHO_FLOOR, Math.pow(0.5, ageDays / ECHO_HALF_LIFE_DAYS));
+}
+
 export function rankL2(
   index: L2Index,
   queryTokens: string[],
@@ -1116,10 +1153,15 @@ export function rankL2(
   const hits: L2Hit[] = scored.map(({ doc, bm25, cos, rec }) => {
     const bm25N = maxBm25 > 0 ? bm25 / maxBm25 : 0;
     const cosN = cos != null ? Math.max(0, cos) : 0;
+    // W2 (#163): nhân hệ số giáng cấp echo SAU cộng hybrid — mọi thành phần
+    // (BM25/vector/recency) cùng bị kéo xuống theo tuổi của bảng tự tham
+    // chiếu, giữ nguyên thứ tương đối giữa các doc cùng bảng.
+    const echoMul = echoDecay(doc.refTable, doc.datedAt, now);
     const score =
-      W_BM25 * bm25N +
-      W_VECTOR * (cos != null ? cosN : bm25N) + // không có vector → dồn sang BM25
-      W_RECENCY * rec;
+      (W_BM25 * bm25N +
+        W_VECTOR * (cos != null ? cosN : bm25N) + // không có vector → dồn sang BM25
+        W_RECENCY * rec) *
+      echoMul;
     return {
       refTable: doc.refTable,
       refId: doc.refId,
@@ -1130,6 +1172,7 @@ export function rankL2(
       bm25,
       cosine: cos,
       recency: rec,
+      echoMul,
     };
   });
   hits.sort((a, b) => b.score - a.score);
@@ -1315,6 +1358,9 @@ export async function retrieveForCycleL2(usedInPrompt: boolean): Promise<L2Retri
             refId: h.refId,
             score: Number(h.score.toFixed(4)),
             cosine: h.cosine != null ? Number(h.cosine.toFixed(4)) : null,
+            // W2 (#163) — hệ số giáng cấp echo (additive trong JSON: log cũ
+            // không có, script đọc phải dùng null-check).
+            echoMul: h.echoMul != null ? Number(h.echoMul.toFixed(3)) : null,
           })),
           usedInPrompt: usedInPrompt && block != null,
           layer: "L2",
