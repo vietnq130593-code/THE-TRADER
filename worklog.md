@@ -5150,3 +5150,18 @@ Stage Summary:
 - ĐÁP CÂU HỎI CHỦ SỞ HỮU: TÍCH HỢP OPENCODE CLI KHÔNG GIÚP DÙNG LÕI FREE TRONG SANDBOX NÀY — free tier đã chạy đúng từ trong CLI (provider opencode/ hợp lệ, key xác thực OK) nhưng bị chặn ở TẦNG IP của sandbox z.ai ("abusive traffic from this IP address. This isn't related to your account") — IP chia sẻ nhiều người dùng nên bị OpenCode blacklist; tích hợp CLI vào THE TRADER không đổi IP xuất phát → vẫn chặn
 - 3 đường thực tế để dùng lõi đó: (1) chạy từ IP sạch (máy nhà/VPS riêng) — khi đó vẫn phải chạy QUA OpenCode CLI/serve vì free tier chặn REST trực tiếp; (2) nạp credit Zen → gọi REST trực tiếp OpenAI-compatible từ backend THE TRADER (glm-5.3, glm-5.3-flash, claude-haiku-4-5, grok… — hợp kiến trúc REST-first, không cần CLI); (3) subscribe OpenCode Go (gợi ý chính thức trong thông báo lỗi); lưu ý 402 hiện tại trả về bình thường cho IP này nên paid-tier sau khi nạp tiền CÓ KHẢ NĂNG dùng được từ sandbox, nhưng chưa verify được do account hết credit
 - Key oc_sk_…cI6R: vẫn còn sống, xác thực tốt (45 model) — chỉ IP là vấn đề với free tier
+
+---
+Task ID: 154
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu làm rõ câu hỏi: nếu chạy trên MÁY LOCAL thì tích hợp OpenCode CLI hoặc đăng nhập trực tiếp có dùng được lõi free của OpenCode không?
+
+Work Log:
+- Đọc tài liệu chính thức opencode.ai/docs/zen (Console) + /docs/server: free models ghi rõ "free on OpenCode" (tức trong client OpenCode); API key Console = pay-as-you-go cho REST trực tiếp; opencode serve = HTTP headless port 4096 + OpenAPI /doc + POST /session/:id/message, docs khuyến nghị "interact with opencode programmatically" — đường tích hợp chính thức
+- Đối chiếu 2 lỗi tách bạch đã đo live Task 153: (1) REST trực tiếp bằng key → 403 FreeTierError "free tier can only be used from within OpenCode" — cổng KIỂM CLIENT, không phụ thuộc IP; (2) chạy trong CLI từ sandbox → chặn IP "abusive traffic... not related to your account" — cổng DANH TIẾNG IP. 2 cổng độc lập → suy ra kết luận cho local
+- Tổng hợp pricing docs: GLM-5.3-Flash trả phí $0.15/$0.50 mỗi 1M token; GLM-5.3-Flash Free zero-retention không train dữ liệu; Beam Free geo-block 20+ nước (Việt Nam KHÔNG nằm trong list); free là "limited time" promotional; OpenCode Go = subscription đường dài
+- Không đụng src/, không chạy gì ngoài curl docs; dev server vẫn chạy nền (đã check tick 200 ở Task 153)
+
+Stage Summary:
+- ĐÁP: trên máy local IP sạch → CÓ, dùng được lõi free QUA OpenCode CLI (TUI · opencode run · opencode serve localhost:4096 cho app gọi vào) — cả 2 cổng đều qua (client = OpenCode, IP sạch). NHƯNG "đăng nhập trực tiếp" theo nghĩa lấy key oc_sk gọi REST thẳng từ code → model free VẪN BỊ 403 kể cả trên local, vì cổng chặn là client-based chứ không phải IP-based; REST thẳng chỉ chạy cho model PAID sau khi nạp credit Console (khi đó chạy được từ bất kỳ đâu, kể cả sandbox này)
+- Pattern tích hợp khuyên dùng cho THE TRADER local: opencode serve + adapter nhỏ (API dạng session/message, không phải format OpenAI chat-completions) hoặc shell-out opencode run 1 lần; lưu ý free là khuyến mãi có thời hạn + có thể có rate limit fair-use
