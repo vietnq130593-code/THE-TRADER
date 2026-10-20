@@ -5197,3 +5197,22 @@ Work Log:
 
 Stage Summary:
 - Đồng bộ trọn vẹn: sandbox = GitHub (origin/main tại c1b0089), 0 commit tồn, working tree sạch; kèm quét bảo mật diff trước push (0 secret)
+
+---
+Task ID: 158
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu báo "hệ thống đa tác tử không hoạt động" — chẩn đoán + phục hồi toàn bộ sau SANDBOX PLATFORM ROLLBACK
+
+Work Log:
+- Chẩn đoán层层: (1) dev.log biến mất + port 3000 HTTP 000 + không còn process next dev → app CHẾT; (2) 2 process bun --hot còn sống là mini-services market-engine + pg-service (tự khởi động lại 10:35 — dấu hiệu sandbox reset); (3) .env bị thay bằng template mặc định DATABASE_URL=file:custom.db; (4) node_modules Prisma client mất → lỗi "Cannot find module .prisma/client/default"; (5) sau prisma generate lộ lỗi "MACRO_ECONOMIST not found in enum AgentRole" → kiểm git: HEAD lùi về 9c2dfab (Task 123, ~16-17/10) → TOÀN BỘ THƯ MỤC DỰ ÁN KỂ CẢ .git ĐÃ BỊ ROLLBACK — mọi code Task 124-156 mất khỏi đĩa (bao gồm fix cơ chế bán F-151-1/2 sáng nay)
+- Nguồn cứu duy nhất: GitHub origin/main (đã push 08:52 Task 156) · credential trong .git/config (bản rollback) vẫn SỐNG → git fetch OK (9c2dfab..a12d6d8)
+- Phục hồi: git reset --hard origin/main → toàn bộ code/worklog/scripts trở lại (verify: consensusDominant schema ✓ · guard consensus-direction-mismatch ✓ · MACRO_ECONOMIST enum ✓ · 2 scripts ✓ · worklog Task 155-156 ✓)
+- .env: commit mới KHÔNG còn track .env (P0 Task 144 — thay bằng .env.enc AES-256-GCM) → reset xoá nốt bản tạm; .env.passphrase (gitignored) KHÔNG sống sót rollback → bun run env:restore thất bại thiếu passphrase → PHƯƠNG ÁN DỰ PHÒNG: git show 9c2dfab:.env (bản cũ 28 dòng còn trong lịch sử — Supabase config còn VALID, DB kết nối được) · thiếu duy nhất NVIDIA_NIM_API_KEY (Task 142, fail-soft → L2 rơi về BM25, không chết chu kỳ) · khuyến nghị chủ sở hữu: đặt lại passphrase + bun run env:encrypt để có lại đường khôi phục 3 lệnh, và/hoặc thêm NIM key
+- Chuỗi restart app: prisma generate (client khớp schema mới) + rm -rf .next (xóa cache Turbopack stale) + env -u DATABASE_URL bun run dev (tránh biến shell file:custom.db đè .env); 1 lần lỗi "Can't reach database server Supabase" → transient cold-start (app chết 1h → pooler ngủ), tự ổn sau retry
+- VERIFY TỔNG: GET / 200 · /api/system/status 200 · /api/market/tick 200 · /api/agents 200 với 24 agents IDLE · POST /api/agents/run 200 trong 67,7s: waves {"24-agents": platform 4 · research+ML 13 · control 3 · executive 4} · failures=[] · sóng xong agents IDLE sạch · signal null (hội đồng vẫn FLAT — đúng hành vi Task 155)
+- Mini-services market-engine + pg-service chạy lại từ 10:35 (không cần đụng); tick engine path qua app 200
+
+Stage Summary:
+- NGUYÊN NHÂN "hệ thống đa tác tử không hoạt động": PLATFORM SANDBOX ROLLBACK ~10:35 (lần thứ 2 trong lịch sử — Task 121 từng gặp) — kill app + xoá dev.log + reset .env + TRẢ CẢ .git VỀ SNAPSHOT ~16-17/10; mini-services tự lên nhưng app chính không
+- ĐÃ PHỤC HỒI 100%: code từ GitHub (a12d6d8 = commit cuối sáng nay, fix cơ chế bán nguyên vẹn) · .env từ lịch sử git (mất mỗi NIM key — L2 dùng BM25 tạm) · app chạy + sóng 24 agents 0 lỗi chứng minh end-to-end
+- BÀI HỌC VỮNG HÓN: mọi thay đổi quan trọng PHẢI push GitHub ngay trong phiên (việc push Task 156 lúc 08:52 chính là thứ cứu dự án lần này); rollback tiếp theo sẽ mất tối đa worklog chưa push thay vì 5 ngày code
