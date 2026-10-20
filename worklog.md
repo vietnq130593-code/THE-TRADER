@@ -5267,3 +5267,19 @@ Work Log:
 Stage Summary:
 - Kiến trúc học là "học-có-kiểm-soát": mọi mô hình đều có kill-switch + gate (GRU shadow Brier, ensemble phải thắng fixed 0,7/0,3 − deadband, PSI chỉ cảnh báo không tự retrain); số yếu (valAcc 42,9%, hit-rate 27,1%) được báo trung thực thay vì che
 - Không đổi code — thuần điều tra + báo cáo
+
+---
+Task ID: 162
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu yêu cầu review kiểu kỹ sư AI/kiến trúc sư lâu năm — "kiến trúc học đã hoàn toàn chặt chẽ, không còn điểm yếu chưa?"
+
+Work Log:
+- Review bằng code không bằng trí nhớ: đọc features.ts (PIT windowHash · lag thuần quá khứ · nhãn ±0,5% 5 phiên) · train-mlp.ts (mutex · serving-swap guard · calibration gate B5 nửa-sau-val) · ensemble.ts (GRU 3 lớp bảo vệ) · bandit.ts (settle Beta conjugate idempotent) · gru.ts/psi.ts (kill-switch · PSI fail-safe NaN→đỏ) · multitask.ts (dl-mtl KHOÁ 400 AUDIT 137 B7 gradient-check) · macro-forecast.ts (gate Brier vs uniform 2/3) · xrel.ts (không đủ mẫu → không lưu) · sweep.ts (holdout walk-forward + selectionNote trung thực)
+- Bằng chứng DB: AppSetting ml-ensemble-weights KHÔNG tồn tại (meta-learner F-07 chưa từng học — 36/60 phiếu voice-vector BanditEvent ml-forecast) · dl-gru 0 model trong MlModel (cổng B2 chưa từng mở) · dl-mlp v73 serving, v70-77 archived cùng ngày 18/10
+- Phát hiện 5 điểm yếu thật: W1 Bandit reward theo rổ top-10 CHUNG cho mọi cử tri (không tách instrument — tín hiệu reward nhiễu, học "đoán ý rổ" thay "đoán đúng tài sản"); W2 L2 echo chamber — 619 AgentMessage chunks là chính output hội đồng được index lại làm bằng chứng, KHÔNG có TTL/decay theo tuổi (D-LEDGER có sổ sống 90 ngày nhưng L2 không có tương đương) → rủi ro information cascade; W3 PSI chỉ cảnh báo — A4 phải bấm train tay, model đóng băng vô thời hạn nếu không ai theo dõi; W4 Q-table v16 train trên toàn chuỗi + avgRewardLast50 là số in-training, KHÔNG có holdout walk-forward độc lập như MLP; W5 valAcc 42,9% hiển thị /api/ml/status là số post-selection (early-stop trên cùng val block) — sweep tự ghi selectionNote nhưng status panel dùng số selection
+- Phân loại: CHẮT (PIT · cut theo thời gian · serving-swap guard · holdout sweep · calibration holdout B5 · GRU shadow+kill-switch chưa từng mở · meta-learner cold-start trung thực · bandit idempotent · PSI fail-safe · mutex) vs YẾU mở (W1-W5 + P2: D-LEDGER 59 mẫu mỏng · FLAT imbalance là vật lý bài toán · GRU paper design)
+
+Stage Summary:
+- Câu trả lời trung thực cho "hoàn toàn chặt chẽ chưa?": KHÔNG — và không hệ thống ML thật nào "không còn điểm yếu"; điểm mạnh thật của kiến trúc này là MỌI cạnh học đều có gate/kill-switch/audit + số yếu được hiển thị không che
+- 5 điểm yếu mở đều vá được có chủ đích: W1 tách reward theo instrument · W2 TTL/decay chunk L2 · W3 auto-retrain có guard · W4 holdout Q-table · W5 status hiển thị số holdout
+- Không đổi code — thuần điều tra read-only + báo cáo
