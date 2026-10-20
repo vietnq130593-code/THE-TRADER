@@ -5253,3 +5253,17 @@ Stage Summary:
 - Đồng bộ trọn vẹn sandbox = GitHub tại 00aaece; bài học Task 158 ("push ngay trong phiên") giờ được thực thi đầy đủ trở lại
 - Kỷ luật credential 3 bước được chuẩn hoá cho mọi key từ nay: (1) đo live qua API/endpoint thật, (2) lắp đúng vị trí bền nhất, (3) verify end-to-end trước khi báo cáo
 - Hệ thống vận hành đầy đủ: NIM embedding sống (Task 159) + GitHub push sống (Task 160) + Supabase DB sống + 24 agents chạy 0 lỗi — 3 nhánh backup (GitHub / Supabase / đĩa sandbox) đều hoạt động
+
+---
+Task ID: 161
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu hỏi "dữ liệu dự đoán có cơ chế học từ quá khứ, tìm quy luật tăng giảm không?" — tổng kiến trúc học + số đo live
+
+Work Log:
+- Thu thập bằng chứng live: GET /api/ml/status (dlMlp v73 serving · rlQ v16 serving · bandit 7 arms 218 pulls · l2 2044 chunks 100% vector) · đọc header ensemble-learn.ts + rl.ts · truy vấn DB DecisionEvaluation
+- Tính hit-rate D-LEDGER thật: 59 tín hiệu đã đánh giá · 16 đúng hướng ±0,5% · 27,1% (số trung thực — thị trường FLAT-dominant làm nền, không phải bug)
+- Trả lời chủ sở hữu 6 vòng học: (1) MLP sâu 24 đặc trưng/60 phiên valAcc 42,9% vs nền 33,3%; (2) Q-learning 96 state × 3 action phiên bản 16; (3) Bandit uy tín cử tri Beta-posterior theo regime; (4) meta-learner trọng số ensemble học từ D-LEDGER có gate Brier; (5) L2 RAG 2044 chunk NIM semantic; (6) D-LEDGER sổ phán quyết + PSI drift cảnh báo retrain
+
+Stage Summary:
+- Kiến trúc học là "học-có-kiểm-soát": mọi mô hình đều có kill-switch + gate (GRU shadow Brier, ensemble phải thắng fixed 0,7/0,3 − deadband, PSI chỉ cảnh báo không tự retrain); số yếu (valAcc 42,9%, hit-rate 27,1%) được báo trung thực thay vì che
+- Không đổi code — thuần điều tra + báo cáo
