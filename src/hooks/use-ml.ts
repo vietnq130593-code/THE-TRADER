@@ -55,7 +55,8 @@ export interface RlQMetrics {
   episodes: number;
   /** ε cuối cùng sau decay (0..1). */
   epsilonEnd: number;
-  /** Phần thưởng trung bình 50 episode cuối (có dấu). */
+  /** Phần thưởng trung bình 50 episode cuối (có dấu) — W4 (#165): số
+   *  in-training trên TRAIN split (Q-table không nhìn đoạn holdout). */
   avgRewardLast50: number;
   states: number;
   actions: number;
@@ -65,6 +66,25 @@ export interface RlQMetrics {
   exposure: number;
   /** Q-value lớn nhất (có dấu). */
   qMax: number;
+  /** W4 (#165) — kiểm định ngoài mẫu (walk-forward tách thời gian);
+   *  null/undefined = bản train trước W4 hoặc dữ liệu tối thiểu. */
+  holdout?: RlQHoldoutMetrics | null;
+}
+
+/** W4 (#165) — kiểm định ngoài mẫu của Q-table (mirror QHoldoutResult rl.ts). */
+export interface RlQHoldoutMetrics {
+  /** Số phiên cuối giữ ra khỏi train. */
+  bars: number;
+  /** Số bước đánh giá trên đoạn giữ-ra. */
+  steps: number;
+  /** Phần thưởng trung bình mỗi bước của chính sách greedy argmax Q. */
+  avgRewardPerStep: number;
+  /** Baseline đo trên CÙNG đoạn (per-step). */
+  baselines: { hold50: number; buyHold: number; cash: number };
+  /** avgRewardPerStep − giữ 50% (dương = thắng baseline). */
+  edgeVsHold50: number;
+  /** avgRewardPerStep − mua-giữ (dương = thắng baseline). */
+  edgeVsBuyHold: number;
 }
 
 export interface BanditArm {

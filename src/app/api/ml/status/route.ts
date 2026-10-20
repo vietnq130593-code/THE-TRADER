@@ -73,6 +73,8 @@ type RlQMetricsRow = {
   stance?: string;
   exposure: number;
   qMax: number;
+  /** W4 (#165) — note giải thích bản chất avgRewardLast50 (string, fail-soft). */
+  metricsNote?: string;
 };
 
 /** Parse metrics JSON của MlModel — null khi JSON hỏng/thiếu trường số. */
@@ -90,6 +92,61 @@ function parseMetrics<T extends Record<string, unknown>>(
     return null;
   }
 }
+
+/* ───────── W4 (#165) — holdout Q-table của bản serving (additive) ───────── */
+
+/** Shape metrics.holdout do route train ghi (mirror QHoldoutResult rl.ts) —
+ *  đọc CHẶT (mọi số finite) để không phóng đo số rác; sai shape → null trung
+ *  thực (bản v16 trở về trước train trước W4 — FE hiện note "chưa có số
+ *  ngoài mẫu", không bịa). */
+interface RlHoldoutPayload {
+  bars: number;
+  steps: number;
+  avgRewardPerStep: number;
+  baselines: { hold50: number; buyHold: number; cash: number };
+  edgeVsHold50: number;
+  edgeVsBuyHold: number;
+}
+
+function parseRlHoldout(metricsJson: string): RlHoldoutPayload | null {
+  try {
+    const m = JSON.parse(metricsJson) as { holdout?: unknown } | null;
+    const h = m?.holdout;
+    if (h == null || typeof h !== "object") return null;
+    const o = h as Record<string, unknown>;
+    const num = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
+    const bars = num(o.bars);
+    const steps = num(o.steps);
+    const avg = num(o.avgRewardPerStep);
+    const edge50 = num(o.edgeVsHold50);
+    const edgeBuy = num(o.edgeVsBuyHold);
+    const b = o.baselines as Record<string, unknown> | undefined;
+    const hold50 = b ? num(b.hold50) : null;
+    const buyHold = b ? num(b.buyHold) : null;
+    if (
+      bars == null || bars < 30 || steps == null || steps <= 0 ||
+      avg == null || edge50 == null || edgeBuy == null ||
+      hold50 == null || buyHold == null
+    ) {
+      return null;
+    }
+    return {
+      bars,
+      steps,
+      avgRewardPerStep: avg,
+      baselines: { hold50, buyHold, cash: 0 },
+      edgeVsHold50: edge50,
+      edgeVsBuyHold: edgeBuy,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Note chuẩn W4 khi bản serving chưa có holdout (train trước #165). */
+const RL_METRICS_NOTE_PRE_W4 =
+  "Bản này train trước kiểm định holdout W4 (#165) — chưa có số ngoài mẫu. avgRewardLast50 là số in-training (đo trên chính dữ liệu học) — đọc như thước đo hội tụ, không phải hiệu năng ngoài mẫu.";
 
 /* ───────── B2/B3 · Cổng bằng chứng + GRU (đọc AppSetting, additive) ───────── */
 
@@ -411,6 +468,13 @@ export async function GET() {
           "exposure", "qMax",
         ])
       : null;
+    // W4 (#165) — holdout Q-table bản serving: đọc chặt shape, fail-soft null
+    // (bản cũ → FE hiện note trung thực, không bịa số ngoài mẫu).
+    const rlHoldout = rlRow ? parseRlHoldout(rlRow.metrics) : null;
+    const rlMetricsNote =
+      typeof rlMetrics?.metricsNote === "string"
+        ? rlMetrics.metricsNote
+        : RL_METRICS_NOTE_PRE_W4;
 
     // B1 (#81) — featureSet bản serving từ meta (bản cũ không có → v1-lag10)
     const dlFeatureSet = (() => {
@@ -476,7 +540,12 @@ export async function GET() {
               metrics: {
                 ...rlMetrics,
                 stance: typeof rlMetrics.stance === "string" ? rlMetrics.stance : "giữ",
+                // W4 (#165) — additive: null khi bản train trước W4/dữ liệu tối
+                // thiểu; FE mới hiện khối kiểm định ngoài mẫu, FE cũ bỏ qua.
+                holdout: rlHoldout,
               },
+              // W4 (#165) — note giải thích avgRewardLast50 là số in-training.
+              metricsNote: rlMetricsNote,
             }
           : null,
       bandit: {

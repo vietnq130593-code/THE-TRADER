@@ -12,7 +12,7 @@ import {
 } from "@/lib/ml/features";
 import { GRU } from "@/lib/ml/gru";
 import { buildTrainingSequences, ML_GRU_WINDOW } from "@/lib/ml/features";
-import { buildBasket, policyStance, trainQTable, regimeBitsOf } from "@/lib/ml/rl";
+import { buildBasket, policyStance, trainQTable, regimeBitsOf, qHoldoutBars, type QHoldoutResult } from "@/lib/ml/rl";
 // F-09 (#129): MLP đa nhiệm 3 đầu ra (hướng + biên độ + biến động).
 import { MultitaskMLP, MT_VAL_FRACTION } from "@/lib/ml/multitask";
 import { standardize } from "@/lib/ml/features";
@@ -109,6 +109,10 @@ interface TrainedRlQMetrics {
   stance: string;
   exposure: number;
   qMax: number;
+  /** W4 (#165) — kiểm định ngoài mẫu (null khi holdout tắt — dữ liệu tối thiểu). */
+  holdout: QHoldoutResult | null;
+  /** W4 (#165) — giải thích avgRewardLast50 là số in-training trên TRAIN split. */
+  metricsNote: string;
 }
 
 /** Metrics GRU trả về — kind dl-gru (B3 #81). */
@@ -209,6 +213,9 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
   }
   // P1-2 — digest rổ Q-learning (tái lập PIT — cùng hàm với dl-mlp)
   const windowMeta = trainingWindowDigest(series);
+  // W4 (#165) — rổ tính 1 lần ở scope hàm: vừa cho regimeBits (F-13) vừa
+  // cho qHoldoutBars (H = 10% chuỗi rổ giữ ra khỏi train).
+  const basket = buildBasket(closes);
   // F-13 (#129)(c): bit regime VNINDEX (SMA50 vs SMA200 từng phiên) → Q-table
   // 96 trạng thái thay 48 — "chính sách 1 bộ cho mọi chế độ là sai về kinh tế
   // học". Fail-soft: không tải được VNINDEX → bảng 48 legacy như cũ.
@@ -225,14 +232,20 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
         select: { close: true },
       });
       const vnindexCloses = vnindexBars.map((b) => b.close).filter((c) => c > 0);
-      const basketProbe = buildBasket(closes);
-      regimeBits = regimeBitsOf(vnindexCloses, basketProbe.length);
+      regimeBits = regimeBitsOf(vnindexCloses, basket.length);
     }
   } catch (err) {
     console.error("[api/ml/train] regimeBits VNINDEX lỗi (fail-soft → 48-state):", err);
   }
-  const q = trainQTable(closes, regimeBits ? { regimeBits } : {});
-  const basket = buildBasket(closes);
+  const q = trainQTable(closes, {
+    ...(regimeBits ? { regimeBits } : {}),
+    // W4 (#165) — holdout walk-forward: H phiên CUỐI giữ ra khỏi train
+    // (qHoldoutBars: 10% · min 60 · max 200; n < 400 → 0 trung thực). Q-table
+    // chỉ học đoạn [0, m); chính sách greedy đánh giá trên [m, n) kèm 3
+    // baseline cùng đoạn — mirror kỷ luật MLP sweep (audit 137 B4: cut theo
+    // thời gian, holdout chỉ đo không chọn).
+    holdout: qHoldoutBars(basket.length),
+  });
   const stance = policyStance(q.qTable, basket, 0.5, regimeBits?.[regimeBits.length - 1]);
   const metrics: TrainedRlQMetrics = {
     episodes: q.episodes,
@@ -243,6 +256,10 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
     stance: stance.stance,
     exposure: stance.exposure,
     qMax: stance.qMax,
+    holdout: q.holdout ?? null,
+    metricsNote: q.holdout
+      ? "avgRewardLast50 là số in-training trên TRAIN split (W4 #165 tách holdout theo thời gian — Q-table không nhìn đoạn cuối); số ngoài mẫu nằm ở holdout: chính sách greedy đánh giá trên đoạn giữ-ra so 3 baseline cùng đoạn (giữ 50% · mua-giữ · cash)."
+      : "dữ liệu tối thiểu — holdout tắt (W4 #165), avgRewardLast50 là số in-training trên toàn chuỗi",
   };
   await saveModel("rl-q", JSON.stringify({ qTable: q.qTable }), null, { ...metrics }, windowMeta);
   return metrics;
