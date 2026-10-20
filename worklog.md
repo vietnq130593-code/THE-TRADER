@@ -5006,3 +5006,18 @@ Stage Summary:
 - Sản phẩm: docs/cv-nguyen-quoc-viet-vi.docx (17,2 KB, 2 trang — CHÍNH theo yêu cầu) + bản sao public/cv/cv-nguyen-quoc-viet-vi.docx (tải qua preview /cv/cv-nguyen-quoc-viet-vi.docx) — Google Docs-safe, chỉnh sửa tự do, 2 dự án tiêu biểu: THE TRADER (~89K LOC, 24 agents) + LEVEL 1 HAIRCARE CRM (~341K LOC, 225 API, 4.200+ KH thật, AI engine 22K dòng)
 - docs/ gọn từ 29M → 3,7M (chỉ còn 24 blueprint md + 4 audit md + diagram + 6 screenshot tuyển chọn + CV docx)
 - Commit: 222 ảnh deleted (subagent git rm) + .gitignore rule mới + worklog — KHÔNG push được (PAT cũ trong remote đã hết hạn do chủ sở hữu rotate — đúng hướng P0)
+
+---
+Task ID: 148
+Agent: main-orchestrator (Z.ai Code)
+Task: CẬP NHẬT GITHUB PAT cho remote THE-TRADER (PAT cũ đã hết hạn do chủ sở hữu rotate theo checklist P0) — đẩy 5 commit tồn đọng lên GitHub
+
+Work Log:
+- Chủ sở hữu cung cấp PAT mới (tài khoản vietnq130593) qua chat → git remote set-url origin kèm PAT mới (PAT chỉ lưu trong .git/config local — KHÔNG track, KHÔNG ghi worklog/docs)
+- 5 commit tồn đọng kể từ khi PAT cũ hết hạn: face483 (144-P0) · a1d7321 (144) · ed5459c (145) · 22e03a8 (146) · d14372c (147)
+- Push toàn bộ lên origin/main, verify git log origin/main..HEAD rỗng sau push
+- Lưu ý kỷ luật: PAT dán trong chat coi như đã lộ trong lịch sử hội thoại — khuyến nghị chủ sở hữu đặt hạn dùng ngắn (fine-grained, expire sớm) và rotate khi hết phiên làm việc
+
+Stage Summary:
+- Remote THE-TRADER đồng bộ trở lại: 5 commit (P0-P3 lộ trình + CV PDF + CV docx + dọn ảnh docs) đã lên GitHub
+- PAT chỉ tồn tại ở .git/config (local) — không file tracked nào chứa token
