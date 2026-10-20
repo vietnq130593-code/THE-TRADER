@@ -5088,3 +5088,25 @@ Stage Summary:
 - Tài liệu phụ: docs/TMO_ARCHITECTURE_REVIEW.md — đánh giá kiến trúc sư đầy đủ + fact sheet đối chiếu nguồn + Q&A phỏng vấn (pattern giống CV_THE_TRADER.md)
 - CV truy cập 3 đường: repo private GitHub (v3) · preview app /cv/cv-nguyen-quoc-viet-vi.docx · file vật lý docs/ + public/cv/
 - Điểm đáng chú ý về quy trình: được 3 dự án lớn nhưng vẫn giữ CV đúng 2 trang (khuyến nghị "CV 1-2 trang" của review chuyên gia) nhờ siết spacing + tinh gọn câu chữ, không cắt nội dung nào
+
+---
+Task ID: 151
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu quay lại THE TRADER (đóng việc CV) — review cơ chế BÁN: điều kiện agent thống nhất thực hiện lệnh bán + cơ chế có đang hoạt động đúng không; kèm câu hỏi lõi miễn phí z.ai ngoài GLM-4.6 (vd GLM 5.3 Flash)
+
+Work Log:
+- Đọc toàn chuỗi code cơ chế bán: consensus.ts (gate 80% + shadow/enforce) · bayes/synthesis.ts computeConsensus (tally 7 cử tri trọng số health×bandit) · agents-run/persist.ts (snapshot gate bind vào Signal + VETO hard-enforce: Exposure chặn MUA, SELL được phép; compliance/controlUnavailable chặn cả SELL) · agent-loop.ts (Chủ tịch đề xuất signal, kelly hint) · signal-execution.ts autoDecideSignalByConsensus #91 (SELL + CONSENSUS → duyệt ngay; còn lại từ chối; idempotent + claim atomic) + createPaperOrderFromSignal (nav5pct sizing, cap theo vị thế giữ, guard P3-fix không vị thế → từ chối, giá max(target, 0,99×last) kẹp ±7%) · market/tick fill engine (F-303 REJECT một lần khi thiếu cp, realized P&L, thuế bán 0,1%) · k-sandbox.ts:672 (K1 auto-convert cũng yêu cầu gate CONSENSUS) · context-build.ts (prompt Chủ tịch có tally + 'nếu posterior đạt stance' — advisory)
+- Viết scripts/review-sell-mechanism.ts (read-only, 8 phần A-H) chạy env -u DATABASE_URL — sửa 1 lần do đoán sai field DecisionEvaluation (schema thật: direction/verdict/markPnlPct/executionKind)
+- Đo DB thật: 59 tín hiệu (BUY 17 · SELL 5 · HOLD 37) · SELL theo gate: CONSENSUS=1, null=4 (pre-B9) · consensus.enforce=true từ 08/10 (auto-enable sau shadow) · SIGNAL_AUTO_APPROVED=10 (SELL=1) · REJECTED=13 (SELL=0) · 0 lệnh SELL từng đặt toàn sổ (BUY/FILLED=9 toàn sandbox) · paper cash 0₫ · sandbox 48,9M + 1.000cp (VIC/VPB/TCB) · VETO hạ HOLD=0 lần · D-LEDGER chấm 5/5 SELL đều LOSS (markPnl −0,52%…−4,00%)
+- Kiểm chứng case FPT 10/10 (tín hiệu SELL duy nhất qua cổng): assessment lúc sinh cho tally 5/6 DOWN (83,3%) + stance FPT SELL (pDown 84,8%, forecast −5,37%) → auto-duyệt đúng hướng; lệnh paper không đặt được do equity 0 (tài khoản purge) → đóng ACTED + audit orderCreated:false — đúng thiết kế #91
+- PHÁT HIỆN F-151-1 (MEDIUM): gate đồng thuận KHÔNG kiểm tra dominant direction khớp hướng tín hiệu — hiện trạng 6/7 cử tri FLAT → dominant FLAT 85,2% → gate CONSENSUS; nếu Chủ tịch đề xuất SELL lúc này sẽ auto-duyệt dù hội đồng đồng thuận 'đi ngang'. Ràng buộc hướng hiện chỉ advisory trong prompt. Đề xuất: guard cứng dominant==='DOWN' cho SELL (UP cho BUY) trong autoDecideSignalByConsensus + persistSignalAndExecution, kèm test hermetic
+- PHÁT HIỆN F-151-2 (LOW): persist.ts:250-251 stopLoss/takeProfit chỉ lưu cho BUY — tín hiệu SELL không có mốc cắt lỗ/kiểm tra ngược → Kelly hint bán yếu đi, không hậu kiểm được 'đáng lẽ chặn lỗ ở đâu'
+- PHÁT HIỆN F-151-3 (QUAN SÁT): con đường bán chưa từng thực thi trọn vẹn production (0 lệnh SELL đặt/khớp) — paper equity 0, sandbox chưa có tín hiệu SELL đồng thuận rơi đúng VIC/VPB/TCB; nhánh fill SELL chỉ được cover bởi test tự động
+- ĐÁP CÂU HỎI LÕI Z.AI: đo trực tiếp z-ai-web-dev-sdk với 8 tên model (glm-4.6/4.6-flash/4.5-flash/4.5-air/5/5.3/5.3-flash…) — TẤT CẢ được phục vụ bởi cùng lõi trả về model:'glm-4-plus' → tham số model bị gateway bỏ qua, GLM 5.3 Flash KHÔNG có thật trong sandbox (gọi tên vẫn nhận GLM-4.6). Năng lực SDK riêng: glm-5v-turbo (VLM — đã dùng chấm CV), TTS, ASR, image-gen. 12 model free kia thuộc Zen gateway (cần OPENCODE_ZEN_API_KEY chưa cấu hình, trong list cũng không có GLM-5.3-flash)
+- Viết docs/REVIEW_SELL_MECHANISM.md (bảng 6 lớp cổng + 5 bằng chứng hoạt động đúng + 3 phát hiện + số liệu nền + câu trả lời lõi z.ai)
+- Không sửa src/ (review read-only) · dev server chạy liên tục · lint không cần chạy (0 dòng src đổi)
+
+Stage Summary:
+- Cơ chế bán = 6 lớp cổng nối tiếp: phiếu 7 cử tri có trọng số → gate đồng thuận ≥80% → Chủ tịch đề xuất SELL (snapshot bind) → VETO (SELL được phép khi chỉ vượt exposure) → auto-decision duyệt/từ chối tức thì #91 → guard thực thi (vị thế ≥100cp · 5% NAV · LIMIT kẹp dải ±7%) → fill engine khớp + D-LEDGER chấm lại ±0,5%
+- KẾT LUẬN: cơ chế HOẠT ĐỘNG ĐÚNG về toán học + enforcement + audit + phản hồi (5 bằng chứng DB), nhưng có 2 kẽ thiết kế: gate chưa ràng buộc hướng số đông với hướng tín hiệu (F-151-1 — đáng sửa nhất) và SELL không lưu stop/take (F-151-2); đường bán chưa từng chạy trọn ở production (F-151-3)
+- GLM 5.3 Flash: KHÔNG có trong sandbox z.ai — lõi chat duy nhất GLM-4.6 (glm-4-plus nội bộ), mọi tên model khác silently fallback về cùng lõi (đã verify 8/8)

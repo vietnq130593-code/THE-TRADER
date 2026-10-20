@@ -1,0 +1,60 @@
+══════════ REVIEW CƠ CHẾ BÁN — THE TRADER ══════════
+Thời điểm: 2026-10-20T06:50:01.094Z
+
+── A. TỔNG QUAN TÍN HIỆU ──
+Tổng tín hiệu: 59
+Theo hướng: BUY=17 · SELL=5 · HOLD=37
+Theo trạng thái: EXPIRED=34 · REJECTED=13 · ACTED=12
+SELL theo trạng thái: EXPIRED=3 · ACTED=2
+SELL theo gate đồng thuận: CONSENSUS=1 · null=4
+
+── B. CỔNG ĐỒNG THUẬN (AppSetting 'consensus') ──
+value = {"enforce":true,"autoEnableAfter":10,"enforcedAt":"2026-10-08T04:04:32.978Z"}
+
+── C. CHI TIẾT 30 TÍN HIỆU SELL GẦN NHẤT ──
+2026-10-10T14:42 · FPT · status=ACTED · gate=CONSENSUS · ratio=83,3% · score=76
+    → (không có lệnh)
+2026-10-06T14:33 · TCB · status=ACTED · gate=null · ratio=? · score=78
+    → (không có lệnh)
+2026-10-06T14:20 · TCB · status=EXPIRED · gate=null · ratio=? · score=67
+    → (không có lệnh)
+2026-10-06T08:53 · TCB · status=EXPIRED · gate=null · ratio=? · score=63
+    → (không có lệnh)
+2026-10-06T06:53 · HSG · status=EXPIRED · gate=null · ratio=? · score=44
+    → (không có lệnh)
+
+── D. AUTO-DECISION (#91) ──
+SIGNAL_AUTO_APPROVED tổng: 10 (trong đó SELL: 1)
+SIGNAL_AUTO_REJECTED tổng: 13 (trong đó SELL: 0)
+
+── D2. AUDIT AUTO-DECISION SELL ──
+2026-10-13T13:39 SIGNAL_AUTO_APPROVED: {"via":"consensus-gate","symbol":"FPT","direction":"SELL","consensusRatio":0.833333,"consensusGate":"CONSENSUS","orderCreated":false,"orderError":"Không xác định được giá trị tài sản để định cỡ lệnh.","note":"Tự động DUYỆT theo cổng đồng thuận: 83,3% ≥ 80%. Lệnh giấy chưa đặt được — Không xác định đ
+
+── D3. TẤT CẢ LỆNH THEO side/status ──
+BUY/FILLED=9
+
+── E. SNAPSHOT CỔNG ĐỒNG THUẬN 3 CHU KỲ GẦN NHẤT ──
+2026-10-20T04:28 [cycle] gate=CONSENSUS ratio=85,2% present=7
+    tally: Market Analyst=FLAT(0.51) · Fair Value Analyst=FLAT(0.52) · News & Sentiment=FLAT(0.53) · Liquidity Analyst=FLAT(0.45) · Macro Economist=FLAT(0.50) · Risk Manager=DOWN(0.54) · ML Forecast=FLAT(0.61)
+2026-10-20T00:27 [cycle] gate=CONSENSUS ratio=85,2% present=7
+    tally: Market Analyst=FLAT(0.51) · Fair Value Analyst=FLAT(0.52) · News & Sentiment=FLAT(0.53) · Liquidity Analyst=FLAT(0.45) · Macro Economist=FLAT(0.50) · Risk Manager=DOWN(0.54) · ML Forecast=FLAT(0.61)
+2026-10-19T20:26 [cycle] gate=CONSENSUS ratio=100,0% present=7
+    tally: Market Analyst=FLAT(0.51) · Fair Value Analyst=FLAT(0.52) · News & Sentiment=FLAT(0.53) · Liquidity Analyst=FLAT(0.45) · Macro Economist=FLAT(0.50) · Risk Manager=FLAT(0.54) · ML Forecast=FLAT(0.61)
+
+── F. 10 LỆNH SELL ĐÃ KHỚP GẦN NHẤT ──
+Tổng lệnh SELL FILLED toàn sổ: 0
+Vị thế OPEN hiện tại: VIC[sandbox]=100cp · VPB[sandbox]=200cp · TCB[sandbox]=700cp
+
+── G. D-LEDGER ĐÁNH GIÁ LẠI TÍN HIỆU SELL ──
+Tổng DecisionEvaluation trên SELL: 5
+2026-10-13T14:58 verdict=LOSS · markPnlPct=-4.00% · kind=UNEXECUTED · world=— · cash=—
+2026-10-13T14:58 verdict=LOSS · markPnlPct=-2.15% · kind=UNEXECUTED · world=— · cash=—
+2026-10-13T14:58 verdict=LOSS · markPnlPct=-2.15% · kind=UNEXECUTED · world=— · cash=—
+2026-10-13T14:58 verdict=LOSS · markPnlPct=-2.15% · kind=UNEXECUTED · world=— · cash=—
+2026-10-13T14:58 verdict=LOSS · markPnlPct=-0.52% · kind=UNEXECUTED · world=— · cash=—
+
+── H. VETO ỦY BAN KIỂM SOÁT ──
+Tín hiệu bị VETO hạ HOLD (tổng): 0
+…trong đó còn giữ hướng SELL sau Exposure-cho-phép: 0 (nếu >0 → SELL bị hạ bởi compliance/controlUnavailable)
+
+══════════ HẾT REVIEW (read-only) ══════════
