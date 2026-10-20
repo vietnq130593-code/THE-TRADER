@@ -5236,3 +5236,20 @@ Stage Summary:
 - L2 tri thức dài hạn (hybrid BM25 + semantic cosine) phục hồi 100% mức pre-rollback: coverage 2012/2020 vector · query embed sống qua sóng agents thật · usageRate đã 86,7% trước đó nên toàn bộ chu kỳ agents có lại prompt block L2 đầy đủ
 - BÀI HỌC VẬN HÀNH MỚI: mọi restart dev server về sau PHẢI dùng "( cd /home/z/my-project && exec setsid -f env -u DATABASE_URL bun run dev >> dev.log 2>&1 < /dev/null )" — nohup/setsid thường đều bị sandbox cleanup quét chết theo process tree
 - Đề xuất chủ sở hữu (kế thừa Task 158): đặt lại passphrase + "bun run env:encrypt" để có lại .env.enc chống sandbox rollback kế tiếp — hiện .env.local (chứa key NIM) nằm ngoài mọi cơ chế backup
+
+---
+Task ID: 160
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu cấp PAT GitHub mới — thay token chết 401, push 2 commit tồn (Task 158+159) chống sandbox rollback
+
+Work Log:
+- Ngữ cảnh Task 159 phát hiện: token cũ trong .git/config (bản để lại từ rollback ~17/10) trả 401 Bad credentials qua API + push fail "Invalid username or token" → commit a4c145a (158) + 00aaece (159) chỉ tồn tại trên đĩa sandbox; backup tạm vào Supabase AuditLog (WORKLOG_BACKUP · cmvgr5g07…)
+- Đo live PAT mới trước khi lắp (kỷ luật như NIM key): GET api.github.com/user → login vietnq130593-code "Mr. Architect" (đúng chủ repo) · GET repos/…/THE-TRADER → permissions push:true admin:true
+- Chẩn đoán lỗi push cũ: token nằm ở USERNAME slot của URL (https://TOKEN@github.com) — git coi là username rồi đòi password; ~/.git-credentials từng bù chỗ trống đó nhưng bị rollback xoá → GIẢI PHÁP: set-url dạng chuẩn https://vietnq130593-code:TOKEN@github.com/… (self-contained, không phụ thuộc credential file ngoài)
+- Push thành công: a12d6d8..00aaece main→main (2 commit: 158 chẩn đoán-rollback + 159 NIM key) · verify ls-remote origin/main = local HEAD = 00aaece · 0 commit tồn · working tree sạch
+- PAT lưu trong .git/config (plaintext trong đĩa sandbox) — đây là vị trí đã CHỨNG MINH sống sót sandbox rollback (token cũ vẫn nằm đó sau lần reset) · không nằm trong bất kỳ file nào được track/push · backup AuditLog giữ nguyên làm lớp dự phòng thứ 2
+
+Stage Summary:
+- Đồng bộ trọn vẹn sandbox = GitHub tại 00aaece; bài học Task 158 ("push ngay trong phiên") giờ được thực thi đầy đủ trở lại
+- Kỷ luật credential 3 bước được chuẩn hoá cho mọi key từ nay: (1) đo live qua API/endpoint thật, (2) lắp đúng vị trí bền nhất, (3) verify end-to-end trước khi báo cáo
+- Hệ thống vận hành đầy đủ: NIM embedding sống (Task 159) + GitHub push sống (Task 160) + Supabase DB sống + 24 agents chạy 0 lỗi — 3 nhánh backup (GitHub / Supabase / đĩa sandbox) đều hoạt động
