@@ -5183,3 +5183,17 @@ Stage Summary:
 - SỰ THẬT TRUNG THỰC còn lại (F-151-3 kế thừa): production CHƯA TỪNG thực thi lệnh SELL thật trọn vẹn (0 lệnh SELL toàn lịch sử); toàn bộ chứng minh đường bán là hermetic test. Lần chạy thật đầu tiên cần: cử tri flip DOWN-dominant ≥80% đúng mã đang giữ (VIC/VPB/TCB ở sandbox); tài khoản paper cash 0₫ không vị thế → SELL ở paper sẽ chỉ tới guard orderCreated:false
 - Quan sát nhỏ kèm theo: replay lỗi Turbopack stale-cache 6 lần vô hại sau restart (đĩa/git đúng); paper account trống từ trước (equity 0) — không liên quan vá
 - File mới: scripts/p153-sell-status.ts (diagnostic read-only, theo chân scripts/review-sell-mechanism.ts) · không sửa src/ · dev server liên tục khỏe
+
+---
+Task ID: 156
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu hỏi sandbox có mới hơn GitHub không — nếu mới hơn thì push code
+
+Work Log:
+- git fetch origin (PAT trong remote URL còn sống, fetch sạch không lỗi) → so sánh: sandbox AHEAD 3 commit (42782b1 · e5a4c36 · c1b0089 — toàn bộ auto-commit worklog của Task 153/154/155 + script mới), working tree sạch (mọi thay đổi đã được auto-commit)
+- Kiểm an toàn TRƯỚC push: diff origin/main..HEAD chỉ chứa scripts/p153-sell-status.ts (182 dòng, read-only diagnostic) + worklog.md (52 dòng) · quét pattern oc_sk_[A-Za-z0-9_]+ toàn diff = 0 match (chỉ có dạng che oc_sk_…/oc_sk_***) → không key/token nào lộ
+- Push e66cfbc..c1b0089 lên origin/main → verify: git rev-list --count origin/main..HEAD = 0 · origin/main đứng ở c1b0089 (08:52)
+- Đáng chú ý: các commit fix lớn (cf45499 Task 151 · e66cfbc Task 152) ĐÃ nằm trên GitHub từ trước — 3 commit tồn chỉ là worklog + script chẩn đoán của phiên hôm nay
+
+Stage Summary:
+- Đồng bộ trọn vẹn: sandbox = GitHub (origin/main tại c1b0089), 0 commit tồn, working tree sạch; kèm quét bảo mật diff trước push (0 secret)
