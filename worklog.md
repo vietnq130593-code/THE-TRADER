@@ -5165,3 +5165,21 @@ Work Log:
 Stage Summary:
 - ĐÁP: trên máy local IP sạch → CÓ, dùng được lõi free QUA OpenCode CLI (TUI · opencode run · opencode serve localhost:4096 cho app gọi vào) — cả 2 cổng đều qua (client = OpenCode, IP sạch). NHƯNG "đăng nhập trực tiếp" theo nghĩa lấy key oc_sk gọi REST thẳng từ code → model free VẪN BỊ 403 kể cả trên local, vì cổng chặn là client-based chứ không phải IP-based; REST thẳng chỉ chạy cho model PAID sau khi nạp credit Console (khi đó chạy được từ bất kỳ đâu, kể cả sandbox này)
 - Pattern tích hợp khuyên dùng cho THE TRADER local: opencode serve + adapter nhỏ (API dạng session/message, không phải format OpenAI chat-completions) hoặc shell-out opencode run 1 lần; lưu ý free là khuyến mãi có thời hạn + có thể có rate limit fair-use
+
+---
+Task ID: 155
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu hỏi: "Chức năng bán / cơ chế bán giờ đã hoạt động đúng chưa?" — kiểm định lại bằng dữ liệu production thật sau vá Task 152, không tin lời commit
+
+Work Log:
+- Viết scripts/p153-sell-status.ts (read-only, 8 mục A-F đo từ mốc vá 07:25Z): 0 tín hiệu sinh sau vá · 0 guard bắn · 0 lệnh SELL · sổ: paper cash 0₫ không vị thế, sandbox 48,9M + VIC=100/VPB=200/TCB=700cp
+- TRUY NGUYÊN NHÂN "khô tín hiệu": tín hiệu cuối 20:26Z hôm qua → nghi pipeline hỏng → soi dev.log: sóng /api/agents/run vẫn 200 (70-80s, có RAG + risk-quant + consensus); lỗi export attachRiskQuantKelly 6 lần sau restart — kiểm đĩa + git HEAD: import ĐÚNG (từ bayes/persist, commit a1d7321 Task 144 tạo file đúng ngay từ đầu) → đó là vết replay cache Turbopack của trạng thái trung gian lúc soạn file, KHÔNG tái phát ở sóng sau, vô hại
+- DB AgentRun Chủ tịch (portfolio-strategist): 4 chu kỳ COMPLETED đủ token từ 20:00Z (20:26 · 00:27 · 04:28 · 08:29); run mới nhất 08:29 (build SAU vá) output JSON: keys đủ · "signal": null · "recommendation": "HOLD toàn bộ danh mục do rủi ro cao và thiếu đồng thuận rõ ràng về xu hướng" · summary nêu "cổng đồng thuận đạt 85,2% hướng FLAT" + dữ liệu SEVERE + CVaR95 9,6%
+- Verify build đang chạy chứa fix Task 152: GET /api/signals trả field consensusDominant (null cho tín hiệu cũ — đúng) → code mới LIVE; sóng 08:29 chạy trên build mới
+- Kết luận hiện trạng: khô tín hiệu KHÔNG phải hỏng pipeline — hội đồng đang dominant FLAT 85,2% (6/7 cử tri đi ngang) → Chủ tịch chủ động không đề xuất → đúng thiết kế cổng 80%; trước vá F-151-1 thì SELL lọt qua FLAT-dominant được, giờ không thể
+
+Stage Summary:
+- ĐÁP CHỦ SỞ HỮU: cơ chế bán HOẠT ĐỘNG ĐÚNG ở 3 tầng chứng cứ: (1) mã fix đã LIVE trên build đang chạy (field mới lộ diện ở API); (2) E2E 23/23 Task 152 chứng minh trọn đường bán (duyệt SELL+DOWN → lệnh LIMIT → khớp → fee/thuế/realized/cash/audit) + 4 guard âm tính đúng; (3) production hiện KHÔNG có lệnh bán nào được đặt — vì hội đồng FLAT 85,2% → Chủ tịch tự HOLD ("thiếu đồng thuận rõ ràng") — đây là hành vi ĐÚNG của cổng, không phải lỗi
+- SỰ THẬT TRUNG THỰC còn lại (F-151-3 kế thừa): production CHƯA TỪNG thực thi lệnh SELL thật trọn vẹn (0 lệnh SELL toàn lịch sử); toàn bộ chứng minh đường bán là hermetic test. Lần chạy thật đầu tiên cần: cử tri flip DOWN-dominant ≥80% đúng mã đang giữ (VIC/VPB/TCB ở sandbox); tài khoản paper cash 0₫ không vị thế → SELL ở paper sẽ chỉ tới guard orderCreated:false
+- Quan sát nhỏ kèm theo: replay lỗi Turbopack stale-cache 6 lần vô hại sau restart (đĩa/git đúng); paper account trống từ trước (equity 0) — không liên quan vá
+- File mới: scripts/p153-sell-status.ts (diagnostic read-only, theo chân scripts/review-sell-mechanism.ts) · không sửa src/ · dev server liên tục khỏe
