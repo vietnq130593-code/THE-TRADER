@@ -130,7 +130,7 @@ check(
   "T4b Chính sách hợp lý trên chuỗi chỉ-tăng: edge mua-giữ ∈ (−0,001·2, 0]",
   h4 != null && h4.edgeVsBuyHold <= 0 && h4.edgeVsBuyHold > -0.0021,
   h4 != null
-    ? `edge mua-giữ ${h4.edgeVsBuyHold} (chỉ损失的 cost vào vị thế ~0,001/bước đầu)`
+    ? `edge mua-giữ ${h4.edgeVsBuyHold} (chỉ tốn cost vào vị thế ~0,001/bước đầu)`
     : "thiếu holdout!"
 );
 

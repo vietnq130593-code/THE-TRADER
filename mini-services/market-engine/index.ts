@@ -1349,9 +1349,12 @@ function mlSweepDue(): boolean {
  *  chung train tay + sweep) rồi mới trainDlMlp (serving-swap guard nội tại —
  *  bản mới thua valAcc thì archived, serving giữ nguyên). Engine chỉ đôn đốc
  *  như K2/K3 — KHÔNG tự quyết định. Timeout 280s như A4 (train 30-60s).
- *  Log + broadcast WS "ml-psi-retrain" CHỈ khi outcome KHÔNG phải
- *  skip-psi-below (trạng thái bình thường — tránh spam log mỗi 15 phút; FE
- *  invalidate ml-status khi có hành động thật). Thất bại POST → KHÔNG đánh
+ *  Log + broadcast WS "ml-psi-retrain" CHỈ khi outcome KHÔNG phải skip
+ *  bình thường (psi-below/cooldown/disabled/psi-unavailable — F-166b-1
+ *  Fixbug #166 + F-166c-1 Vòng Xác Nhận: phủ định whitelist để mọi outcome
+ *  lạ/không biết (error · "?" · tương lai) luôn ĐƯỢC log — không nuốt im
+ *  lặng theo F-00; FE invalidate ml-status khi có hành động thật). Thất
+ *  bại POST → KHÔNG đánh
  *  dấu gì, nhịp check sau thử lại (fail-soft, pattern settle). */
 let psiRetrainInFlight = false;
 const ML_PSI_RETRAIN_POST_TIMEOUT_MS = 280_000;
@@ -1366,7 +1369,24 @@ async function psiRetrainAndBroadcast(): Promise<void> {
     stats.lastPsiRetrainError = null;
     const outcome = typeof data.outcome === "string" ? data.outcome : "?";
     stats.lastPsiRetrainOutcome = outcome;
-    if (outcome !== "skip-psi-below") {
+    // F-166b-1 + F-166c-1 (Fixbug #166 — Vòng 1 + Vòng Xác Nhận): im lặng
+    // CHỈ với các skip bình thường lặp mỗi 15' (tránh ~28 dòng rác/ngày);
+    // mọi outcome KHÁC (skip-no-new-window · trained-* · error · "?" ·
+    // chuỗi lạ tương lai) đều log + broadcast — không nuốt im lặng (F-00).
+    // Route trả HTTP 200 + outcome:"error" khi trainDlMlp fail → phải thấy.
+    const isNormalSkip =
+      outcome === "skip-psi-below" ||
+      outcome === "skip-cooldown" ||
+      outcome === "skip-disabled" ||
+      outcome === "skip-psi-unavailable";
+    if (outcome === "error") {
+      // F-166c-1: HTTP 200 nhưng train fail — đánh dấu lỗi cho /health
+      // (trước đây đặt null rồi bỏ qua → giám sát mù).
+      stats.lastPsiRetrainError = String(
+        data.reason ?? "train PSI lỗi (route không kèm lý do)"
+      );
+    }
+    if (!isNormalSkip) {
       io.emit("ml-psi-retrain", data);
       log(
         "ml-psi",
@@ -1374,8 +1394,15 @@ async function psiRetrainAndBroadcast(): Promise<void> {
       );
     }
   } catch (err) {
-    stats.lastPsiRetrainError = err instanceof Error ? err.message : String(err);
-    log("ml-psi", `LỖI (thử lại nhịp sau): ${stats.lastPsiRetrainError}`);
+    // F-166b-4 (Fixbug #166 — Vòng 1): HTTP 429 = mutex/cooldown train đang
+    // bận (train tay/sweep đụng nhau lúc 17:00) — tranh chấp bình thường,
+    // KHÔNG phải lỗi nguồn: log "nhường", không đánh dấu lastPsiRetrainError.
+    if (err instanceof HttpError && err.status === 429) {
+      log("ml-psi", `nhường — train khác giữ mutex/cooldown: ${err.message}`);
+    } else {
+      stats.lastPsiRetrainError = err instanceof Error ? err.message : String(err);
+      log("ml-psi", `LỖI (thử lại nhịp sau): ${stats.lastPsiRetrainError}`);
+    }
   } finally {
     psiRetrainInFlight = false;
   }

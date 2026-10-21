@@ -1066,7 +1066,10 @@ function ValueChainCard({ status }: { status: MlStatusResponse | undefined }) {
             <p>
               stance <strong>{rl?.metrics.stance ?? "—"}</strong> · exposure{" "}
               <strong>{nfr(rl?.metrics.exposure)}</strong> · avgReward₅₀{" "}
-              {nfr(rl?.metrics.avgRewardLast50)}
+              {/* F-166a-4 (Fixbug #166): hạn định (train) — bề mặt thứ 2 của
+                  avgRewardLast50 cũng phải phân biệt in-training vs ngoài mẫu
+                  như rl-block (W4 #165). */}
+              (train) {nfr(rl?.metrics.avgRewardLast50)}
             </p>
           </div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">

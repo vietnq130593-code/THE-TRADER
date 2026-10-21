@@ -92,6 +92,32 @@ function DriftBadge({ drift }: { drift: DriftStatus | null }) {
 
 /** Khối phụ: top-3 chiều PSI cao nhất + n/asOf + dòng "đề xuất train lại" +
  *  trạng thái cơ chế auto-retrain W3 (#164) — engine tự train khi PSI ≥ 0,25. */
+/** F-166b-5 (Fixbug #166 — Vòng 1): khối trạng thái W3 tách component riêng —
+ *  render ở CẢ HAI nhánh (trước đây chỉ nằm trong nhánh drift available →
+ *  serving chưa có histogram thì kill-switch/cooldown/lần trigger gần nhất
+ *  vô hình dù API vẫn trả autoRetrain). Kèm: psiWarn format nf2 (vi-VN
+ *  "0,25" — cùng dấu phẩy với dòng đề xuất phía trên). */
+function AutoRetrainNote({
+  autoRetrain,
+}: {
+  autoRetrain: MlAutoRetrainStatus | null;
+}) {
+  if (!autoRetrain) return null;
+  return (
+    <p className="mt-1.5 border-t pt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+      Tự train lại khi trôi dịch (W3):{" "}
+      <strong className={autoRetrain.enabled ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-semibold text-rose-600 dark:text-rose-400"}>
+        {autoRetrain.enabled ? "BẬT" : "TẮT (kill-switch AppSetting ml-psi-retrain)"}
+      </strong>
+      {` · ngưỡng PSI ≥ ${nf2.format(autoRetrain.psiWarn)} · cooldown ${autoRetrain.cooldownHours}h`}
+      {autoRetrain.lastAt
+        ? ` · lần gần nhất: ${new Date(autoRetrain.lastAt).toLocaleString("vi-VN")} (${autoRetrain.lastOutcome ?? "?"})`
+        : " · chưa từng trigger"}
+      <span className="sr-only"> — {autoRetrain.schedule}</span>
+    </p>
+  );
+}
+
 function DriftDetail({
   drift,
   autoRetrain,
@@ -102,10 +128,13 @@ function DriftDetail({
   if (!drift) return null; // API chưa có field drift (bản cũ) — ẩn im lặng
   if (!drift.available) {
     return (
-      <p className="rounded-lg border border-dashed bg-muted/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-        Drift đặc trưng:{" "}
-        {drift.reason ?? "chưa có histogram — sẽ có sau lần train kế tiếp"}
-      </p>
+      <div>
+        <p className="rounded-lg border border-dashed bg-muted/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          Drift đặc trưng:{" "}
+          {drift.reason ?? "chưa có histogram — sẽ có sau lần train kế tiếp"}
+        </p>
+        <AutoRetrainNote autoRetrain={autoRetrain} />
+      </div>
     );
   }
   const top = [...drift.dims].sort((a, b) => b.psi - a.psi).slice(0, 3);
@@ -148,19 +177,7 @@ function DriftDetail({
       )}
       {/* W3 (#164) — minh bạch cơ chế: auto-retrain theo PSI có guard (5 tầng:
           kill-switch · cooldown 24h · ngưỡng · windowHash · mutex train). */}
-      {autoRetrain && (
-        <p className="mt-1.5 border-t pt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-          Tự train lại khi trôi dịch (W3):{" "}
-          <strong className={autoRetrain.enabled ? "font-semibold text-emerald-600 dark:text-emerald-400" : "font-semibold text-rose-600 dark:text-rose-400"}>
-            {autoRetrain.enabled ? "BẬT" : "TẮT (kill-switch AppSetting ml-psi-retrain)"}
-          </strong>
-          {` · ngưỡng PSI ≥ ${autoRetrain.psiWarn} · cooldown ${autoRetrain.cooldownHours}h`}
-          {autoRetrain.lastAt
-            ? ` · lần gần nhất: ${new Date(autoRetrain.lastAt).toLocaleString("vi-VN")} (${autoRetrain.lastOutcome ?? "?"})`
-            : " · chưa từng trigger"}
-          <span className="sr-only"> — {autoRetrain.schedule}</span>
-        </p>
-      )}
+      <AutoRetrainNote autoRetrain={autoRetrain} />
     </div>
   );
 }
@@ -240,10 +257,14 @@ export function MlpBlock({
 
           {/* W5 (#163) — note thiên lệch selection: luôn hiện để người đọc
               không lấy valAcc selection làm tuyên bố ngoài mẫu. */}
+          {/* F-166a-3 (Fixbug #166 — Vòng 1): ưu tiên note TỪ API (metricsNote
+              do status route soạn — một nguồn sự thật, chống trôi FE/API);
+              fallback giữ logic W5 cũ cho bản không có note. */}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            {model.holdout
-              ? 'Ô "Holdout ngoài mẫu" là số trung thực (walk-forward, cùng cut thời gian — đo khi bản này qua cổng sweep). Ô "xác thực" là số selection, thiên lệch LÊN.'
-              : 'Chưa có số ngoài mẫu cho bản này (lên serving qua train tay). Áp chính xác "xác thực (selection)" là số post-selection — chọn kiến trúc + early-stop trên cùng val block, thiên lệch LÊN so với khả năng dự báo thật.'}
+            {model.metricsNote ??
+              (model.holdout
+                ? 'Ô "Holdout ngoài mẫu" là số trung thực (walk-forward, cùng cut thời gian — đo khi bản này qua cổng sweep). Ô "xác thực" là số selection, thiên lệch LÊN.'
+                : 'Chưa có số ngoài mẫu cho bản này (lên serving qua train tay). Áp chính xác "xác thực (selection)" là số post-selection — chọn kiến trúc + early-stop trên cùng val block, thiên lệch LÊN so với khả năng dự báo thật.')}
           </p>
 
           {/* A3 — giám sát drift đặc trưng (PSI 30 phiên gần nhất) + W3 trạng

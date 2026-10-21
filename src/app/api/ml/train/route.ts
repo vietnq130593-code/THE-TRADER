@@ -258,7 +258,7 @@ async function trainRlQ(): Promise<TrainedRlQMetrics> {
     qMax: stance.qMax,
     holdout: q.holdout ?? null,
     metricsNote: q.holdout
-      ? "avgRewardLast50 là số in-training trên TRAIN split (W4 #165 tách holdout theo thời gian — Q-table không nhìn đoạn cuối); số ngoài mẫu nằm ở holdout: chính sách greedy đánh giá trên đoạn giữ-ra so 3 baseline cùng đoạn (giữ 50% · mua-giữ · cash)."
+      ? "avgRewardLast50 là số in-training trên TRAIN split (W4 #165 tách holdout theo thời gian — Q-table không nhìn đoạn cuối); số ngoài mẫu nằm ở holdout: chính sách greedy đánh giá trên đoạn giữ-ra so 3 baseline cùng đoạn (giữ 50% · mua-giữ · cash). Giải thích ngữ nghĩa (F-166a-1/2 Fixbug #166): mọi số holdout là TRUNG BÌNH THƯỞNG TỪNG BƯỚC theo đúng công thức reward (trung bình số học, không phải lợi nhu kép/CAGR); baseline mua-giữ là đối chứng KHÔNG PHÍ — chính sách có trả phí đổi vị thế (chiều bất lợi cho chính sách khi so sánh)."
       : "dữ liệu tối thiểu — holdout tắt (W4 #165), avgRewardLast50 là số in-training trên toàn chuỗi",
   };
   await saveModel("rl-q", JSON.stringify({ qTable: q.qTable }), null, { ...metrics }, windowMeta);

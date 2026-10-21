@@ -20,7 +20,7 @@ import { driftForServing } from "@/lib/ml/drift";
 import {
   PSI_RETRAIN_AUDIT_ACTION,
   PSI_RETRAIN_COOLDOWN_HOURS,
-  PSI_RETRAIN_SETTING_KEY,
+  readPsiRetrainSetting,
 } from "@/lib/ml/psi-retrain";
 import { PSI_WARN } from "@/lib/ml/psi";
 // F-18B (#132): đọc arch-string thật của bản serving từ weights JSON — dùng
@@ -306,23 +306,18 @@ const AUTO_RETRAIN_SCHEDULE =
  *  nhẹ, fail-soft null — FE ẩn khối, KHÔNG bịa trạng thái). */
 async function autoRetrainPayload(): Promise<AutoRetrainPayload | null> {
   try {
-    const [settingRow, auditRow] = await Promise.all([
-      db.appSetting.findUnique({ where: { key: PSI_RETRAIN_SETTING_KEY } }),
+    // F-166b-8 (Fixbug #166 — Vòng 1): kill-switch parse DÙNG CHUNG lib
+    // readPsiRetrainSetting (một nguồn sự thật — chống trôi ngữ nghĩa khi lib
+    // mở rộng field; DB lỗi → reject → outer catch trả null fail-soft y cũ).
+    const [setting, auditRow] = await Promise.all([
+      readPsiRetrainSetting(),
       db.auditLog.findFirst({
         where: { action: PSI_RETRAIN_AUDIT_ACTION },
         orderBy: { createdAt: "desc" },
         select: { createdAt: true, after: true },
       }),
     ]);
-    let enabled = true; // thiếu key → BẬT (lý do tồn tại của W3)
-    if (settingRow) {
-      try {
-        const s = JSON.parse(settingRow.value) as { enabled?: unknown };
-        enabled = s.enabled !== false;
-      } catch {
-        // JSON hỏng → giữ BẬT (không bịa TẮT)
-      }
-    }
+    const enabled = setting.enabled;
     let lastOutcome: string | null = null;
     if (auditRow?.after) {
       try {

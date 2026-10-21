@@ -100,10 +100,13 @@ export function decidePsiRetrainGate(
   if (input.lastTriggerAt != null) {
     const elapsed = input.now - input.lastTriggerAt;
     const cooldownMs = cooldownHours * 3_600_000;
-    if (elapsed >= 0 && elapsed < cooldownMs) {
+    // F-166b-6 (Fixbug #166 — Vòng 1): mốc audit ở TƯƠNG LAI (clock-skew
+    // nguồn ghi ≠ nguồn đọc) → elapsed < 0 — vẫn coi như đang cooldown
+    // (fail-safe: lệch giờ không được phép bypass 24h).
+    if (elapsed < cooldownMs) {
       return {
         outcome: "cooldown",
-        reason: `đã trigger auto-retrain cách đây ${(elapsed / 3_600_000).toFixed(1)}h — cooldown ${cooldownHours}h (PSI breach kéo dài nhiều ngày, không đấm train mỗi 15 phút)`,
+        reason: `đã trigger auto-retrain cách đây ${(Math.max(0, elapsed) / 3_600_000).toFixed(1)}h — cooldown ${cooldownHours}h (PSI breach kéo dài nhiều ngày, không đấm train mỗi 15 phút)`,
         cooldownRemainingMs: cooldownMs - elapsed,
       };
     }
@@ -115,7 +118,12 @@ export function decidePsiRetrainGate(
         "chưa đo được PSI của bản serving (chưa có featureHist / lỗi đo) — không quyết định auto-retrain trên số thiếu",
     };
   }
-  const psiWarn = input.psiWarn ?? PSI_WARN;
+  // O-1 (Fixbug #166 — Vòng Xác Nhận): psiWarn NaN/Infinity → mặc định
+  // PSI_WARN (mirror finite-guard của cooldownHours — không để NaN so sánh
+  // luôn false/rồi lọt proceed).
+  const psiWarnRaw = input.psiWarn ?? PSI_WARN;
+  const psiWarn =
+    Number.isFinite(psiWarnRaw) && psiWarnRaw > 0 ? psiWarnRaw : PSI_WARN;
   if (input.maxPsi < psiWarn) {
     return {
       outcome: "psi-below",
@@ -193,7 +201,14 @@ export async function lastPsiRetrainAudit(): Promise<{
       // after hỏng → vẫn dùng mốc thời gian cho cooldown (thận trọng)
     }
     return { at: row.createdAt, outcome };
-  } catch {
+  } catch (err) {
+    // F-166b-2 (Fixbug #166 — Vòng 1, nguyên tắc F-00: im lặng là lỗi giám
+    // sát): lỗi đọc AuditLog cooldown phải hiện trong log. Vẫn return null →
+    // G2 fail-open như chủ đích (tầng dưới G4 windowHash + audit lại tự hãm).
+    console.error(
+      "[ml/psi-retrain] đọc AuditLog cooldown lỗi (fail-open):",
+      err
+    );
     return null;
   }
 }

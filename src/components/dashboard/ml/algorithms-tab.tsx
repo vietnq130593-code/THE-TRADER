@@ -224,14 +224,15 @@ export function buildAlgoSpecs(data: MlStatusResponse | undefined): AlgoSpec[] {
       title: "Q-learning tabular (Gym)",
       file: "src/lib/ml/rl.ts",
       icon: <Dumbbell className="size-4" />,
-      desc: "Học tăng cường trên rổ top-10: không gian 48 trạng thái (xu hướng × bucket RSI rổ × động lượng 5 phiên × phơi nhiễm) × 3 hành động (giảm/hold/tăng exposure ±0,5). ε-greedy decay qua episodes, Q-table lưu MlModel kind rl-q.",
+      desc: "Học tăng cường trên rổ top-10: không gian 96 trạng thái (xu hướng × bucket RSI rổ × động lượng 5 phiên × phơi nhiễm × regime VNINDEX SMA50/200 — F-13 #129) × 3 hành động (giảm/hold/tăng exposure ±0,5). ε-greedy decay qua episodes, Q-table lưu MlModel kind rl-q. W4 #165: cut theo thời gian — 10% phiên cuối (min 60 · max 200) giữ ra khỏi train, chính sách greedy kiểm định ngoài mẫu trên đoạn đó so 3 baseline.",
       consts: [
-        { label: "không gian", value: "48 trạng thái" },
+        { label: "không gian", value: "96 trạng thái" },
         { label: "hành động", value: "3 (±0,5 exposure)" },
         { label: "rổ huấn luyện", value: "top-10 thanh khoản" },
         { label: "chính sách", value: "ε-greedy (decay)" },
+        { label: "holdout W4", value: "10% · min 60 · max 200 phiên" },
       ],
-      functions: ["trainQTable()", "buildBasket()", "policyStance()"],
+      functions: ["trainQTable()", "buildBasket()", "policyStance()", "qHoldoutBars()"],
       live: data?.rlQ
         ? `v${data.rlQ.version}: ${nf0.format(data.rlQ.metrics.episodes)} episodes · stance ${data.rlQ.metrics.stance} · phơi nhiễm ${((data.rlQ.metrics.exposure ?? 0) * 100).toFixed(0)}%.`
         : null,

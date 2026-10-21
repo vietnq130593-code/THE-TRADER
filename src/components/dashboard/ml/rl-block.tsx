@@ -20,6 +20,7 @@ import {
   normalizeStance,
   nf0,
   nf2,
+  nf4,
   pct1,
   signed2,
   signTone,
@@ -32,12 +33,17 @@ export function RlBlock({ model }: { model: MlModelStatus<RlQMetrics> | null }) 
   // W4 (#165) — số per-step của holdout cỡ 1e-4: 4 chữ số thập phân (ô
   // in-training giữ signed2 như cũ — khác biệt có chủ đích để mắt phân biệt
   // hai loại số ngay khi liếc).
-  const nf4 = new Intl.NumberFormat("vi-VN", {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  });
+  // F-166a-5 (Fixbug #166 — Vòng 1): dùng nf4 DÙNG CHUNG từ shared (bỏ bản
+  // địa trùng) + dấu − U+2212 như signed2 — trước đây 2 ký tự trừ khác nhau
+  // trong cùng card (ô train "−0,12" vs ô holdout "-0,0009").
   const signed4 = (n: number | null | undefined): string =>
-    n == null || Number.isNaN(n) ? "—" : `${n >= 0 ? "+" : ""}${nf4.format(n)}`;
+    n == null || Number.isNaN(n)
+      ? "—"
+      : n > 0
+        ? `+${nf4.format(n)}`
+        : n < 0
+          ? `−${nf4.format(Math.abs(n))}`
+          : "0,0000";
 
   return (
     <section aria-labelledby="ml-rlq-heading" className="flex flex-col gap-3">
@@ -138,8 +144,13 @@ export function RlBlock({ model }: { model: MlModelStatus<RlQMetrics> | null }) 
                   tone={signTone(m.holdout.edgeVsBuyHold)}
                 />
               </div>
+              {/* F-166a-1/2/3 (Fixbug #166 — Vòng 1): ưu tiên note TỪ API
+                  (metricsNote persist lúc train — một nguồn sự thật, chống
+                  trôi FE/API); fallback cho bản cũ. Ghi rõ semantics: số
+                  per-step theo công thức reward · baseline cost-free. */}
               <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                {"Số trung thực ngoài mẫu: chính sách greedy argmax Q đánh giá trên đoạn giữ-ra, so 3 baseline cùng đoạn (giữ 50% · mua-giữ 100% · cash 0). Dòng “Thưởng TB 50 ep cuối (train)” là số in-training — thước đo hội tụ, không phải hiệu năng ngoài mẫu."}
+                {model.metricsNote ??
+                  "Số trung thực ngoài mẫu: chính sách greedy argmax Q đánh giá trên đoạn giữ-ra, so 3 baseline cùng đoạn (giữ 50% · mua-giữ 100% · cash 0). Mọi số là trung bình THƯỞNG TỪNG BƯỚC theo công thức reward (không phải lợi nhu kép); baseline mua-giữ là đối chứng không phí. Dòng “Thưởng TB 50 ep cuối (train)” là số in-training — thước đo hội tụ, không phải hiệu năng ngoài mẫu."}
               </p>
             </div>
           ) : (
