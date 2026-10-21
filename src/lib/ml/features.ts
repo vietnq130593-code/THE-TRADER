@@ -93,6 +93,10 @@ export interface TrainingWindowMeta {
   trainDateTo: string | null;
   /** Số bar trong cửa sổ (per mã — digest tính trên chính các bar này). */
   bars: number;
+  /** F-166b-3 (Fixbug #166 → vá #167): số dòng MacroContext góp vào hash —
+   *  chỉ có khi featureSet v3-macro (macroByDate ≠ null); absent = digest
+   *  đời cũ chỉ bar giá (rl-q/GRU/MTL — đầu vào không có macro). */
+  macroRows?: number;
   /** Số mẫu huấn luyện cuối (sau cap ML_MAX_SAMPLES). */
   samples: number;
   /** Rổ mã tham gia (train/serving cùng định nghĩa rổ — P0-2). */
@@ -108,10 +112,31 @@ export interface TrainingWindowMeta {
  * ổn định (symbol asc, date asc) — 2 lần train trên cùng dữ liệu cho cùng
  * hash; bar bị upsert đè (restate/PIT leak) → hash KHÁC → đối chiếu phát
  * hiện được. Kèm biên ngày from/to lấy từ chính các bar đó.
+ *
+ * F-166b-3 (Fixbug #166 → vá #167): opts.macroByDate ≠ null (tập v3-macro)
+ * → hash THÊM 8 chiều MacroContext tại đúng các ngày lấy mẫu
+ * (opts.sampleDates — distinct từ set.dates): macro restated/intl-sync lại
+ * → hash đổi → G4/A4 hết skip oan "no-new-window" khi bar giá không đổi
+ * nhưng đầu vào vĩ mô đã khác (hướng fail-safe: macro đổi = cửa sổ đổi).
+ * Hash trên GIÁ TRỊ CHẨN hoÁ model tiêu thụ (dus10y20…sent7 + missing)
+ * đúng tinh thần F-611-01: hash CHÍNH thứ đã dùng, không load lại nguồn gốc
+ * thứ 2. Ngày lấy mẫu thiếu trong map → dòng "absent" (trung thực: mẫu đó
+ * rơi nhánh 16 chiều). digestVersion đổi "…+macro8-v2" → hash đời mới ≠
+ * đời cũ một lần (migration trung thực: train lại 1 lần rồi ổn định).
  */
 export function trainingWindowDigest(
   series: SymbolSeries[],
-  opts: { samples?: number; horizonDays?: number; featureCount?: number } = {}
+  opts: {
+    samples?: number;
+    horizonDays?: number;
+    featureCount?: number;
+    /** F-166b-3: MacroContext theo ngày đã DÙNG (v3-macro) — null/undefined
+     *  giữ hành vi đời cũ (chỉ bar — rl-q/GRU/MTL không dùng macro). */
+    macroByDate?: ReadonlyMap<string, MacroContext> | null;
+    /** F-166b-3: ngày lấy mẫu thực sự vào tập train (set.dates) — mặc định
+     *  lấy toàn bộ key của macroByDate khi caller không truyền. */
+    sampleDates?: readonly string[] | null;
+  } = {}
 ): TrainingWindowMeta {
   const hash = createHash("sha256");
   let bars = 0;
@@ -127,16 +152,37 @@ export function trainingWindowDigest(
       if (to == null || d > to) to = d;
     }
   }
+  // F-166b-3 — phần macro của cửa sổ (chỉ khi tập build có macro).
+  const macroByDate = opts.macroByDate ?? null;
+  let macroRows = 0;
+  if (macroByDate != null) {
+    const dates = new Set<string>(
+      opts.sampleDates ?? [...macroByDate.keys()]
+    );
+    for (const d of [...dates].sort()) {
+      const m = macroByDate.get(d) ?? null;
+      hash.update(
+        m == null
+          ? `M|${d}|absent\n`
+          : `M|${d}|${m.dus10y20}|${m.slope10y5y}|${m.dxyMom20}|${m.vndMom20}|${m.cmdtyMom20}|${m.breadth20}|${m.flow20}|${m.sent7}|${m.missing}\n`
+      );
+      macroRows++;
+    }
+  }
   return {
     windowHash: hash.digest("hex"),
     trainDateFrom: from,
     trainDateTo: to,
     bars,
+    ...(macroByDate != null ? { macroRows } : {}),
     samples: opts.samples ?? 0,
     symbols: [...series].sort((a, b) => (a.symbol < b.symbol ? -1 : 1)).map((s) => s.symbol),
     horizonDays: opts.horizonDays ?? ML_HORIZON_DAYS,
     featureCount: opts.featureCount ?? ML_FEATURE_COUNT,
-    digestVersion: "sha256-symbol-date-close-volume-v1",
+    digestVersion:
+      macroByDate != null
+        ? "sha256-bars+macro8-v2"
+        : "sha256-symbol-date-close-volume-v1",
   };
 }
 
@@ -541,6 +587,9 @@ export async function buildTrainingSet(
     series, // F-611-01/#61 — digest phải hash CHÍNH chuỗi này
     featureSet, // F-01 (#129)
     pointInTime: opts.pointInTime === true, // F-11 (#129)
+    // F-166b-3 (#167): map macro THỰC SỰ dùng (null khi v2-lag16) — digest
+    // hash trên chính map này + set.dates ở caller (không nạp lần thứ 2).
+    macroByDate,
     ...(opts.richLabels && rich.length === keep.length ? { rich: keep.map((i) => rich[i]!) } : {}),
   };
 }

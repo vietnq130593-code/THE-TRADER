@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { db } from "@/lib/db";
 import {
   macroAssetForecasts,
@@ -133,6 +134,10 @@ async function runPost(req: Request): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (guard TRƯỚC mutex
+  // — chặn sớm không xếp hàng kẻ lạ).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   const run = macroMutex
     .then(() => runPost(req))
     .catch((err) => {

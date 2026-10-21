@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { db } from "@/lib/db";
 import { resetRagCache } from "@/lib/ml/rag";
 import { readGruSetting, writeGruSetting } from "@/lib/ml/ensemble";
@@ -79,6 +80,10 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (tuning đổi cấu
+  // hình hiệu lực — cửa nhạy cảm; nút lưu FE same-origin → đi qua).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   let body: Record<string, unknown> = {};
   try {
     const parsed = (await req.json()) as Record<string, unknown> | null;

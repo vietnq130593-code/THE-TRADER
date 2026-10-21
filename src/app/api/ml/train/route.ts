@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 // F-00 (#129): audit ML_TRAIN_AUTO (đường engine force=false).
 import { db } from "@/lib/db";
 import {
@@ -335,6 +336,10 @@ async function trainDlMtl(): Promise<{
 void trainDlMtl;
 
 export async function POST(req: Request) {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (chặn cross-site
+  // browser gọi cửa train 26s; engine A4/curl không Origin → đi qua).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   // F-612R-06/#61 (Vòng 2) — cooldown check TRƯỚC mutex (429/400 sớm không cắm cờ)
   const now = Date.now();
   const cooldown = trainCooldownState(now);
@@ -459,7 +464,13 @@ export async function POST(req: Request) {
       const set = await buildTrainingSet(20, {
         featureSet: effective.mlp.featureSet === "v3-macro" ? "v3-macro" : undefined,
       });
-      const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
+      // F-166b-3 (#167): v3-macro → macroByDate + ngày lấy mẫu góp vào
+      // windowHash (macro restated = cửa sổ mới — bỏ skip oan F-166b-3).
+      const windowMeta = trainingWindowDigest(set.series, {
+        samples: set.X.length,
+        macroByDate: set.macroByDate ?? null,
+        sampleDates: set.dates,
+      });
       const { serving: servingHash, latest: latestHash, latestFeatureSet } =
         await recentWindowHashesOf("dl-mlp");
       const matched =

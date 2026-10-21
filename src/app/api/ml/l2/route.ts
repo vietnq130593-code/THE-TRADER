@@ -18,6 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { db } from "@/lib/db";
 import { indexCorpus, isIndexing, l2Stats, relinkGraph } from "@/lib/ml/l2";
 
@@ -38,6 +39,10 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (index/rebuild là
+  // cửa tốn kém xoá-bảng; nút bấm FE same-origin → đi qua, curl → đi qua).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   let body: { action?: string; limit?: number } = {};
   try {
     body = (await req.json()) as { action?: string; limit?: number };

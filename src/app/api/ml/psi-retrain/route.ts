@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { db } from "@/lib/db";
 // W3 (#164) — drift đo qua CHÍNH lớp của status route (lib drift.ts, TTL cache
 // dùng chung): auto-retrain quyết định trên cùng phép đo PSI đang hiển thị.
@@ -57,7 +58,11 @@ export const runtime = "nodejs";
  * Audit ML_PSI_RETRAIN chỉ ghi outcome ĐÁNG GIÁM SÁT (trained* /
  * no-new-window) — psi-below là trạng thái bình thường, không dồn AuditLog.
  */
-export async function POST() {
+export async function POST(req: Request) {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (engine :3003
+  // postJson không Origin → đi qua — đúng caller chính của route này).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   const started = Date.now();
   let trainLockHeld = false;
   try {
@@ -142,8 +147,13 @@ export async function POST() {
     const set: TrainingSetWithSeries = await buildTrainingSet(20, {
       featureSet: effective.mlp.featureSet === "v3-macro" ? "v3-macro" : undefined,
     });
+    // F-166b-3 (#167): v3-macro → 8 chiều MacroContext tại ngày lấy mẫu góp
+    // vào windowHash (CHÍNH map buildTrainingSet đã dùng) — macro restated
+    // đổi hash → G4 hết skip oan "no-new-window" khi chỉ vĩ mô đổi.
     const windowMeta = trainingWindowDigest(set.series, {
       samples: set.X.length,
+      macroByDate: set.macroByDate ?? null,
+      sampleDates: set.dates,
     });
     const recent = await recentWindowHashesOf("dl-mlp");
     const currentFeatureSet =

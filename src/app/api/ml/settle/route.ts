@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { db } from "@/lib/db";
 import { settlePendingRewards, persistMarketRegime } from "@/lib/ml/bandit";
 // F-04 (#129): chuỗi sentiment hằng ngày — job settle ghi AppSetting rolling 90 ngày.
@@ -100,7 +101,11 @@ async function runSettle(): Promise<NextResponse> {
   }
 }
 
-export async function POST(): Promise<NextResponse> {
+export async function POST(req: Request): Promise<NextResponse> {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (engine gọi settle
+  // qua HTTP nội bộ không Origin → đi qua).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   const run = settleMutex.then(runSettle).catch((err) => {
     console.error("[api/ml/settle:mutex]", err);
     return NextResponse.json(

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { trainEnsembleWeights } from "@/lib/ml/ensemble-learn";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,11 @@ export const maxDuration = 120;
  * (idempotent, 0 LLM, ~1s). Kill-switch: xoá AppSetting ml-ensemble-weights
  * → ensemble fallback fixed TỨC THÌ.
  */
-export async function POST() {
+export async function POST(req: Request) {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (chống browser
+  // cross-site gọi cửa train tốn kém); engine/curl không Origin → đi qua.
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   try {
     const result = await trainEnsembleWeights();
     return NextResponse.json({

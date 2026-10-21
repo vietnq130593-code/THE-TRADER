@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guardSameOrigin } from "@/lib/api-guards";
 import { db } from "@/lib/db";
 import { isTrainInFlight } from "@/lib/ml/train-mlp";
 import { logMlAudit } from "@/lib/ml/tuning";
@@ -174,6 +175,10 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  // F-166b-7 (#167) — POST /api/ml/* chỉ nhận same-origin (sweep là cửa đắt
+  // nhất — nhiều train trong 1 đợt; engine Chủ nhật không Origin → đi qua).
+  const originGuard = guardSameOrigin(req);
+  if (originGuard) return originGuard;
   let body: Record<string, unknown> = {};
   try {
     const parsed = (await req.json()) as Record<string, unknown> | null;

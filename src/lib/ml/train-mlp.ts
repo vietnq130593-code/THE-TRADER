@@ -469,7 +469,14 @@ export async function trainDlMlp(
   // trên chuỗi ĐÓ (trước đây loadTopSeries LẦN THỨ HAI độc lập: bar đổi giữa 2
   // lượt nạp → window-hash mô tả sai cửa sổ đã train — phá đúng cái PIT P1-2
   // xây ra). B1 (#81): hash trên bar — KHÔNG đổi khi đổi bộ đặc trưng.
-  const windowMeta = trainingWindowDigest(set.series, { samples: set.X.length });
+  // F-166b-3 (#167): tập v3-macro → 8 chiều MacroContext tại các ngày lấy mẫu
+  // GÓP vào hash (macroByDate = CHÍNH map buildTrainingSet đã dùng) — macro
+  // restated đổi hash, G4/A4 hết skip oan "no-new-window".
+  const windowMeta = trainingWindowDigest(set.series, {
+    samples: set.X.length,
+    macroByDate: set.macroByDate ?? null,
+    sampleDates: set.dates,
+  });
   // AUDIT 137 B1 + B8 — MỘT biên train/val duy nhất cho chuẩn hoá + featureHist
   // + calibration, khớp CHÍNH XÁC công thức cut của nn.ts fit(): clamp
   // Math.min(0.5, Math.max(0.05, v)) rồi nTrain = Math.floor(n * (1 - v))
