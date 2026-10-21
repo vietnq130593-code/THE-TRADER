@@ -5199,6 +5199,24 @@ Stage Summary:
 - Đồng bộ trọn vẹn: sandbox = GitHub (origin/main tại c1b0089), 0 commit tồn, working tree sạch; kèm quét bảo mật diff trước push (0 secret)
 
 ---
+Task ID: 157
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu hỏi: (1) lĩnh vực của THE TRADER cần dự đoán trước bao lâu; (2) agent hiện quyết định trên khung dự báo nào; (3) tỷ lệ dự đoán đúng hiện tại đo trong phạm vi thời gian nào
+
+Work Log:
+- Khảo sát code khung dự báo: prompts.ts — cả 5 agent nghiên cứu + risk-manager vote "quan điểm thị trường CHUNG 5 PHIÊN TỚI" (assessment JSON) · ml/ensemble.ts — proj₅ = slope×5/last×100 (linreg 5 phiên, cửa sổ trượt 60 phiên), MLP isotonic-calibrated 3 lớp, GRU shadow dự báo 1 phiên chấm 5 phiên sau, kill-switch Brier tệ 5 phiên liên tiếp · quant/forecast.ts Holt rổ 5 phiên · BanditEvent (schema): phiếu đối chiếu realized direction rổ top-10 SAU 5 NGÀY GIAO DỊCH, SETTLE_THRESHOLD ±0,5% (bandit.ts:42) · Signal expiresAt = 3 ngày · D-LEDGER (decision-eval.ts): entry = close ngày quyết định (PIT), mark = close MỚI NHẤT (mark-to-now liên tục), sổ sống 90 ngày, verdict ±0,5%
+- Đo DB thật: BanditEvent 218 phiếu settled — hội đồng từng vote DOWN=174 · UP=20 · FLAT=24; phiếu cuối 14/10 (phiếu sau đó chưa settle — schema "dòng tồn tại = đã settle") · reward≥0,5 = đúng (UP/DOWN nhị nguyên 1/0; FLAT khớp 0,7, trượt 0,2)
+- Tỷ lệ đúng theo cử tri (khung 5 phiên): market-analyst 42,1% · risk-manager 45,9% · liquidity 36,1% · ml-forecast 47,2% (rewardTB cao nhất 0,556 nhờ phiếu FLAT đúng bớt) · news-sentiment 44,4% · fair-value 42,9% · TOÀN HỘI ĐỒNG 43,1% (94/218) · phiếu hướng (UP/DOWN nhị nguyên): 94/194 = 48,5% ≈ tung đồng xu · UP 80% (16/20 — mẫu nhỏ) · DOWN 44,8% (78/174) · FLAT 0/24 (ngưỡng realized FLAT |rổ|≤0,5% sau 5 phiên — cấu trúc khó trúng)
+- Tỷ lệ đúng tín hiệu D-LEDGER (Chủ tịch đề xuất, mark-to-now): toàn sổ winRate 35,9% (14/39 WIN+LOSS) · BUY 20% (2/10) avg markPnl −0,68% · HOLD 48,3% avg +0,19% · SELL 0/5 avg −2,20% · tuổi trung bình tín hiệu 9,7 ngày (già nhất 14,1) — lưu ý: đây là mark-to-now KHÔNG phải khung cố định 5 phiên
+- Bối cảnh quan trọng khi diễn giải: dữ liệu đang ở chế độ SIMULATED chất lượng SEVERE (Chủ tịch output 08:29) — các con số trên đo hệ thống chống thị trường mô phỏng, chưa phải thị trường thật
+
+Stage Summary:
+- KHUNG DỰ BÁO HỆ THỐNG (nhất quán 5 phiên): phiếu bầu 5 phiên tới · ML proj₅ + Holt 5 phiên · bandit settle realized 5 ngày giao dịch ±0,5% · D-LEDGER mark-to-now sổ 90 ngày · tín hiệu hết hạn 3 ngày (bảo thủ hơn khung vote)
+- CHUẨN NGÀNH cho swing-trading cổ phiếu thanh khoản (daily bar, rổ VN30): vùng ngọt 3-10 phiên — ngắn hơn thì phí+noise ăn mòn, dài hơn thì tín hiệu phân rã — thiết kế 5 phiên của THE TRADER nằm đúng vùng này
+- SỰ THẬT TRUNG THỰC về độ chính xác hiện tại: cử tri 43,1% toàn phần / 48,5% trên phiếu có hướng (≈ đồng xu) — HỆ THỐNG CHƯA CÓ CẠNH dự báo thật; tín hiệu BUY 20% và SELL 0/5 đều tệ, HOLD 48% trung tính; mẫu còn nhỏ (58 đánh giá, 218 phiếu) + thị trường mô phỏng SEVERE — kết luận đúng là "hạ cánh an toàn nhờ cổng 80% + HOLD nhiều", không phải "dự báo giỏi"
+- Không sửa src/ · 2 script đo tạm đã dọn · dev server khỏe
+
+---
 Task ID: 158
 Agent: main-orchestrator (Z.ai Code)
 Task: Chủ sở hữu báo "hệ thống đa tác tử không hoạt động" — chẩn đoán + phục hồi toàn bộ sau SANDBOX PLATFORM ROLLBACK
@@ -5421,3 +5439,23 @@ Stage Summary:
 - Lõi thuật toán W3 (5 guard) + W4 (walk-forward holdout) xác nhận ĐÚNG toàn bộ — mọi fix chỉ ở giám sát/hiển thị/edge-case, không đổi toán đã chốt.
 - Serving hiện tại: dl-mlp v73 (guard giữ) · rl-q v18 (holdout 99 bước + note ngữ nghĩa mới).
 - Commit này + 2 screenshot bằng chứng; engine :3003 đã restart với code mới.
+
+---
+Task ID: 167
+Agent: main-orchestrator (Z.ai Code)
+Task: Phiên trước chỉ thị: "Kiểm tra sandbox reset chưa — nếu rồi tải lại bản mới nhất xuống, nếu chưa thì làm F-166b-3/F-166b-7" · phiên này: "Tiếp tục công việc đang dở" — chẩn đoán: ĐÃ RESET (lần 3) → khôi phục theo playbook Task 158/159
+
+Work Log:
+- Chẩn đoán rollback #3: HEAD 75f5a72 (auto-commit Task 157, snapshot 20/10 09:41Z) · commit 6b7489e/e091fa5 KHÔNG còn trên đĩa · dev.log biến mất · app :3000 chết · .env bị supervisor đè mặc định SQLite 50 byte · .env.local (NIM key Task 159) mất · mini-services engine + pg-service tự khởi động lại 19:50 (code cũ Task 157)
+- git fetch origin (PAT trong remote URL còn sống) → origin/main e091fa5 (Task 166 — giao thức fixbug W3+W4 triệt để, phiên trước push 06:31Z) — an toàn trên GitHub
+- Bảo toàn di sản chỉ-có-trên-đĩa: entry Task 157 (18 dòng commit 75f5a72, KHÔNG có trên origin vì rollback #1 đã reset về a12d6d8 trước khi Task 158+ xây tiếp) — trích xuất + chèn lại đúng niên đại (giữa 156 và 158) · worklog 5423 → 5441 dòng
+- git reset --hard origin/main → verify file fix sống: psi-retrain.ts · drift.ts · qHoldoutBars (rl.ts) · psiRetrainDue (engine index.ts) · prisma/schema.prisma KHÔNG đổi disk↔origin · package.json KHÔNG đổi (không cần bun install)
+- .env khôi phục từ lịch sử git 9c2dfab (28 dòng Supabase — playbook Task 158) · chmod 600 · prisma generate + rm -rf .next (cache Turbopack stale) · restart app bằng setsid -f double-fork (lệnh Task 159) — Ready 317ms
+- Restart engine :3003 sạch (kill instance code-cũ 19:50, bun index.ts KHÔNG --hot #143): boot log đủ "ml-psi-retrain 17:00 ICT t2–t6 (check 15phút)" (chứng minh code Task 164/166) · state hồi DB: eod/intl/settle=2026-10-21 · news nạp +28 live · pg-service :5432 giữ nguyên (code không đổi disk↔origin, bun --hot tự theo chân)
+- VERIFY: GET / 200 · 24/24 agents IDLE · /api/ml/status: rlQ v21 serving (holdout 100 phiên/99 bước · policy −0,000773 · baselines đủ) · dlMlp v73 serving valAcc 42,88% · autoRetrain enabled/psiWarn 0,25/lastAt 20/10 19:48Z trained-not-promoted · drift RSI14 PSI 0,367 dịch-chuyển · DB audit ML_PSI_RETRAIN=1 (không spam) · L2 chạy "BM25-only (fail-soft)" đúng thiết kế khi thiếu NIM key
+- DB lịch sử model (đo read-only): rl-q v17→v21 (v18 = verify Task 166 · v19/20/21 = train verify phiên trước 08:38/08:54/09:23Z SAU commit 166, v21 serving) · dl-mlp v80/81/82 đều archived — serving-swap guard §1.5 giữ v73 đúng
+
+Stage Summary:
+- PHỤC HỒI 100%: sandbox = GitHub = e091fa5 · app + engine + pg-service sống · DB Supabase nguyên vẹn (dữ liệu sống sót rollback — đúng triết lý thiết kế) · serving rlQ v21 + dlMlp v73 + 5 guard W3 + holdout W4 nguyên vẹn
+- MẤT DUY NHẤT: NVIDIA_NIM_API_KEY (.env.local Task 159 không sống sót snapshot 09:41Z) → L2 semantic rơi BM25 thuần fail-soft — 2 đường khôi phục cho chủ sở hữu: (1) gửi lại key nvapi-… để ghi .env.local như Task 159, hoặc (2) nếu còn passphrase .env.enc (lưu password manager SECURITY.md §3) chạy `bun run env:restore`
+- Tiếp theo đúng chỉ thị: F-166b-3 (macro-windowHash) + F-166b-7 (auth POST /api/ml/*)
