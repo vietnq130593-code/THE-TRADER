@@ -5499,3 +5499,17 @@ Stage Summary:
 - Trả lời chủ sở hữu: CÓ — sandbox ở bản mới nhất 21a9079 (Task 168: F-166b-3 + F-166b-7), đồng bộ tuyệt đối origin/main sau fetch mới
 - Toàn bộ pipeline sống lại sau reboot: app :3000 + engine :3003 + pg-service :5432 + DB Supabase (dlMlp v73 · rlQ v22 · v83 archived)
 - Duy nhất NIM key (.env.local) cần owner khôi phục (không chặn vận hành — fail-soft)
+
+---
+Task ID: 170
+Agent: Z.ai Code (orchestrator)
+Task: Kiểm tra "tài khoản chỉ có 3 CP VIC/VPB/TCB nhưng sổ đánh giá quyết định có SSI/MWG/HPG/FPT" — có thiếu hiển thị không? (yêu cầu chủ sở hữu)
+
+Work Log:
+- Đối chiếu 3 nguồn dữ liệu sống: /api/portfolio?accountType=sandbox (3 vị thế: TCB 700cp +1,9% · VIC 100cp −0,27% · VPB 200cp −2,83% · cash 48,9tr · equity 100,17tr) · /api/orders?accountType=sandbox (9 lệnh FILLED toàn BUY: TCB×7 + VPB×1 + VIC×1) · /api/council/overview (decisions 60 dòng 30 ngày: TCB 21 · SSI 17 · VCB 9 · FPT 3 · HPG 3 · MWG 2 · VIC 2 · VPB 1 · VNM 1 · HSG 1; stats LỢI 39/TỔN 17/NGANG 4 · tỷ đúng 70% · thực thi 9/60 · ΣP&L quy kết 173.515₫) — 3 vị thế ≡ 9 lệnh khớp ≡ số executed của sổ: KHÔNG thiếu hiển thị
+- Nguyên nhân SSI/MWG/HPG/FPT có trong sổ mà không có trong tài khoản (truy từng dòng field executionKind): toàn bộ là UNEXECUTED — (a) phần lớn là tín hiệu GIỮ (HOLD) → cổng đồng thuận Task 91 tự TỪ CHỐI (HOLD/<80% → REJECTED, không sinh lệnh); (b) vài tín hiệu BUY của SSI/HPG/FPT ngày 6–8/10 sinh TRƯỚC ngày kích hoạt tài khoản sandbox (11/10) và trước hệ thống tự chuyển lệnh paper → không lệnh; sổ vẫn chấm điểm WIN/LOSS bằng P&L dự báo theo hướng (markPnlPct) — đúng thiết kế "học từ mọi quyết định, kể cả quyết định không đặt lệnh"
+- Gần đây strategist chỉ ra tín hiệu TCB (12 tín hiệu mới nhất toàn TCB) — hành vi mô hình, không phải lỗi hiển thị
+- Browser verify (agent-browser): mở / → mở thanh điều hướng → tab Hội đồng → Sổ đánh giá quyết định render đủ 60 quyết định, có mặt SSI/MWG/HPG/FPT/VCB trong DOM, stats "thực thi 9/60" khớp API, 0 console/page error · 2 screenshot /tmp/council-tab.png + /tmp/council-ledger.png
+
+Stage Summary:
+- Kết luận cho chủ sở hữu: tài khoản hiển thị ĐẦY ĐỦ và ĐÚNG (3 vị thế khớp tuyệt đối 9 lệnh đã khớp); sổ đánh giá quyết định là công cụ học ghi nhận TẤT CẢ tín hiệu (kể cả bị cổng đồng thuận từ chối hoặc sinh trước era tài khoản) nên có SSI/MWG/HPG/FPT mà tài khoản không có — khác biệt theo thiết kế, không phải bug
