@@ -5513,3 +5513,21 @@ Work Log:
 
 Stage Summary:
 - Kết luận cho chủ sở hữu: tài khoản hiển thị ĐẦY ĐỦ và ĐÚNG (3 vị thế khớp tuyệt đối 9 lệnh đã khớp); sổ đánh giá quyết định là công cụ học ghi nhận TẤT CẢ tín hiệu (kể cả bị cổng đồng thuận từ chối hoặc sinh trước era tài khoản) nên có SSI/MWG/HPG/FPT mà tài khoản không có — khác biệt theo thiết kế, không phải bug
+
+---
+Task ID: 171
+Agent: Z.ai Code (orchestrator)
+Task: Khôi phục NIM key (owner cấp key mới qua chat) + tổng hợp tri thức "Time Series Analysis by State Space Methods" (Durbin & Koopman 2012) áp dụng vào THE TRADER thành file .md
+
+Work Log:
+- Viết key mới (prefix nvapi-qSBq…*** — KHÔNG ghi full key ở đây, key đã dán chat → owner nên rotate theo checklist docs/SECURITY.md §3 khi tiện) vào .env.local (chmod 600, gitignored) đúng tên biến NVIDIA_NIM_API_KEY mà src/lib/ml/nim-embed.ts tiêu thụ
+- Verify 2 tầng: (1) scripts/p141-nim-embed-test.ts — key sống, model nvidia/nemotron-3-embed-1b 2048 dim đạt toàn bộ kỳ vọng semantic (vn-liên-quan 0,548 · en 0,455 · vn-ngoại-đề 0,059 — biên xếp hạng ĐẠT); (2) scripts/p142-verify-l2.ts PASS toàn bộ (2303 chunk · 2283 vector · nhánh đối chứng fail-soft BM25 sống)
+- Chạy scripts/p142-l2-bootstrap.ts nhồi bù lùi + thu gom chunk mới: 2303→2372 chunk · vector 2372 · BM25-only 0 · pending 0 · AuditLog L2_BOOTSTRAP ghi — L2 vector search hồi phục hoàn toàn sau thời gian fail-soft
+- Viết docs/STATE_SPACE_BLUEPRINT.md (282 dòng): Phần I tinh túy sách 12 điểm · Phần II bản đồ khái niệm→module (12 hàng) · Phần III chi tiết 12 ứng dụng SS-1..SS-12 (mỗi mục: hiện trạng code cụ thể — holt heuristic α=0.5/β=0.25 tại src/lib/quant/forecast.ts, 8 chiều macro dus10y20..sent7, W1 rổ ADTV-45, W3 PSI, W4 holdout, meta-learner 36/60 — thiết kế model, quy tắc PIT, verify hermetic gồm replication Nile ch.2, effort, priority) · Phần IV 7 quy tắc kiến trúc không thoả hiệp (lọc-không-mượt PIT, windowHash bump theo triết lý F-166b-3, kill-switch nhân bản 5-guard W3, A/B 14 ngày log-score) · Phần V lộ trình 3 pha · Phần VI scope trung thực những gì KHÔNG làm (particle filter, không viết lại dl-mlp thành SSM, không đổi featureset serving trước bằng chứng sweep) · Phụ lục A toán Kalman/smoother/TVP · Phụ lục B checklist nghiệm thu 8 mục
+- Rà chất lượng file: sửa 4 lỗi gõ (3 chỗ CJK sót + 1 nối chữ), quét Python xác nhận 0 CJK còn lại · assert không rò NIM key trong doc
+- Đối chiếu thực trạng code trước khi viết (grep features.ts 8 chiều macro + macroByDate, forecast.ts 121 dòng pure Holt, evidence.ts driver ml-forecast.holt) — mọi con số hiện trạng trong doc trích từ DB/audit 22/10 (rl-q v22 · dlMlp v73 serving · v83 archived)
+
+Stage Summary:
+- NIM khôi phục trọn vẹn: key mới sống (p141 đạt), L2 2372/2372 vector · 0 pending · 0 BM25-only — con nợ duy nhất từ reboot 04:21Z đã xả
+- Tài liệu STATE_SPACE_BLUEPRINT.md hoàn chỉnh 282 dòng: 12 ứng dụng bám từng module thật của THE TRADER kèm guard PIT/windowHash/kill-switch theo đúng văn hoá 5-guard W3 · holdout W4 · F-166b-3 của dự án; khuyến nghị khởi đầu Phase 1 (SS-1 holt-ss MLE + SS-11 log-score + SS-7 guard độ ngạc nhiên) — chờ owner duyệt
+- Lưu ý bảo mật: key NIM đã dán chat — khuyến nghị owner rotate khi tiện (docs/SECURITY.md §3 checklist)
