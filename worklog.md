@@ -5480,3 +5480,22 @@ Stage Summary:
 - F-166b-7 VÁ XONG theo phạm vi same-origin (không auth-full — ghi trung thực): 8/8 POST route /api/ml/* dùng guard chung; cross-site browser 403; engine :3003 (A4 Chủ nhật + psi-retrain 15') + curl + nút FE + preview iframe đi qua nguyên vẹn — verify bằng chính đường engine (curl không Origin → 200)
 - Bằng chứng: 11/11 hermetic + p164 10/10 + p165 8/8 + live 4 tầng + DB meta v83 + audit ML_PSI_RETRAIN 21:25:47 no-new-window matched:latest + UI phản ánh + 2 screenshot
 - Serving sau verify: dl-mlp v73 (v83 archived) · rl-q v22 · G2 cooldown tới 21:25Z 22/10 (hành vi đúng thiết kế); engine do-check mai 17:00 ICT sẽ skip-cooldown im lặng đúng filter F-166c-1
+
+---
+Task ID: 169
+Agent: Z.ai Code (orchestrator)
+Task: Kiểm tra phiên bản sandbox có phải bản mới nhất + hồi sinh môi trường sau reboot 04:21Z 22/10 (yêu cầu chủ sở hữu)
+
+Work Log:
+- git fetch (PAT sống) + so SHA: local HEAD 21a9079 (Task 168) ≡ origin/main 21a9079 — 0 behind/0 ahead, working tree sạch → CODE LÀ BẢN MỚI NHẤT, sandbox KHÔNG bị reset code; việc dở từ phiên trước (fixbug W3+W4 = Task 166 · F-166b-3/F-166b-7 = Task 168) đều ĐÃ xong và push
+- Phát hiện runtime sập sau reboot 37 phút (boot 04:21Z): app :3000 không có tiến trình nào (chỉ engine :3003 PID 939 + pg-service PID 952/127.0.0.1:5432 tự dậy) · dev.log mất · .env trên đĩa revert về stub sqlite 50B · node_modules/.prisma rỗng
+- .env.enc còn nguyên trong repo (2886B) nhưng .env.passphrase mất theo reboot (gitignored) → dùng đường git-history đã chứng minh ở Task 167: `git show 9c2dfab:.env > .env` (2045B, Supabase pooler ap-northeast-2 schema=trader + LIVE_TRADING=false, chmod 600); stub cũ backup /tmp/.env.sqlite-stub.bak
+- bun run db:generate (env -u DATABASE_URL) + rm -rf .next + setsid -f restart app → Ready 308ms, Environments: .env
+- Engine :3003 tự reconnect (POST /api/market/tick 200); market-engine không đụng DATABASE_URL trực tiếp (gọi app qua HTTP) nên giữ nguyên không restart
+- VERIFY: GET / 200 (61KB, title "The Trader — Multi-Agent Trading System") · /api/ml/status đọc DB sống: dlMlp v73 serving (v83 archived đúng Task 168) · rlQ v22 serving (train 21:24Z 21/10 — đúng trạng thái Task 168 để lại) · /api/news · /api/portfolio · /api/orders · /api/market/flows toàn 200 · 0 lỗi runtime đáng kể (1 prisma:error unique refTable/refId một lần — idempotent retry lành tính)
+- MẤT: .env.local (NVIDIA_NIM_API_KEY) theo reboot → L2 chạy BM25-only fail-soft (log "[rag] L2 ... vector BM25-only (fail-soft)" xác nhận) — 2 đường khôi phục cho owner: (1) bun run env:restore + passphrase 32 ký tự trong password manager (.env.enc còn) hoặc (2) điền NIM key mới vào .env.local (model embedding hiện hành nvidia/nemotron-3-embed-1b)
+
+Stage Summary:
+- Trả lời chủ sở hữu: CÓ — sandbox ở bản mới nhất 21a9079 (Task 168: F-166b-3 + F-166b-7), đồng bộ tuyệt đối origin/main sau fetch mới
+- Toàn bộ pipeline sống lại sau reboot: app :3000 + engine :3003 + pg-service :5432 + DB Supabase (dlMlp v73 · rlQ v22 · v83 archived)
+- Duy nhất NIM key (.env.local) cần owner khôi phục (không chặn vận hành — fail-soft)
