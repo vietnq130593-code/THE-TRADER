@@ -3,7 +3,7 @@
 > Nguồn tri thức: **Durbin, J. & Koopman, S. J. (2012). Time Series Analysis by State Space Methods — 2nd edition.** Oxford University Press. (Bản 1: 2001; kèm SsfPack của Koopman–Shephard–Doornik.)
 > Tài liệu này tổng hợp tri thức cuốn sách và chi tiết hoá **cách áp dụng vào THE TRADER** theo từng module, có file code, guard PIT, kế hoạch nghiệm thu và lộ trình.
 > Bạn đọc đồng hành nên tra: Harvey (1989) *Forecasting, Structural Time Series Models and the Kalman Filter* (đối tác kết cấu cho phần structural/multivariate), Kim–Shephard–Chib (1998) cho stochastic volatility, Carter–Kohn (1994) cho simulation smoothing.
-> Ngày soạn: 22/10/2026 · Người soạn: Z.ai Code · Trạng thái: ĐỀ XUẤT (chưa triển khai — chờ chủ sở hữu duyệt phạm vi Phase 1).
+> Ngày soạn: 22/10/2026 · Người soạn: Z.ai Code · Trạng thái: ĐỀ XUẤT, đã qua pass review kỹ sư AI/kiến trúc sư (v1.1 — 22/10/2026, chờ chủ sở hữu duyệt phạm vi Phase 1; xem mục Lịch sử hiệu đính cuối file).
 
 ---
 
@@ -43,17 +43,17 @@
 
 | # | Khái niệm (chương sách) | Module THE TRADER hiện tại | Đề xuất | Mã việc |
 |---|---|---|---|---|
-| 1 | Local linear trend + MLE (ch. 2–3) | `src/lib/quant/forecast.ts` — Holt heuristic α=0.5/β=0.25, chỉ dự báo điểm | Viết lại dạng SS: MLE tham số + phương sai dự báo → xác suất tăng/giảm có hiệu số tin cậy | SS-1 |
-| 2 | Predictive variance (ch. 3) | Bayes evidence `ml-forecast.holt` không có σ | Mọi forecast sinh kèm σ → khoảng tin cậy + z-score | SS-2 |
+| 1 | Local linear trend + MLE (ch. 2–3) | `src/lib/quant/forecast.ts` — Holt heuristic α=0.5/β=0.25, dự báo điểm + band CI80 heuristic (Z80·σ√h từ residual 1 bước) | Viết lại dạng SS: MLE tham số + predictive variance từ covariance trạng thái → xác suất tăng/giảm có hiệu số tin cậy | SS-1 |
+| 2 | Predictive variance (ch. 3) | `ml-forecast.holt-basket` có σ heuristic residual-based (không MLE, không propagate covariance trạng thái) — trọng số evidence hardcode 0,65 | Nâng σ lên predictive variance chuẩn + trọng số evidence theo z thay hardcode | SS-2 |
 | 3 | Missing observations (ch. 5) | trả về `null` khi prev≤0 (features.ts) | Skip-update Kalman — trạng thái trôi, variance phình trung thực | SS-3 |
 | 4 | Tần số hỗn hợp (ch. 5) | MacroContext 8 chiều theo ngày (`macroByDate`, v3-macro x[16..23]) | Latent macro state hằng ngày, cập nhật khi có công bố — nowcasting | SS-4 |
-| 5 | TVP regression (ch. 8) | W1 rổ top-10 ADTV-45 dùng β tĩnh (nếu có) | β động từng mã so VNINDEX; tách rủi ro thị trường/idiosyncratic | SS-5 |
+| 5 | TVP regression (ch. 8) | W1 rổ top-10 ADTV-45 — β chưa được mô hình hoá (reward rổ chung) | β động từng mã so VNINDEX; tách rủi ro thị trường/idiosyncratic | SS-5 |
 | 6 | Multivariate / SUTSE, dynamic factor | 10 mã rổ dùng chung reward | Common VN factor (filtered, PIT) + cấu trúc lead-lag | SS-6 |
 | 7 | Innovation chuẩn hoá + CUSUM (ch. 9) | W3 dùng PSI≥0.25 trên phân phối feature | Guard thứ hai: độ ngạc nhiên của model trung tâm ngoài N(0,1) | SS-7 |
 | 8 | Auxiliary residuals (ch. 9) | `api/data-quality` hiện tại theo ngưỡng | Tách outlier quan sát vs đổi level → cờ chất lượng dữ liệu trước khi vào train | SS-8 |
 | 9 | Seasonal structural (Harvey; ch. 5 nhịp không đều) | Không có seasonality rõ ràng | Day-of-week + hiệu ứng Tết (lịch âm rối) cho chiến lược & feature | SS-9 |
 | 10 | Simulation smoother (ch. 4/12) | Không có sinh kịch bản | Sinh quỹ đạo hậu nghiệm → VaR kịch bản cho portfolio paper | SS-10 |
-| 11 | Log predictive density (ch. 3) | W4 holdout chỉ chấm valAcc/valLoss | Log-score xác suất cho các driver forecast — bổ sung cổng so sánh mô hình | SS-11 |
+| 11 | Log predictive density (ch. 3) | W4 holdout chấm valAcc/valLoss (dl-mlp) · P&L chính sách vs 3 baseline (rl-q) — lớp forecast chưa có thước xác suất | Log-score xác suất cho các driver forecast — bổ sung cổng so sánh mô hình | SS-11 |
 | 12 | Bayesian shrinkage (ch. 12) | meta-learner cold-start 36/60 | Prior co rút về base-rate 250 phiên (40,1/46,6/13,3) | SS-12 |
 
 ---
@@ -62,22 +62,22 @@
 
 ### SS-1 · Holt → Local linear trend trạng thái (điểm neo, ưu tiên CAO)
 
-**Hiện trạng.** `src/lib/quant/forecast.ts` (`holtForecast`, `holtForecastPct`): pure function, α=0.5 β=0.25 cứng, trả về đường dự báo điểm; `src/lib/bayes/evidence.ts` tiêu thụ làm driver `ml-forecast.holt` (A15) đút vào Bayes pUp/pDown.
+**Hiện trạng.** `src/lib/quant/forecast.ts` (`holtForecast`, `holtForecastPct`): pure function, α=0.5 β=0.25 cứng, dự báo điểm kèm band CI80 heuristic từ stdev residual 1 bước (Z80·σ·√h — không MLE, không propagate covariance trạng thái); `src/lib/bayes/evidence.ts` tiêu thụ làm driver `ml-forecast.holt-basket` (A15, trọng số hardcode 0,65) đút vào Bayes pUp/pDown.
 
 **Sách dạy.** Holt linear trend ≡ local linear trend SSM:
 - Trạng thái `α_t = [μ_t; b_t]` (level + slope), `T = [[1,1],[0,1]]`, `Z = [1, 0]`
 - `Q = diag(σ²_ημ, σ²_ηb)`, `H = σ²_ε` — **3 tham số phương sai thay cho cặp α/β cố định**
-- Ước lượng bằng MLE trên prediction error decomposition (Phần I.3) — thuật toán tối ưu hoá đơn giản (golden section / grid mịn quanh nghiệm khởi tạo từ α/β cũ, vì likelihood của SSM khá lành với dữ liệu ≥ vài trăm điểm)
+- Ước lượng bằng MLE trên prediction error decomposition (Phần I.3) — **3 tham số nên dùng Nelder-Mead multi-start (≥5 mồi, gồm mồi từ α/β cũ qui ra signal-to-noise ratio) + clamp biên σ²≥0**: golden-section chỉ 1-D là không đủ; nghiệm biên σ²→0 là mô hình rút gọn hợp lệ (phải xử lý đúng, không phải lỗi hội tụ); likelihood có thể phẳng trên chuỗi ngắn khi 2 phương sai hoán đổi vai trò — multi-start chống kẹt
 - Kalman cho ngay `Var(ŷ_{t+h|t})` bằng đệ quy `P_{t+h|t}` (không cần nhớ công thức đóng — dùng đệ quy là an toàn)
 
 **Thiết kế.**
-- File mới `src/lib/ml/ss/holt-ss.ts`: export `holtSsFit(closes, {maxIter})` → `{sigma2Eps, sigma2EtaMu, sigma2EtaB, logLik, innovations[]}` và `holtSsForecast(fit, closes, h)` → `{mean[], sd[], zByHorizon}`. Pure, không DB, deterministic (khởi tạo cố định, ngừng khi Δℓ<1e-8 — nhân bản được triết lý deterministic của train v17/v18).
-- Driver Bayes: `ml-forecast.holt-ss` — pUp từ z-score Gauss: `pUp = Φ((0 − meanPct)/sd)` (đổi ý nghĩa: thay "dự báo +%" bằng "xác suất tăng + mức tin"), evidence ghi kèm σ và logLik để audit.
+- File mới `src/lib/ml/ss/holt-ss.ts`: export `holtSsFit(closes, {maxIter})` → `{sigma2Eps, sigma2EtaMu, sigma2EtaB, logLik, innovations[]}` và `holtSsForecast(fit, closes, h)` → `{mean[], sd[], zByHorizon}`. Pure, không DB, deterministic (khởi tạo cố định theo khối KHỞI TẠO ở Phụ lục A, ngừng khi Δℓ<1e-8 — nhân bản được triết lý deterministic của train v17/v18).
+- Driver Bayes: `ml-forecast.holt-ss` (đăng ký id riêng trong roster evidence, vd A15b — không đè A15 đang sống) — pUp từ z-score Gauss: `pUp = 1 − Φ((0 − meanPct)/sd)` ≡ `Φ(meanPct/sd)` (đổi ý nghĩa: thay "dự báo +%" bằng "xác suất tăng + mức tin"), evidence ghi kèm σ và logLik để audit.
 - **PIT**: chỉ dùng closes ≤ castDate (giữ nguyên nguyên tắc đường holt hiện tại).
 
 **Nghiệm thu hermetic (bắt buộc trước khi sống).**
-1. **Tái hiện Nile** (dữ liệu sông Nile 1871–1970 trong sách ch. 2 — bảng số liệu công bố kèm SsfPack): local level fit của em phải ra cùng thứ bậc tham số với sách (sai số nhỏ do khác numeric).
-2. Synthetic: sinh local linear trend bằng tham số cho trước → MLE phục hồi trong ±10%.
+1. **Tái hiện Nile** (dữ liệu sông Nile 1871–1970 trong sách ch. 2 — bảng số liệu công bố kèm SsfPack, cũng có trong R `datasets::Nile`): local level fit của em phải ra cùng thứ bậc tham số với sách (sai số nhỏ do khác numeric; dung sai xác định theo sơ đồ KHỞI TẠO + burn-in ở Phụ lục A).
+2. Synthetic: sinh local linear trend bằng tham số cho trước → MLE phục hồi trong ±10% — **bắt buộc đủ 3 tham số** (Nile chỉ stress-test 2 tham số local level, không chạm bài toán biên/degenerate của cặp σ²ημ–σ²ηb).
 3. Determinism: 2 lần chạy cùng input → cùng chuỗi byte kết quả (mirror tinh thần p167 digest test).
 4. Đối chứng: driver cũ chạy song song 14 ngày, chấm bằng log-score (SS-11) trên holdout — chỉ thay evidence khi vượt.
 
@@ -87,10 +87,10 @@
 
 ### SS-2 · Phương sai dự báo cho mọi forecast (CAO, đi kèm SS-1)
 
-Mọi driver dự báo (holt-ss, macro nowcast SS-4, beta động SS-5) xuất chuẩn `sd` cùng `mean`. Nơi tiêu thụ:
-- Bayes evidence: trọng số evidence theo z (|z| lớn → tin cao), thay trọng số heuristic;
+Nâng cấp σ từ heuristic residual (Z80·σ√h hiện tại) lên predictive variance chuẩn: mọi driver dự báo (holt-ss, macro nowcast SS-4, beta động SS-5) xuất chuẩn `sd` cùng `mean`. Nơi tiêu thụ:
+- Bayes evidence: trọng số evidence theo z (|z| lớn → tin cao, có sàn/ceiling chống overconfident khi đuôi dày) thay trọng số hardcode 0,65 hiện tại;
 - UI `Tổng quan`/`Tổng hợp`: hiển thị khoảng tin cậy 80% cho dự báo (hiện chỉ điểm);
-- Guard an toàn: nếu sd phình quá ngưỡng (ví dụ > 3× sd lịch sử cùng horizon) → tự giáng trọng số evidence về 0 (fail-soft trung thực — model tự nhận "tôi không biết").
+- Guard an toàn: nếu sd phình quá ngưỡng (ví dụ > 3× sd cửa sổ 250 phiên cuộn cùng horizon) → tự giáng trọng số evidence về 0 (fail-soft trung thực — model tự nhận "tôi không biết").
 **Effort**: S (nếu làm cùng SS-1).
 
 ---
@@ -103,7 +103,7 @@ Mọi driver dự báo (holt-ss, macro nowcast SS-4, beta động SS-5) xuất c
 
 **Thiết kế.** Cơ chế dùng ở 2 tầng:
 - Tầng forecast/SS (SS-1/SS-4 dùng ngay miễn phí);
-- Tầng feature dl-mlp:MacroContext dòng "absent" đã trung thực theo F-166b-3 — giữ nguyên triết lý: SS chỉ là **lựa chọn cho các đường dự báo**, không đổi featureset đang serving (đòi digest bump). Ghi rõ ranh giới này trong code comment.
+- Tầng feature dl-mlp: MacroContext dòng "absent" đã trung thực theo F-166b-3 — giữ nguyên triết lý: SS chỉ là **lựa chọn cho các đường dự báo**, không đổi featureset đang serving (đòi digest bump). Ghi rõ ranh giới này trong code comment.
 
 **Nghiệm thu**: synthetic có lỗ tuần tự — so sánh "skip-update + variance phình" vs "drop dòng" vs "fill" về log-score; kỳ vọng skip thắng ở lỗ thưa (<20%).
 **Effort**: S.
@@ -112,9 +112,9 @@ Mọi driver dự báo (holt-ss, macro nowcast SS-4, beta động SS-5) xuất c
 
 ### SS-4 · Nowcasting vĩ mô tần số hỗn hợp cho MacroContext 8 chiều (TRUNG BÌNH — TOÀN CỤU NHẤT)
 
-**Hiện trạng.** 8 chiều `dus10y20, slope10y5y, dxyMom20, vndMom20, cmdtyMom20, breadth20, flow20, sent7` — đều là biến đổi rolling 20/7 phiên lấy theo ngày; một số nguồn gốc công bố theo tháng (CPI, tín dụng…), ngày "absent" đang hash trung thực (macroRows 3306/62220 bars).
+**Hiện trạng.** 8 chiều `dus10y20, slope10y5y, dxyMom20, vndMom20, cmdtyMom20, breadth20, flow20, sent7` — **toàn bộ là chuỗi NGÀY phái sinh thị trường** (không có chuỗi công bố tháng nào trong bộ hiện tại — CPI/tín dụng chỉ xuất hiện nếu mở rộng tương lai); ngày "absent" đang hash trung thực (macroRows 3306/62220 bars).
 
-**Sách dạy.** SS xử lý tần số hỗn hợp một cách tự nhiên: trạng thái vĩ mô **hằng ngày** là latent; khi có công bố tháng, đó là quan sát "thưa" cập nhật lại trạng thái; giữa 2 lần công bố, **bộ lọc** cho giá trị nowcast kèm uncertainty giảm dần rồi tăng dần về sau.
+**Sách dạy.** SS xử lý tần số hỗn hợp & quan sát thưa một cách tự nhiên: trạng thái vĩ mô **hằng ngày** là latent; quan sát có mặt hôm nay cập nhật lại trạng thái, ngày absent trạng thái trôi + uncertainty phình (ch. 5). **Giá trị thật với 8 chiều hiện tại**: (a) điền ngày absent bằng latent state trung thực thay vì bỏ/bịa, (b) hợp nhất lead-lag giữa các chiều (DXY/US10Y thường dẫn trước VNDMom/breadth — Kalman đa biến đo được). Động cơ "mixed-frequency công bố tháng" chỉ áp cho mở rộng tương lai (CPI, PMI, tín dụng nếu thêm vào MacroContext).
 
 **Thiết kế (phải đi qua 4 cổng).**
 1. **PIT tuyệt đối**: tại ngày lấy mẫu `t` chỉ dùng `μ_{t|t}` (filtered) — dùng smoother là rò rỉ tương lai, cấm tuyệt đối trong đường train/evidence (smoother chỉ dành cho audit).
@@ -143,7 +143,7 @@ Mọi driver dự báo (holt-ss, macro nowcast SS-4, beta động SS-5) xuất c
 
 ### SS-6 · Common VN factor + SUTSE cho rổ 10 mã (TRUNG BÌNH/THẤP)
 
-Một factor thị trường chung (hoặc 2: thị trường + nhóm ngành NH/BĐS) rút từ 10 mã bằng Kalman filter đa biến — `filtered factor` (không smoothed!) là feature lớp cao cho meta-learner/rl-q (96-state có thể nâng lúc re-design lớn — KHÔNG độingle browser vội). Lead-lag giữa VCB/SSI… xem qua cross-correlation của innovation từng mã. **Effort**: M/L — chỉ làm khi SS-5 đã chạy ổn (dùng chung kalman.ts đa biến).
+Một factor thị trường chung (hoặc 2: thị trường + nhóm ngành NH/BĐS) rút từ 10 mã bằng Kalman filter đa biến — `filtered factor` (không smoothed!) là feature lớp cao cho meta-learner/rl-q (96-state có thể nâng lúc re-design lớn — KHÔNG đụng UI vội). Lead-lag giữa VCB/SSI… xem qua cross-correlation của innovation từng mã. **Effort**: M/L — chỉ làm khi SS-5 đã chạy ổn (dùng chung kalman.ts đa biến).
 
 ---
 
@@ -153,18 +153,19 @@ Một factor thị trường chung (hoặc 2: thị trường + nhóm ngành NH/
 
 **Sách dạy (ch. 3 + 9).** Innovation chuẩn hoá `e_t = v_t/√F_t ~ N(0,1)` nếu model trung tâm còn khớp; kiểm định đơn giản: KS-test e_t với N(0,1) + CUSUM trên `e_t² − 1` (trung bình của e² phải = 1). Đây là **drift theo model-fit** — PSI đo drift phân phối đầu vào, e_t đo model có còn "sốc" với dữ liệu mới không — hai lớp bổ sung nhau.
 
-**Thiết kế.** Chạy local level / local linear trend trên log-giá từng mã rổ (fit lại mỗi đêm theo cửa sổ, tham số freeze). Mỗi chu kỳ engine (:3003) hoặc mỗi settle:
-- tính e_t mới nhất cho từng mã; nếu |e| > 4 hoặc KS-p < 0.01 trên cửa sổ 60 phiên → ghi AuditLog `SS_SURPRISE` {symbol, e, p};
-- tầng tổng: tỉ lệ mã "sốc" > 30% rổ → cùng tín hiệu với PSI (đi vào cơ chế auto-retrain có sẵn — không sinh cơ chế mới, tái dùng 5-guard).
-**Effort**: S/M. **Trung thực**: đây là guard bổ sung, không thay PSI; demo 4 tuần chạy song song ghi audit im lặng trước khi nối vào auto-retrain.
+**Thiết kế.** Chạy local level / local linear trend trên log-giá từng mã rổ (fit lại mỗi đêm theo cửa sổ, tham số freeze). **Nhà vận hành**: mở rộng due-check psi-retrain sẵn có của engine :3003 (nhịp 15' t2–t6 đã sống) thêm bước surprise, kill-switch `ml-ss-surprise` riêng — không sinh vòng lặp mới. Chu kỳ: 1 lần/ngày theo settle (không 15' — tránh multiplicity):
+- **tin chính là CUSUM trên `e²−1`** (cửa sổ cuộn 60 phiên) — HOSE đuôi dày khiến KS vs N(0,1) reject mạn tính; KS hạ xuống tin phụ với ngưỡng Bonferroni (0,01/(số mã × số check/ngày)), |e|>4 giữ làm cờ đơn phát;
+- ghi AuditLog `SS_SURPRISE` {symbol, e, cusum, p};
+- tầng tổng: tỉ lệ mã "sốc" > 30% rổ → cùng tín hiệu với PSI (đi vào cơ chế auto-retrain có sẵn — tái dùng 5-guard, không sinh cơ chế mới).
+**Effort**: S/M. **Trung thực**: guard bổ sung, không thay PSI; innovation tính bằng tham số fit trên chính cửa sổ chứa chúng (in-sample, hơi co lại — chấp nhận được cho guard); demo 4 tuần audit im lặng trước khi nối vào auto-retrain.
 
 ---
 
 ### SS-8 · Auxiliary residuals — cờ chất lượng dữ liệu trước cửa train (CAO)
 
-**Sách dạy (ch. 9).** Smoothed observation-disturbance residual to → **outlier giá** (sốc quan sát); smoothed state residual → **đổi level/trend thật** (tin tức cấu trúc). Phân biệt 2 loại này = biệt thoại giữa "dữ liệu bẩn" và "thị trường đổi chế" — hiện tại data-quality chỉ theo ngưỡng giá trị.
+**Sách dạy (ch. 9).** Smoothed observation-disturbance residual (ε) → **outlier giá** (sốc quan sát); smoothed state residual → **đổi level/trend thật** (tin tức cấu trúc). Phân biệt 2 loại này = biệt thoại giữa "dữ liệu bẩn" và "thị trường đổi chế" — hiện tại data-quality chỉ theo ngưỡng giá trị.
 
-**Ứng dụng.** Mỗi đêm, chạy smoother (đây là chỗ hợp pháp dùng smoother — đã đóng cửa sổ, mục đích audit) trên chuỗi giá 10 mã: |standardised aux obs residual| > 3.5 → cờ OUTLIER vào bảng data-quality; |aux state residual| > 3.5 → cờ LEVEL_SHIFT kèm ngày — cho strategist ngữ cảnh và cho các đường train lọc/tuỳ chọn. Ghi AuditLog `SS_DATA_FLAG`. **Effort**: S/M.
+**Ứng dụng.** Mỗi đêm, chạy smoother (chỗ hợp pháp dùng smoother — cửa sổ đã đóng, mục đích audit) trên chuỗi giá 10 mã: |standardised aux obs residual| > 3.5 → cờ OUTLIER; |aux state residual| > 3.5 → cờ LEVEL_SHIFT kèm ngày. **Giai đoạn 1: cờ READ-ONLY** — chỉ vào bảng data-quality + ngữ cảnh strategist, KHÔNG đổi tuyển dòng train (nếu sau này cờ ảnh hưởng tuyển dòng thì windowHash phải hash cả quyết định tuyển dòng — triết lý F-166b-3 hash đúng thứ model tiêu thụ — nếu không A/B và skip-guard bị confound). Ghi AuditLog `SS_DATA_FLAG`. **Effort**: S/M.
 
 ---
 
@@ -188,7 +189,7 @@ Mọi model dự báo xác suất/điểm (holt-ss, SS-4, SS-9, thậm chí pUp/
 
 ### SS-12 · Bayesian shrink cho meta-learner cold-start (TRUNG BÌNH)
 
-Meta-learner cần 60 tín hiệu/36 đạt — tín hiệu mới sinh chậm. Sách (ch. 12): prior N(β̄, τ²) với β̄ co về hệ số base-rate 250 phiên (40,1% tăng / 46,6% giảm / 13,3% ngang — đã có sẵn trong `/api/assessment` prior) và τ lớn; dữ liệu trickles in thì posterior tự rời prior. Triển khai dạng đơn giản nhất (conjugate-ish, không cần MCMC): Kalman một chiều trên tham số trọng số. **Effort**: S/M — nhưng chỉ sau khi có SS-1 làm nền vận hành.
+Meta-learner cần 60 tín hiệu/36 đạt — tín hiệu mới sinh chậm. Sách (ch. 12): prior N(β̄, τ²) với β̄ co về hệ số base-rate 250 phiên (40,1% tăng / 46,6% giảm / 13,3% ngang — đã có sẵn trong `/api/assessment` prior) và τ lớn; dữ liệu trickles in thì posterior tự rời prior. Triển khai dạng sạch nhất **không cần Kalman**: shrinkage conjugate Dirichlet/multinomial trên xác suất 3 lớp (kết quả WIN/LOSS là nhị thức/đa thức — Kalman tuyến-Gauss trên trọng số không exact; nếu muốn động theo thời gian thì logit-approx Kalman là phương án phụ). **Effort**: S/M — nhưng chỉ sau khi có SS-1 làm nền vận hành.
 
 ---
 
@@ -199,7 +200,7 @@ Meta-learner cần 60 tín hiệu/36 đạt — tín hiệu mới sinh chậm. S
 3. **Tham số phải "đóng băng" theo cửa sổ**: fit trong train window, giữ nguyên cho eval/holdout — không cập nhật online trong quá khứ. Mọi meta ghi đủ để tái tạo (như TrainingWindowMeta v83).
 4. **windowHash theo triết lý F-166b-3**: bất kỳ feature nào sinh từ SS tham gia đường train dl-mlp ⇒ digestVersion bump và hash **trên giá trị đã chuẩn hoá model tiêu thụ** (kể cả phiên bản tham số SS trong meta, không hash chuỗi tham số thô gây nổ đổi hash vô nghĩa khi re-fit deterministic).
 5. **Kill-switch + audit nhân bản W3**: mọi tầng SS có AppSetting (`ml-ss-*`) tắt được không restart, AuditLog `SS_*` cùng mô-típ `ML_PSI_RETRAIN` (kể cả lần skip im lặng khi cooldown — đã có bài học F-166c-1 về nuốt im lặng).
-6. **A/B song song trước khi thay**: driver/model mới chạy 14 ngày cạnh driver cũ, chấm log-score (SS-11); chỉ hoán đổi evidence khi thắng. Không "đập cũ dựng mới" — đường holt heuristic được giữ làm baseline đối chứng vô hạn hạn chi phí.
+6. **A/B bằng SHADOW, không dual-live**: driver mới chạy 14 ngày ở chế độ BÓNG — ghi evidence + logScore vào AuditLog `SS_AB_LOG` {driver, horizon, mean, sd, realized, logScore} mỗi settle nhưng KHÔNG đút vào Bayes (2 driver cùng nguồn closes mà sống song song = đếm kép thông tin trend); hết 14 ngày so log-score (SS-11) — chỉ khi thắng mới hoán đổi evidence và tắt driver cũ. Không "đập cũ dựng mới" — đường holt heuristic giữ làm baseline đối chứng chi phí gần 0.
 7. **Vị trí render UI**: mọi hiển thị mới (khoảng tin cậy, cờ SS-8, VaR) theo khối kiểm định 4 ô kiểu W3/W4 đã làm — minh bạch số trong mẫu vs ngoài mẫu.
 
 ---
@@ -256,6 +257,11 @@ SMOOTHER (chỉ cho audit/forensic — KHÔNG feature):
 LOCAL LINEAR TREND: α=[μ;b]; T=[[1,1],[0,1]]; Z=[1,0]; Q=diag(σ²ημ, σ²ηb); H=σ²ε
 TVP β ĐỘNG:        y = x'β_t + ε; β_{t+1}=β_t+η; Z_t = x_t'; Q=diag(τ²…)
 LOG-SCORE HOLDOUT: LS = Σ_holdout ln N(y ; ŷ_{t|t-1}, F_t)
+
+KHỞI TẠO (chuẩn hoá — áp cho mọi model SS):
+  a₁ = [y₁ ; y₂−y₁] ;  P₁ = κ·I với κ = 10⁶·Var(y)  (xấp xỉ diffuse hữu hạn)
+  burn-in: bỏ m = 5 điểm đầu khỏi likelihood ℓ (đoạn khởi tạo chưa ổn định)
+  ⇒ mọi replication/synthetic test khai báo dung sai theo sơ đồ này
 ```
 
 ## Phụ lục B — Checklist nghiệm thu chuẩn (áp cho mọi việc SS)
@@ -279,3 +285,17 @@ LOG-SCORE HOLDOUT: LS = Σ_holdout ln N(y ; ŷ_{t|t-1}, F_t)
 
 ---
 *Tài liệu đề xuất — chưa có dòng code nào được viết cho SS-1..SS-12. Mọi con số hiện trạng trích từ DB/audit ngày 22/10/2026 (rl-q v22 · dlMlp v73 serving · v83 archived · L2 2372 chunk vector đầy đủ).*
+
+## Lịch sử hiệu đính
+- **v1.0** (22/10/2026): so thảo đầu — 12 ứng dụng SS-1..SS-12.
+- **v1.1** (22/10/2026, pass review kỹ sư AI/kiến trúc sư — Task 172):
+  - **F1 · lỗi dấu pUp (SS-1)**: `Φ((0−mean)/sd)` trả về pDown — sửa thành `1 − Φ((0−mean)/sd)` ≡ `Φ(mean/sd)`; công thức cũ nếu lọt vào implement sẽ đảo ngược evidence tăng/giảm
+  - **F2 · sai thực trạng σ (Phần II hàng 2 + SS-1/SS-2)**: code thật đã có CI80 heuristic Z80·σ√h từ residual 1 bước + sigmaPct + trọng số hardcode 0,65 — sửa mô tả; lợi ích thật của SS-1/SS-2 là nâng cấp lên predictive variance + MLE, không phải "từ không có → có"
+  - **F3 · động cơ SS-4 sai với 8 chiều hiện tại**: cả 8 đều chuỗi NGÀY phái sinh thị trường, không có chuỗi công bố tháng nào — viết lại giá trị thật (điền absent trung thực + hợp nhất lead-lag); động cơ mixed-frequency chỉ dành cho mở rộng tương lai
+  - **F4 · tối ưu MLE 3 tham số**: golden-section 1-D không đủ → Nelder-Mead multi-start + clamp biên σ²≥0 + synthetic bắt buộc đủ 3 tham số (Nile chỉ chạm 2)
+  - **F5 · A/B phải SHADOW không dual-live**: 2 driver cùng nguồn closes sống song song trong Bayes = đếm kép thông tin trend — định nghĩa chế độ bóng + sink AuditLog `SS_AB_LOG`
+  - **F6 · SS-7 báo động giả**: HOSE đuôi dày → KS vs N(0,1) reject mạn tính — CUSUM-of-squares làm tin chính, KS hạ phụ + Bonferroni, 1 check/ngày theo settle
+  - **F7 · SS-8 tương tác windowHash**: cờ dữ liệu READ-ONLY giai đoạn 1 — nếu sau này đổi tuyển dòng train thì digest phải hash cả quyết định tuyển
+  - **F8 · SS-12 kết quả nhị thức**: Kalman tuyến-Gauss trên trọng số không exact → shrinkage conjugate Dirichlet/multinomial là đường sạch
+  - **F9 · nhà vận hành SS-7/SS-8**: mở rộng due-check psi-retrain sẵn có của engine :3003 (không sinh vòng lặp mới)
+  - P2: 4 lỗi gõ sót · driver mới đăng ký id riêng (A15b, không đè A15) · bổ sung khối KHỞI TẠO + burn-in vào Phụ lục A · Phần II hàng 5/11 viết lại chính xác (W1 chưa mô hình hoá β · W4 rl-q chấm P&L chính sách)

@@ -5531,3 +5531,20 @@ Stage Summary:
 - NIM khôi phục trọn vẹn: key mới sống (p141 đạt), L2 2372/2372 vector · 0 pending · 0 BM25-only — con nợ duy nhất từ reboot 04:21Z đã xả
 - Tài liệu STATE_SPACE_BLUEPRINT.md hoàn chỉnh 282 dòng: 12 ứng dụng bám từng module thật của THE TRADER kèm guard PIT/windowHash/kill-switch theo đúng văn hoá 5-guard W3 · holdout W4 · F-166b-3 của dự án; khuyến nghị khởi đầu Phase 1 (SS-1 holt-ss MLE + SS-11 log-score + SS-7 guard độ ngạc nhiên) — chờ owner duyệt
 - Lưu ý bảo mật: key NIM đã dán chat — khuyến nghị owner rotate khi tiện (docs/SECURITY.md §3 checklist)
+
+---
+Task ID: 172
+Agent: Z.ai Code (orchestrator, nhập vai Kỹ sư AI / Kiến trúc sư hệ thống)
+Task: Review docs/STATE_SPACE_BLUEPRINT.md theo yêu cầu chủ sở hữu — đối chiếu từng tuyên bố với code thật + DB thật, bắt lỗi, hiệu đính v1.1
+
+Work Log:
+- Đọc toàn bộ 282 dòng doc; đối chiếu thực trạng code: forecast.ts (phát hiện CI80 heuristic Z80·σ√h từ residual 1 bước + sigmaPct ĐÃ TỒN TẠI — phản bác doc "không có σ") · evidence.ts (driver thật là ml-forecast.holt-basket A15, trọng số hardcode 0,65, note in CI80) · features.ts 8 chiều macro (toàn chuỗi NGÀY — phản bác động cơ "CPI tháng" của SS-4) · W1/W3/W4 theo Task 163-165
+- Phát hiện 9 findings: F1 LỖI DẤU công thức pUp Φ((0−mean)/sd) = pDown (đảo ngược evidence tăng/giảm nếu lọt vào implement) · F2 sai thực trạng σ (có heuristic, không phải "không có") · F3 động cơ SS-4 sai với 8 chiều hiện tại (không có chuỗi tháng nào) · F4 golden-section 1-D không đủ cho MLE 3 tham số (biên σ²→0, hướng phẳng) · F5 A/B "chạy cạnh" phải là SHADOW không dual-live (đếm kép trend) · F6 KS vs N(0,1) reject mạn tính trên HOSE đuôi dày → CUSUM-of-squares làm tin chính + Bonferroni + 1 check/ngày · F7 cờ SS-8 đổi tuyển dòng train ⇒ phải hash quyết định tuyển vào windowHash (không thì confound) · F8 SS-12 kết quả nhị thức không exact với Kalman tuyến-Gauss → Dirichlet conjugate · F9 chưa chỉ định nhà vận hành SS-7/SS-8 → mở rộng due-check engine :3003 sẵn có
+- Hiệu đính v1.1 trực tiếp vào doc (302 dòng sau sửa): 24 edit (MultiEdit 2 lượt do 1 chuỗi thiếu dấu ngoặc) — vá F1-F9 toàn bộ + P2: 4 lỗi gõ (độingle/residual to/vô hạn hạn/dl-mlp thiếu space) · driver id riêng A15b · khối KHỞI TẠO + burn-in vào Phụ lục A (dung sai Nile replication có định nghĩa) · Phần II hàng 5/11 viết lại chính xác · thêm mục "Lịch sử hiệu đính" cuối file
+- Verify hiệu đính bằng script Python 19/19 PASS (có kiểm CJK sót = 0, không rò NIM key, các chuỗi cũ biến mất) · file 282→302 dòng
+- Affirm giữ nguyên: mapping chương D&K 2nd ed. chính xác (ch.2 Nile · ch.5 missing · ch.8 TVP · ch.9 aux residuals · ch.12 Bayesian/simsmooth) · sắc đỏ PIT LỌC-KHÔNG-MƯỢT khớp văn hoá p164 leakage=0 · digest bump triết lý F-166b-3 · Phần VI scope trung thực · con số hiện trạng khớp DB
+
+Stage Summary:
+- Verdict review: doc nền tảng tốt nhưng KHÔNG được code theo nguyên bản — 1 lỗi toán đảo dấu (F1) + 2 sai thực trạng (F2/F3) + 4 khoảng trống thiết kế (F4-F6/F9) + 2 rủi ro kiến trúc (F7/F8); sau v1.1 thì Phase 1 (SS-1 + SS-2 + SS-11 + SS-7) đạt điều kiện triển khai
+- Điểm affirm mạnh nhất của nguyên bản: kỷ luật PIT/windowHash/kill-switch/A-B đúng văn hoá 5-guard W3 · holdout W4 · F-166b-3 — không cần đổi hướng, chỉ cần vá chi tiết
+- File mới: docs/STATE_SPACE_BLUEPRINT.md v1.1 (302 dòng) — chờ owner duyệt Phase 1
