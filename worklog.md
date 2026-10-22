@@ -5548,3 +5548,24 @@ Stage Summary:
 - Verdict review: doc nền tảng tốt nhưng KHÔNG được code theo nguyên bản — 1 lỗi toán đảo dấu (F1) + 2 sai thực trạng (F2/F3) + 4 khoảng trống thiết kế (F4-F6/F9) + 2 rủi ro kiến trúc (F7/F8); sau v1.1 thì Phase 1 (SS-1 + SS-2 + SS-11 + SS-7) đạt điều kiện triển khai
 - Điểm affirm mạnh nhất của nguyên bản: kỷ luật PIT/windowHash/kill-switch/A-B đúng văn hoá 5-guard W3 · holdout W4 · F-166b-3 — không cần đổi hướng, chỉ cần vá chi tiết
 - File mới: docs/STATE_SPACE_BLUEPRINT.md v1.1 (302 dòng) — chờ owner duyệt Phase 1
+
+---
+Task ID: 173
+Agent: Z.ai Code (orchestrator — docx skill pipeline)
+Task: Bỏ qua THE TRADER, soạn giáo trình Python 7 cấp độ theo outline của owner, đầu ra .docx
+
+Work Log:
+- Load skill docx (routes/create + design-system + common-rules + toc) → chọn cover recipe R4 (Top Color Block) + palette DM-1 Deep Cyan cho giáo trình STEM
+- Cài docx@9.13.0 (bun add) — dùng đúng nền tảng có sẵn
+- Viết bộ sinh tài liệu scripts/gtp/: helpers.js (builders h1/h2/h3/p/lead/codeBlock/callout/dataTable/exercises + buildCoverR4 width-aware Latin) · front.js (Lời nói đầu + Giới thiệu & lộ trình) · ch1.js..ch7.js (7 chương đúng outline owner) · main.js (kiến trúc 3 section: Cover không số trang → Front matter La Mã I–V → Body Ả Rập reset 1) · patch_footers.py (gắn \* ROMAN / \* arabic vào instrText theo ánh xạ sectPr→rels, xóa pgNumType rỗng)
+- Nội dung: 7 cấp độ đúng thứ tự outline — mỗi chương có lý thuyết + ~70 khối mã nguồn Consolas chạy được + 11 bảng tra cứu (pip, exception, status code, format datetime, so sánh công cụ env…) + callout GHI NHỚ/MẸO/LƯU Ý + 41 bài tập có gợi ý; dự án tốt nghiệp Todo Service (FastAPI + SQLAlchemy + logging + Swagger) ở chương 7
+- Post-process chuỗi đầy đủ: add_toc_placeholders.py --auto (82 headings) → patch_footers.py → postcheck.py: 8/9 PASS, 0 lỗi, 0 cảnh báo (font-fallback Consolas chỉ level info)
+- Fix trong quá trình: 9 lỗi thiếu ngoặc hàng bảng + 2 template literal hở + 5 chỗ CJK sót (别名/问/收) + 5 dòng code >80 ký tự bị wrap xấu (giảm code font 20→19 half-pt + tách dòng) + merge 2 đoạn văn bị cắt giữa câu + sửa tham chiếu ví dụ chéo (2.5→2.7, 5.6→5.7, 6.9→6.8)
+- Verify 3 vòng bằng VLM trên trang render (bìa · lời nói đầu · TOC · trang code · trang cuối): bìa R4 chuẩn (navy + divider cyan + meta trắng), TOC có placeholder 82 mục kèm số trang, khối code thẳng hàng không wrap, tiếng Việt đủ dấu, footer La Mã/Ả Rập đúng zoning (pdftotext xác nhận I–V rồi 1,2,3…)
+- Thêm "scripts/gtp/**" vào globalIgnores eslint (tooling một lần, mirror quy ước tools/**) → bun run lint sạch
+- App THE TRADER không đụng tới: dev.log sạch, GET / 200
+
+Stage Summary:
+- Sản phẩm: /home/z/my-project/GIAO_TRINH_PYTHON.docx (80 KB · 67 trang PDFqui đổi · 82 headings có TOC · updateFields bật — mở Word sẽ tự hỏi Update Field để điền số trang thật)
+- Bộ sinh tái sử dụng được: scripts/gtp/*.js — sửa nội dung rồi chạy `bun run scripts/gtp/main.js` + 2 script hậu xử lý là có bản mới
+- Quy ước trình bày: DM-1 teal, khối code nền #F4F8FA viền trái #1B6B7A, bảng header teal chữ trắng, callout 3 loại, số trang 3 vùng
