@@ -5641,3 +5641,19 @@ Stage Summary:
 - Giáo trình v1.1: 39 findings của review đã vá hết (5 CRITICAL + 17 NÊN-SỬA + 8 PHỤ-ĐIỂM) + 1 lỗi cấu trúc label do chính tôi phát hiện + 6 mục outline bổ sung (Flask, PostgreSQL/MySQL, ví dụ 400, Depends, pipenv, uv) — file GIAO_TRINH_PYTHON.docx 83,9 KB / 70 trang / 82 headings / 75 ví dụ
 - Kết luận Mistral (10/2026): CÓ free tier — "Free mode" mặc định cho tài khoản mới, $0, xác minh SMS (không cần thẻ), dùng được gần như mọi model API; global 1 req/giây mỗi key; hạn mức token theo POOL chia sẻ nhóm model (đo bằng response headers, Mistral không còn công bố công khai — xem Admin Console › API › Limits); pay-as-you-go mở Tier 1+ theo tổng billing (>$20/100/500/2000)
 - Số liệu free tier theo pool (đo cộng đồng 2/2026): Standard pool (mistral-small/large-2512/codestral/nemo/ministral-2512/devstral-2507/pixtral) 50K tok/phút · 4M tok/tháng; mistral-large-2411 600K tok/5-phút · 60 req/phút · 200B tok/tháng; mistral-medium-2508 375K tok/phút · 25 rpm · không giới hạn tháng; magistral-small/medium-2509 20K tok/phút · 10 rpm · 1B tok/tháng (pool riêng); devstral-2512 1M tok/phút · 10M tok/tháng; mistral-embed 20M tok/phút · 200B tok/tháng; Mistral Moderation 2 miễn phí hoàn toàn
+---
+Task ID: 175
+Agent: Z.ai Code (orchestrator — Q&A phiên bản + điều kiện lệnh BÁN)
+Task: Chủ sở hữu quay lại app THE TRADER — (1) xác định phiên bản sandbox có phải mới nhất; (2) điều kiện hội đồng agent quyết định thực hiện lệnh BÁN
+
+Work Log:
+- git fetch origin + so sánh: local main = 6d89200, origin/main = 59e320a (Task 172), behind = 0 → sandbox LÀ bản mới nhất, ahead 2 commit (4e8df0e + 6d89200 — chỉ GIAO_TRINH_PYTHON.docx + scripts/gtp/*, không đụng code THE TRADER, CHƯA push GitHub)
+- Xác định commit cuối đụng code app thật (src/mini-services/prisma) = 21a9079 (Task 168); 169–172 là review/blueprint/NIM key; working tree sạch
+- Kiểm môi trường live: app :3000 → 200, engine :3003 → 200, pg chạy, /api/market/tick đang chảy (dev.log sạch lỗi)
+- Truy vết chuỗi quyết định BÁN qua code thật: src/lib/context/prompts.ts:103-105 (điều kiện Chủ tịch đề xuất SELL) · src/lib/agents-run/persist.ts:219-268 (VETO hard-enforce — Exposure A7 chỉ chặn MUA, SELL được phép; Compliance A8/controlUnavailable chặn cả SELL; bind consensusGate/Ratio/Dominant vào Signal) · src/lib/bayes/synthesis.ts computeConsensus (pool 7 cử tri, w=clamp(health/100×bandit,0.3,1), gate ≥80% − 1e-9, pool <4 fail-safe) · src/lib/signal-execution.ts:870-1140 autoDecideSignalByConsensus (SELL + CONSENSUS + dominant=DOWN → duyệt ngay ACTED + lệnh giấy 5% NAV, TWAP nếu >1% ADTV-20; quyết định tách khỏi khả năng đặt lệnh)
+- Script tạm /tmp/check-state.ts (chạy qua scripts/check-state-tmp.ts rồi xoá): AppSetting consensus enforce=true từ 08/10 · assessment mới nhất 22/10 17:04 = 7/7 cử tri DOWN 52,2% WEAK_MAJORITY ép GIỮ · 8 tín hiệu gần nhất toàn TCB BUY 65–71% bị tự từ chối · tổng auto-decision 10 duyệt / 17 từ chối
+
+Stage Summary:
+- Câu 1: sandbox = bản mới nhất tuyệt đối (nothing behind); khác biệt duy nhất với GitHub là 2 commit giáo trình Python chưa push — gợi ý owner quyết có push không
+- Câu 2: lệnh BÁN được thực hiện khi và chỉ khi: (1) Chủ tịch đề xuất SELL mã VN (cắt tỷ trọng vượt ngưỡng/chốt lời-lỗ, targetPrice < giá < stopLoss); (2) không bị VETO Compliance/Control (Exposure A7 không chặn SELL); (3) cổng đồng thuận ≥80% trọng số KHÔP hướng số đông = DOWN (F-151-1 — đồng thuận FLAT/UP không duyệt BÁN); (4) pool ≥4/7 cử tri → duyệt tức thì ACTED + lệnh giấy 5% NAV (TWAP >1% ADTV-20), enforcement đã BẬT từ 08/10
+- Không thay đổi code, không restart dịch vụ nào; duy nhất worklog được append
