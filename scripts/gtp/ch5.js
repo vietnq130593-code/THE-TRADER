@@ -3,7 +3,7 @@
 // ============================================================
 const H = require("./helpers");
 const C = H.makeCounters(5);
-const vi = (caption, lines) => H.codeBlock(caption, lines);
+const vi = (caption, lines, opts) => H.codeBlock(caption, lines, opts);
 const bang = (caption, headers, rows, widths) => H.dataTable(caption, headers, rows, widths);
 
 const ch5 = [
@@ -27,7 +27,9 @@ const ch5 = [
     { c: "pip install requests" },
     " (hoặc ",
     { c: "httpx" },
-    " nếu muốn async — chương 7). Trong ví dụ của toàn chương, dùng dịch vụ giả lập miễn phí ",
+    " nếu muốn async — chương 7; dùng đồng bộ thì ",
+    { c: "httpx.get(url)" },
+    " có API giống hệt requests). Trong ví dụ của toàn chương, dùng dịch vụ giả lập miễn phí ",
     { c: "https://jsonplaceholder.typicode.com" },
     " — chạy được thật, không cần key. Bốn động từ HTTP cốt lõi: GET (đọc), POST (tạo), PUT (cập nhật), DELETE (xóa).",
   ]),
@@ -175,22 +177,25 @@ const ch5 = [
     "import requests",
     "",
     "def get_json(url, params=None, headers=None, so_lan_thu=3, timeout=10):",
-    "    \"\"\"GET trả dict/list; tự thử lại khi lỗi mạng hoặc lỗi 5xx/429.\"\"\"",
+    "    \"\"\"GET trả dict/list; tự thử lại lỗi mạng, timeout, 429 và 5xx.\"\"\"",
     "    for lan in range(1, so_lan_thu + 1):",
     "        try:",
     "            r = requests.get(url, params=params,",
     "                             headers=headers, timeout=timeout)",
-    "            if r.status_code in (429, 500, 502, 503):",
-    "                raise requests.HTTPError(f\"HTTP {r.status_code}\")",
-    "            r.raise_for_status()          # 4xx khác sẽ ném ở đây",
+    "            r.raise_for_status()     # ném HTTPError cho mọi mã lỗi",
     "            return r.json()",
-    "        except (requests.ConnectionError, requests.Timeout,",
-    "                requests.HTTPError) as e:",
-    "            if lan == so_lan_thu:",
-    "                raise                     # hết lượt — ném lỗi ra ngoài",
-    "            cho = 2 ** lan                # backoff: 2s, 4s, 8s...",
-    "            print(f\"Lần {lan} lỗi ({e}) — thử lại sau {cho}s\")",
-    "            time.sleep(cho)",
+    "        except (requests.ConnectionError, requests.Timeout) as e:",
+    "            loi = e                # lỗi mạng — luôn là tạm thời",
+    "        except requests.HTTPError as e:",
+    "            ma_loi = e.response.status_code if e.response else 0",
+    "            if ma_loi != 429 and ma_loi < 500:",
+    "                raise              # 400/401/404... — lỗi vĩnh viễn",
+    "            loi = e                # 429/5xx — tạm thời, đáng thử lại",
+    "        if lan == so_lan_thu:",
+    "            raise loi              # hết lượt — ném lỗi ra ngoài",
+    "        cho = 2 ** lan               # backoff: 2s, 4s (tuỳ số lượt)",
+    "        print(f\"Lần {lan} lỗi ({loi}) — thử lại sau {cho}s\")",
+    "        time.sleep(cho)",
     "",
     "# Dùng:",
     "du_lieu = get_json(\"https://jsonplaceholder.typicode.com/todos/1\")",
@@ -213,7 +218,7 @@ const ch5 = [
   // ============ 5.3 FASTAPI ============
   H.h2("5.3 Viết API với FastAPI"),
   H.h3("5.3.1 Endpoint đầu tiên sau 5 phút"),
-  ...vi(`${C.nextVi()} — Cài đặt và file main.py đầu tiên`, [
+  ...H.codeBlock("Cài đặt FastAPI và uvicorn", [
     "$ pip install fastapi uvicorn",
   ], { label: "Terminal" }),
   ...vi(`${C.nextVi()} — File main.py: hai endpoint GET`, [
@@ -229,7 +234,7 @@ const ch5 = [
     "def gioi_thieu():",
     "    return {\"ten\": \"Todo API\", \"phien_ban\": \"1.0\"}",
   ]),
-  ...vi(`${C.nextVi()} — Chạy server và mở tài liệu tự sinh`, [
+  ...H.codeBlock("Chạy server và mở tài liệu tự sinh", [
     "$ uvicorn main:app --reload",
     "",
     "INFO:     Uvicorn running on http://127.0.0.1:8000",
@@ -372,6 +377,30 @@ const ch5 = [
   ...H.callout("note", "Quy ước REST rút gọn để thuộc", [
     ["GET trả 200 (hoặc 404 nếu không thấy); POST tạo mới trả 201 kèm tài nguyên; PUT cập nhật trả 200 (404 nếu thiếu); DELETE trả 204 và KHÔNG có body; lỗi phía client 4xx mang nghĩa lỗi của người gọi; 5xx là lỗi của server. Trả đúng mã giúp client viết retry thông minh như mục 5.2.3."],
   ]),
+  H.p([
+    "Phân biệt 404 với 400: ",
+    { c: "404" },
+    " nghĩa tài nguyên không tồn tại; ",
+    { c: "400" },
+    " nghĩa request về mặt cú pháp hợp lệ nhưng vô lý về nghiệp vụ. Ví dụ nối tiếp file main.py ở trên — đánh dấu hoàn thành một todo:",
+  ]),
+  ...vi(`${C.nextVi()} — Trả 400 cho lỗi nghiệp vụ`, [
+    "@app.post(\"/todos/{todo_id}/hoan-thanh\")",
+    "def hoan_thanh(todo_id: int):",
+    "    if todo_id not in todos_db:",
+    "        raise HTTPException(status_code=404,",
+    "                            detail=\"Không tìm thấy todo\")",
+    "    if todos_db[todo_id][\"completed\"]:",
+    "        raise HTTPException(",
+    "            status_code=400,",
+    "            detail=\"Todo đã hoàn thành — không đánh dấu lại\",",
+    "        )",
+    "    todos_db[todo_id][\"completed\"] = True",
+    "    return todos_db[todo_id]",
+    "",
+    "# POST lặp lần hai -> 400, client hiểu ngay là nghiệp vụ",
+    "# đã đạt trạng thái đích, chứ không phải tài nguyên biến mất",
+  ]),
 
   H.h2("Bài tập thực hành cấp độ 5"),
   ...H.exercises("bt-c5", [
@@ -393,7 +422,7 @@ const ch5 = [
     },
     {
       segs: ["(*) Viết TODO API hoàn chỉnh (CRUD đủ GET/POST/PUT/DELETE) trên dict trong bộ nhớ + Pydantic + HTTPException; tự kiểm thử toàn bộ bằng Swagger UI, chụp lại từng kết quả."],
-      hint: ["Gộp các ví dụ 5.9–5.14 thành main.py; DELETE nhớ status_code=204 và return None."],
+      hint: ["Gộp các ví dụ 5.8–5.13 thành main.py; DELETE nhớ status_code=204 và return None."],
     },
     {
       segs: ["(*) Viết client cho chính TODO API của bài trên: script gọi đủ 4 động từ, thêm vào hàm get_json hỗ trợ POST/PUT/DELETE (thêm tham số ", { c: "json=" }, " và chọn method)."],

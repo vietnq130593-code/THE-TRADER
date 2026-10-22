@@ -90,7 +90,9 @@ const gioiThieu = [
   H.p([
     "Khung mã có nhãn ",
     { b: "Terminal" },
-    " là lệnh gõ vào dòng lệnh (CMD/PowerShell trên Windows, Terminal trên macOS/Linux), không phải mã Python. Các ô màu là ",
+    " là lệnh gõ vào dòng lệnh (CMD/PowerShell trên Windows, Terminal trên macOS/Linux), không phải mã Python; khung nhãn ",
+    { b: "SQL" },
+    " (chương 6) là câu truy vấn database; một số khung có nhãn riêng theo loại nội dung (file cấu hình, công cụ). Các ô màu là ",
     { b: "GHI NHỚ" },
     " (kiến thức cần thuộc), ",
     { b: "MẸO" },

@@ -3,7 +3,7 @@
 // ============================================================
 const H = require("./helpers");
 const C = H.makeCounters(7);
-const vi = (caption, lines) => H.codeBlock(caption, lines);
+const vi = (caption, lines, opts) => H.codeBlock(caption, lines, opts);
 const bang = (caption, headers, rows, widths) => H.dataTable(caption, headers, rows, widths);
 
 const ch7 = [
@@ -51,7 +51,7 @@ const ch7 = [
     "",
     "asyncio.run(main())     # cửa vào duy nhất của chương trình async",
   ]),
-  ...vi(`${C.nextVi()} — Chạy song song với gather: 3 giây còn 2`, [
+  ...vi(`${C.nextVi()} — Chạy song song với gather: 4,5 giây còn 2 giây`, [
     "import asyncio",
     "",
     "async def lay_du_lieu(ten, delay):",
@@ -113,30 +113,40 @@ const ch7 = [
   // ============ 7.2 MÔI TRƯỜNG NÂNG CAO ============
   H.h2("7.2 Môi trường nâng cao — pipenv, poetry, conda"),
   H.p([
-    "venv + pip + requirements.txt ở cấp độ 1 đủ dùng cho dự án nhỏ; hệ sinh thái Python còn ba công cụ phổ biến hơn về trải nghiệm và khóa phiên bản chặt:",
+    "venv + pip + requirements.txt ở cấp độ 1 đủ dùng cho dự án nhỏ; hệ sinh thái Python còn một số công cụ phổ biến hơn về trải nghiệm và khoá phiên bản chặt:",
   ]),
   ...bang(
     `${C.nextBang()} — So sánh các công cụ quản lý môi trường`,
     ["Công cụ", "Điểm mạnh", "Khi nào chọn"],
     [
       [[{ c: "venv + pip" }], ["Có sẵn trong Python; requirements.txt đơn giản"], ["Học tập, dự án nhỏ-vừa, muốn hiểu cơ chế gốc"]],
-      [[{ c: "pipenv" }], ["Gộp venv + pip; Pipfile tự khóa phiên bản"], ["Dự án vừa, đội quen Pipfile"]],
+      [[{ c: "pipenv" }], ["Gộp venv + pip; Pipfile khai báo, Pipfile.lock khoá phiên bản"], ["Dự án vừa, đội quen Pipfile"]],
       [[{ c: "poetry" }], ["File pyproject.toml chuẩn hiện đại; quản lý phụ thuộc + build + publish gói; lock chặt"], ["Dự án nghiêm túc, thư viện cần phát hành, các đội hiện đại chuộng nhất"]],
       [[{ c: "conda" }], ["Quản cả NGÔN NGỮ và thư viện hệ thống; môi trường data-science"], ["ML/AI, cần CUDA/numpy bản đặc biệt"]],
+      [[{ c: "uv" }], ["Viết bằng Rust — cài gói nhanh gấp chục lần; uv.lock khoá cứng; thay pip + venv"], ["Dự án mới, đội ưu tiên tốc độ cài đặt"]],
     ],
     [18, 42, 40],
   ),
-  ...vi(`${C.nextVi()} — Mùi thơm của poetry (tham khảo)`, [
-    "# Cài poetry theo hướng dẫn poetry.io, rồi trong dự án mới:",
+  ...H.codeBlock("Mùi thơm của poetry (tham khảo)", [
+    "# Cài poetry theo hướng dẫn python-poetry.org, rồi trong dự án mới:",
     "$ poetry init                 # tạo pyproject.toml tương tác từng bước",
     "$ poetry add fastapi uvicorn  # thêm thư viện + tự update lockfile",
     "$ poetry install              # cài lại đúng lockfile trên máy khác",
     "$ poetry run python main.py   # chạy trong môi trường của dự án",
   ], { label: "Terminal" }),
+  ...H.codeBlock("pipenv — bản gộp của venv + pip", [
+    "$ pipenv install requests            # tạo Pipfile + venv + cài",
+    "$ pipenv install --dev pytest        # nhóm dev (kiểm thử)",
+    "$ pipenv run python main.py           # chạy trong môi trường dự án",
+  ], { label: "Terminal" }),
   H.p([
-    "Người học không cần thành thạo cả ba: hãy nắm chắc cặp venv + pip như chuẩn min, biết đọc ",
+    "Người học không cần thành thạo tất cả: hãy nắm chắc cặp venv + pip như chuẩn min, biết đọc ",
     { c: "pyproject.toml" },
-    " của poetry khi vào dự án người khác, và gọi conda khi làm việc với môi trường machine learning.",
+    " của poetry khi vào dự án người khác, và gọi conda khi làm việc với môi trường machine learning — nếu dự án mới chọn ngay uv thì càng tốt: ",
+    { c: "uv venv" },
+    " và ",
+    { c: "uv pip install" },
+    " dùng gần như giống hệt venv + pip nhưng nhanh hơn nhiều.",
   ]),
 
   // ============ 7.3 LOGGING ============
@@ -157,7 +167,12 @@ const ch7 = [
     "log.info(\"Hoạt động bình thường cần ghi nhận\")",
     "log.warning(\"Điều bất thường nhưng chưa lỗi\")",
     "log.error(\"Thao tác thất bại\")",
-    "log.exception(\"Lỗi kèm traceback\")   # dùng BÊN TRONG except",
+    "",
+    "# log.exception = error + traceback — chỉ có nghĩa BÊN TRONG except:",
+    "try:",
+    "    10 / 0",
+    "except ZeroDivisionError:",
+    "    log.exception(\"Chia cho 0\")      # traceback đầy đủ trong log",
   ]),
   ...bang(
     `${C.nextBang()} — Cấp độ log và hoàn cảnh dùng`,
@@ -182,6 +197,7 @@ const ch7 = [
     ")",
     "log = logging.getLogger(__name__)",
     "",
+    "so_nguoi_dung_nhap = 0            # ví dụ: đầu vào xấu",
     "try:",
     "    ket_qua = 10 / so_nguoi_dung_nhap",
     "except ZeroDivisionError:",
@@ -200,26 +216,26 @@ const ch7 = [
     { b: "breakpoint" },
     " (VSCode: click bên trái số dòng; PyCharm tương tự) rồi chạy ở chế độ Debug (F5) thay vì Run: chương trình ",
     { b: "dừng ngay tại breakpoint" },
-    ", và khi đó có thể xem giá trị mọi biến trong panel Variables, di từng bước, và gõ biểu thức để thử. Bảng phím tắt cần thuộc:",
+    ", và khi đó có thể xem giá trị mọi biến trong panel Variables, di từng bước, và gõ biểu thức để thử. Bảng phím tắt cần thuộc (hai IDE dùng phím khác nhau — học theo cột của mình rồi đối chiếu cột còn lại khi đọc máy người khác):",
   ]),
   ...bang(
     `${C.nextBang()} — Phím debug thiết yếu (VSCode / PyCharm)`,
-    ["Phím", "Hành động", "Ý nghĩa"],
+    ["Chức năng", "VSCode", "PyCharm", "Ý nghĩa"],
     [
-      [["F5"], ["Step Into"], ["Vào BÊN TRONG hàm đang gọi"]],
-      [["F10"], ["Step Over"], ["Chạy qua dòng hiện tại, không vào trong hàm"]],
-      [["F11 / Shift+F11"], ["Step Out"], ["Chạy đến thoát khỏi hàm hiện tại"]],
-      [["F5 (continue)"], ["Continue"], ["Chạy tiếp đến breakpoint kế tiếp"]],
-      [["Shift+F5"], ["Stop"], ["Dừng phiên debug"]],
+      [["Step Into"], [{ c: "F11" }], [{ c: "F7" }], ["Vào BÊN TRONG hàm đang gọi"]],
+      [["Step Over"], [{ c: "F10" }], [{ c: "F8" }], ["Chạy qua dòng hiện tại, không vào trong hàm"]],
+      [["Step Out"], [{ c: "Shift+F11" }], [{ c: "Shift+F8" }], ["Chạy đến thoát khỏi hàm hiện tại"]],
+      [["Continue"], [{ c: "F5" }], [{ c: "F9" }], ["Chạy tiếp đến breakpoint kế tiếp"]],
+      [["Stop"], [{ c: "Shift+F5" }], [{ c: "Ctrl+F2" }], ["Dừng phiên debug"]],
     ],
-    [24, 24, 52],
+    [15, 13, 13, 59],
   ),
   H.p([
     "Luồng debug điển hình cho bug khó: đặt breakpoint ở nơi dữ liệu vào (cửa API/đầu hàm) — chạy — soi giá trị thực tế từng biến so với kỳ vọng — F10 từng bước tới chỗ giá trị lệch — sửa đúng tầng gây lệch. Chiến lược này thay hoàn toàn thói quen rải ",
     { c: "print(x)" },
     " khắp file rồi đoán.",
   ]),
-  ...vi(`${C.nextVi()} — Debug server FastAPI bằng launch.json (VSCode)`, [
+  ...H.codeBlock("Debug server FastAPI bằng launch.json (VSCode)", [
     "{",
     '    "version": "0.2.0",',
     '    "configurations": [',
@@ -234,6 +250,9 @@ const ch7 = [
     "    ]",
     "}",
   ], { label: ".vscode/launch.json" }),
+  ...H.callout("warn", "--reload và breakpoint", [
+    ["Cờ --reload khiến uvicorn chạy hai process: reloader (cha) và ứng dụng (con) — với một số phiên debugpy, breakpoint đặt trong process con không được gắn. Khi cần breakpoint chắc chắn, bỏ --reload khỏi args rồi khởi động lại phiên debug."],
+  ]),
 
   // ============ 7.5 SWAGGER / POSTMAN ============
   H.h2("7.5 Đọc tài liệu API — Swagger và Postman"),
@@ -267,11 +286,11 @@ const ch7 = [
     " gửi request ngay — thấy body thật và header thật gửi đi.",
   ]),
   H.h3("7.5.2 Postman — công cụ không thể thiếu của đội"),
-  ...vi(`${C.nextVi()} — Vòng việc chuẩn với Postman`, [
+  ...H.codeBlock("Vòng việc chuẩn với Postman", [
     "1. Tạo Collection riêng cho dự án (vd 'Thanh Toán API')",
     "2. Import từ URL OpenAPI:  Import -> Link -> dán .../openapi.json",
     "   -> toàn bộ endpoint hiện thành từng request sẵn sàng",
-    "3. Khai báo biến môi trường: Quản lý Environments -> them moi",
+    "3. Khai báo biến môi trường: Quản lý Environments -> thêm mới",
     "   base_url = http://localhost:8000",
     "   token    = (điền sau khi đăng nhập)",
     "   -> URL của request viết {{base_url}}/todos",
@@ -297,7 +316,7 @@ const ch7 = [
     { c: "client.py" },
     " gọi đủ bốn động từ bằng ",
     { c: "requests" },
-    " có retry). Người học tự kiểm tra bằng Swagger UI ở ",
+    " có retry. Người học tự kiểm tra bằng Swagger UI ở ",
     { c: "/docs" },
     " trước, rồi bằng Postman với collection import từ ",
     { c: "/openapi.json" },
@@ -311,7 +330,7 @@ const ch7 = [
     {
       segs: ["Thêm endpoint thống kê ", { c: "GET /thong-ke" },
       "  trả tổng số todo, số hoàn thành, tỉ lệ hoàn thành (làm tròn %) — tính bằng SQL aggregate (func.count) chứ không bằng Python loop."],
-      hint: ["from sqlalchemy import func; session.query(func.count(Todo.id)).scalar()."],
+      hint: ["from sqlalchemy import func, select; session.scalar(select(func.count(Todo.id)))."],
     },
     {
       segs: ["Nâng client.py lên async bằng httpx.AsyncClient + asyncio.gather: đo và in thời gian tải 10 todo lần lượt vs song song."],

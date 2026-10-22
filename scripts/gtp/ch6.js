@@ -3,7 +3,7 @@
 // ============================================================
 const H = require("./helpers");
 const C = H.makeCounters(6);
-const vi = (caption, lines) => H.codeBlock(caption, lines);
+const vi = (caption, lines, opts) => H.codeBlock(caption, lines, opts);
 const bang = (caption, headers, rows, widths) => H.dataTable(caption, headers, rows, widths);
 
 const ch6 = [
@@ -39,7 +39,7 @@ const ch6 = [
     { c: "id" },
     " để định danh dòng.",
   ]),
-  ...vi(`${C.nextVi()} — Tạo hai bảng và chèn dữ liệu`, [
+  ...H.codeBlock("Tạo hai bảng và chèn dữ liệu", [
     "-- Bảng khách hàng và bảng đơn hàng nối nhau qua KHACH_HANG.id",
     "CREATE TABLE khach_hang (",
     "    id    INTEGER PRIMARY KEY,      -- khóa chính tự tăng",
@@ -51,7 +51,7 @@ const ch6 = [
     "    id            INTEGER PRIMARY KEY,",
     "    khach_hang_id INTEGER,          -- tham chiếu sang bảng kia",
     "    so_tien       REAL,             -- số thực",
-    "    ngay          TEXT,             -- ngày dạng ISO '2025-01-15'",
+    "    ngay          TEXT              -- ngày dạng ISO '2025-01-15'",
     ");",
     "",
     "INSERT INTO khach_hang (ten, email) VALUES ('Minh', 'minh@example.com');",
@@ -63,7 +63,7 @@ const ch6 = [
     "INSERT INTO don_hang (khach_hang_id, so_tien, ngay)",
     "VALUES (2, 99000, '2025-01-14');",
   ], { label: "SQL" }),
-  ...vi(`${C.nextVi()} — SELECT, WHERE, ORDER BY, LIMIT`, [
+  ...H.codeBlock("SELECT, WHERE, ORDER BY, LIMIT", [
     "-- Đọc toàn bộ cột chọn lọc:",
     "SELECT ten, email FROM khach_hang;",
     "",
@@ -77,9 +77,9 @@ const ch6 = [
     "-- Sắp xếp và giới hạn:",
     "SELECT * FROM don_hang ORDER BY so_tien DESC LIMIT 2;",
   ], { label: "SQL" }),
-  ...vi(`${C.nextVi()} — UPDATE, DELETE và JOIN`, [
+  ...H.codeBlock("UPDATE, DELETE và JOIN", [
     "-- Sửa: LUÔN kèm WHERE, không có WHERE sẽ sửa TOÀN BỘ bảng!",
-    "UPDATE khach_hang SET email = 'minh.new@example.com' WHERE id = 1;",
+    "UPDATE khach_hang SET email = 'lan.new@example.com' WHERE id = 2;",
     "",
     "-- Xóa: tương tự, WHERE là phanh an toàn",
     "DELETE FROM don_hang WHERE so_tien < 50000;",
@@ -95,6 +95,20 @@ const ch6 = [
     "-- Minh | 120000 | 2025-01-12",
     "-- Lan  |  99000 | 2025-01-14",
   ], { label: "SQL" }),
+  H.p([
+    "Cách chạy các câu SQL trên — chọn một trong hai: ",
+    { b: "DB Browser for SQLite" },
+    " (ứng dụng đồ hoạ miễn phí: mở file ",
+    { c: "app.db" },
+    ", vào tab Execute SQL, dán từng câu); hoặc ",
+    { b: "sqlite3 CLI" },
+    " chạy ngay trong terminal:",
+  ]),
+  ...H.codeBlock("Chạy SQL qua sqlite3 CLI", [
+    "$ sqlite3 app.db",
+    "sqlite> -- dán từng câu SQL ở trên; mỗi câu kết thúc bằng dấu ;",
+    "sqlite> .quit",
+  ], { label: "Terminal" }),
   ...H.callout("warn", "UPDATE/DELETE không WHERE = thảm họa", [
     ["Chạy UPDATE hay DELETE mà thiếu WHERE sẽ tác động lên mọi dòng của bảng — database thật không có nút undo. Khi tập luyện, hãy SELECT với cùng điều kiện trước để xem đúng những dòng mình sắp đổi/xóa, rồi mới đổi lệnh đầu câu thành UPDATE/DELETE."],
   ]),
@@ -143,6 +157,8 @@ const ch6 = [
     "conn = sqlite3.connect(\"app.db\")",
     "cur = conn.cursor()",
     "",
+    "ten_tim = \"Minh\"                # ví dụ: từ khóa người dùng nhập",
+    "",
     "# ĐÚNG: truyền giá trị qua dấu ? (tham số hóa)",
     "cur.execute(\"SELECT * FROM khach_hang WHERE ten = ?\", (ten_tim,))",
     "",
@@ -189,8 +205,8 @@ const ch6 = [
     "print(row[\"email\"])",
     "print(dict(row))          # {'id': 1, 'ten': 'Minh', 'email': ...}",
   ]),
-  ...H.callout("tip", "with tự đóng kết nối — nhưng vẫn cần commit", [
-    ["with sqlite3.connect('app.db') as conn: tự gọi close() khi ra khỏi khối kể cả khi có lỗi — nhưng KHÔNG tự commit các thay đổi, vẫn phải conn.commit() thủ công sau khi execute câu ghi. Ghi nhớ: with lo đóng, mình lo commit."],
+  ...H.callout("tip", "with sqlite3.connect() lo giao dịch, không lo đóng", [
+    ["with sqlite3.connect('app.db') as conn: là trình quản lý GIAO DỊCH: thoát khối bình thường thì tự commit, thoát vì lỗi thì tự rollback — nhưng nó KHÔNG tự đóng kết nối: conn vẫn mở và dùng được sau khối with. Phải gọi conn.close() thủ công khi hết dùng (hoặc gói contextlib.closing(sqlite3.connect(...)) khi muốn with đóng giúp). Ghi nhớ: with lo commit/rollback, mình lo đóng."],
   ]),
 
   // ============ 6.3 SQLALCHEMY ============
@@ -205,7 +221,7 @@ const ch6 = [
     ".",
   ]),
   ...vi(`${C.nextVi()} — Khai báo model và tạo bảng`, [
-    "from sqlalchemy import create_engine, String",
+    "from sqlalchemy import create_engine, select, String",
     "from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session",
     "",
     "engine = create_engine(\"sqlite:///app.db\", echo=False)",
@@ -236,7 +252,7 @@ const ch6 = [
     "    # ĐỌC:",
     "    nguoi = session.get(KhachHang, kh.id)      # theo khóa chính",
     "    ket_qua = session.scalars(",
-    "        session.query(KhachHang).filter(KhachHang.ten == \"Hùng\")",
+    "        select(KhachHang).where(KhachHang.ten == \"Hùng\")",
     "    ).all()",
     "",
     "    # SỬA:",
@@ -251,12 +267,37 @@ const ch6 = [
     "Bên trong, SQLAlchemy tự sinh SQL đúng và ",
     { b: "tự tham số hóa" },
     " — hai lớp phòng SQL injection và lỗi đóng chuỗi. Câu ",
-    { c: "session.query(KhachHang).filter(...)" },
+    { c: "select(KhachHang).where(...)" },
     " chính là ",
     { c: "SELECT * FROM khach_hang WHERE ..." },
     " viết bằng object; phương thức ",
     { c: "scalars()" },
-    " trả trực tiếp object thay vì tuple dòng.",
+    " trả trực tiếp object thay vì tuple dòng. Đây là cú pháp hiện đại của SQLAlchemy 2.x — gặp ",
+    { c: "session.query(...).filter(...)" },
+    " trong code cũ thì đọc hiểu được là đủ.",
+  ]),
+  H.p([
+    "Từ SQLite lên PostgreSQL/MySQL chỉ đổi ",
+    { b: "đúng một dòng cấu hình" },
+    " — toàn bộ model và các câu truy vấn giữ nguyên. Khác biệt căn bản: SQLite là một file nằm cạnh project, còn PostgreSQL/MySQL chạy như server riêng (cài đặt, tạo user/mật khẩu/database trước khi connect); đổi lại, chúng phục vụ nhiều kết nối đồng thời và có hệ thống quyền — lựa chọn chuẩn khi chạy dịch vụ thật. Cách nối:",
+  ]),
+  ...vi(`${C.nextVi()} — Đổi engine sang PostgreSQL / MySQL`, [
+    "# Bước 1 — cài driver (CHỌN MỘT theo database đang dùng):",
+    "#   pip install \"psycopg[binary]\"      # PostgreSQL",
+    "#   pip install pymysql                # MySQL / MariaDB",
+    "",
+    "# Bước 2 — đổi đúng MỘT dòng create_engine:",
+    "from sqlalchemy import create_engine",
+    "",
+    "engine_sqlite = create_engine(\"sqlite:///app.db\")",
+    "engine_pg = create_engine(",
+    "    \"postgresql+psycopg://user:matkhau@localhost:5432/mydb\"",
+    ")",
+    "engine_mysql = create_engine(",
+    "    \"mysql+pymysql://user:matkhau@localhost:3306/mydb\"",
+    ")",
+    "",
+    "# Toàn bộ model và repo viết ở trên giữ nguyên — chỉ đổi engine",
   ]),
 
   // ============ 6.4 CRUD ============
@@ -323,6 +364,9 @@ const ch6 = [
     "    def dong(self):",
     "        self.conn.close()",
   ]),
+  ...H.callout("warn", "Chạy ví dụ dưới đây trên app.db MỚI", [
+    ["Ví dụ giả định app.db chưa có dữ liệu từ các mục trước (repo tự tạo bảng). Nếu đã chạy các mục 6.2–6.3 trong cùng thư mục, hãy xoá file app.db cũ — hoặc đổi tên file trong lệnh KhachHangRepo(\"app_moi.db\") — để kết quả in ra khớp chú thích."],
+  ]),
   ...vi(`${C.nextVi()} — Dùng repo từ code gọi`, [
     "from repo_sqlite import KhachHangRepo",
     "",
@@ -341,7 +385,44 @@ const ch6 = [
     "repo.dong()",
   ]),
   ...H.callout("note", "Từ đây tới dịch vụ thật chỉ còn một bước", [
-    ["Repo này cắm thẳng vào FastAPI: endpoint POST /khach-hang gọi repo.them(...); GET /khach-hang/{id} gọi repo.doc(id) và trả 404 khi nhận None; PUT gọi repo.sua; DELETE gọi repo.xoa. Bài tập cuối chương chính là ghép này."],
+    ["Repo này cắm thẳng vào FastAPI: endpoint POST /khach-hang gọi repo.them(...); GET /khach-hang/{id} gọi repo.doc(id) và trả 404 khi nhận None; PUT gọi repo.sua; DELETE gọi repo.xoa. Ví dụ ngay dưới minh hoạ ghép đó — bài tập cuối chương sẽ hoàn thiện nốt POST/PUT/DELETE."],
+  ]),
+  H.p([
+    "Mối nối là ",
+    { c: "Depends" },
+    " của FastAPI: khai báo một hàm ",
+    { b: "cấp phát — dùng — dọn dẹp" },
+    " (yield), endpoint khai báo tham số với ",
+    { c: "= Depends(ten_ham)" },
+    ", và FastAPI tự chèn repo vào mỗi request:",
+  ]),
+  ...vi(`${C.nextVi()} — Cắm repo vào FastAPI với Depends`, [
+    "from fastapi import FastAPI, Depends, HTTPException",
+    "",
+    "app = FastAPI()",
+    "",
+    "def lay_repo():",
+    "    repo = KhachHangRepo(\"app.db\")",
+    "    try:",
+    "        yield repo          # FastAPI đưa repo vào endpoint",
+    "    finally:",
+    "        repo.dong()         # tự đóng sau mỗi request",
+    "",
+    "@app.get(\"/khach-hang/{kh_id}\")",
+    "def doc_khach_hang(kh_id: int,",
+    "                  repo: KhachHangRepo = Depends(lay_repo)):",
+    "    kq = repo.doc(kh_id)",
+    "    if kq is None:",
+    "        raise HTTPException(status_code=404,",
+    "                            detail=\"Không tìm thấy khách hàng\")",
+    "    return kq",
+  ]),
+  H.p([
+    "Mỗi request có repo riêng; kết nối được đóng đúng chỗ qua ",
+    { c: "finally" },
+    "; endpoint chỉ lo nghiệp vụ. POST/PUT/DELETE viết tương tự — nhận Pydantic model ở body (chương 5) rồi gọi ",
+    { c: "repo.them/sua/xoa" },
+    ". Dự án tốt nghiệp chương 7 chính là tổ hợp trọn vẹn này.",
   ]),
 
   H.h2("Bài tập thực hành cấp độ 6"),
@@ -364,7 +445,7 @@ const ch6 = [
       hint: ["INSERT ... UNIQUE vi phạm -> IntegrityError; bọc try/except quanh execute + commit."],
     },
     {
-      segs: ["(*) Viết lại SanPhamRepo bằng SQLAlchemy (class SanPham kế thừa Base như Ví dụ 6.8); so sánh và ghi chú ba điểm mình thấy ORM tiện hơn SQL tay.",
+      segs: ["(*) Viết lại SanPhamRepo bằng SQLAlchemy (class SanPham kế thừa Base như Ví dụ 6.5); so sánh và ghi chú ba điểm mình thấy ORM tiện hơn SQL tay.",
       ""],
       hint: ["Mapped[int]/mapped_column(primary_key=True); Session(engine) with-block; session.scalars(...).all()."],
     },

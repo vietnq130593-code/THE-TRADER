@@ -13,7 +13,7 @@ const ch4 = [
     { b: "tự viết class" },
     " đơn giản để gói dữ liệu + hành vi lại với nhau, và ",
     { b: "đọc hiểu class của thư viện" },
-    " để dùng FastAPI, SQLAlchemy, requests thành thạo. Chương này bổ sung hai kiện thức dữ liệu thực tế mà mọi service dùng hằng ngày: ",
+    " để dùng FastAPI, SQLAlchemy, requests thành thạo. Chương này bổ sung hai kiến thức về dữ liệu thực tế mà mọi service dùng hằng ngày: ",
     { c: "datetime" },
     " và cách xử lý ",
     { c: "None" },
@@ -21,7 +21,7 @@ const ch4 = [
   ]),
 
   // ============ 4.1 CLASS ============
-  H.h2("4.1 Class — class, __init__, thuộc tính, phương thức"),
+  H.h2("4.1 Class — __init__, thuộc tính, phương thức"),
   H.p([
     "Class là khuôn (blueprint); object là sản phẩm đúc từ khuôn. Class gộp ",
     { b: "thuộc tính" },
@@ -75,7 +75,7 @@ const ch4 = [
     " bên trong class chính là cách class bảo vệ dữ liệu của mình khỏi trạng thái sai.",
   ]),
   ...H.callout("note", "Bốn tên đặc biệt cần nhận diện", [
-    [ { b: "__init__" }, " — constructor, khởi tạo thuộc tính khi tạo object; ", { b: "__str__" }, " — nội dung hiển thị khi print; ", { b: "self" }, " — chính object đang gọi phương thức (bắt buộc là tham số đầu); tên bắt đầu kết thúc bằng __ (dunder) là tên Python dành riêng — không tự đặt tên biến kiểu này." ],
+    [ { b: "__init__" }, " — constructor, khởi tạo thuộc tính khi tạo object; ", { b: "__str__" }, " — nội dung hiển thị khi print; ", { b: "self" }, " — chính object đang gọi phương thức (bắt buộc là tham số đầu); tên bắt đầu VÀ kết thúc bằng __ (dunder) là tên Python dành riêng — không tự đặt tên biến kiểu này." ],
   ]),
 
   // ============ 4.2 DÙNG CLASS CÓ SẴN ============
@@ -83,13 +83,17 @@ const ch4 = [
   H.p([
     "Phần lớn thời gian làm việc thật, ta ",
     { b: "sử dụng" },
-    " class người khác viết hơn là tự viết. Ví dụ đã gặp: ",
+    " class người khác viết hơn là tự viết. Ví dụ sẽ gặp xuyên suốt giáo trình: ",
     { c: "requests.Session()" },
-    " (tái dùng kết nối HTTP), ",
+    " (tái dùng kết nối HTTP — ngay mục dưới), ",
     { c: "sqlite3.connect()" },
-    " (kết nối database), và ở cấp độ 5: ",
+    " (kết nối database — chương 6), ",
     { c: "FastAPI()" },
-    " — toàn bộ framework là một chuỗi class cho mình kế thừa và cấu hình. Kỹ năng cần luyện: ",
+    " (chương 5) — toàn bộ framework là một chuỗi class cho mình cấu hình và mở rộng. ",
+    { c: "Flask" },
+    " — framework anh em của FastAPI — cũng vận hành y hệt: ",
+    { c: "app = Flask(__name__)" },
+    " là tạo object từ class Flask; mọi web framework Python đều base trên cách dùng class này. Kỹ năng cần luyện: ",
     { b: "đọc constructor signature" },
     " trong tài liệu để biết truyền gì khi tạo, và gọi phương thức theo đúng giao diện:",
   ]),
@@ -169,7 +173,7 @@ const ch4 = [
   ...vi(`${C.nextVi()} — Tạo, lấy hiện tại và định dạng`, [
     "from datetime import datetime, date, timedelta",
     "",
-    "now = datetime.now()               # 2025-01-15 10:30:45.123456",
+    "now = datetime.now()               # vd 2025-01-15 10:30:45 (tuỳ lúc chạy)",
     "hom_nay = date.today()             # 2025-01-15",
     "",
     "# datetime -> chuỗi (strftime: f = format)",
@@ -236,6 +240,7 @@ const ch4 = [
     "# (None là singleton — 'is' vừa đúng bản chất vừa nhanh hơn)",
     "",
     "# Mẫu dịch vụ thật: giá trị vắng thì lấy mặc định",
+    "du_lieu = {\"ten\": \"Áo khoác\"}       # không có key \"giam_gia\"",
     "phan_tram = du_lieu.get(\"giam_gia\")",
     "if phan_tram is None:",
     "    phan_tram = 0",

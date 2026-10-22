@@ -59,7 +59,7 @@ const ch1 = [
   H.p([
     "Mỗi dự án Python nên có một ",
     { b: "môi trường ảo (virtual environment)" },
-    " riêng — một thư mục chứa bản Python và bộ thư viện riêng của dự án đó, tách khỏi máy toàn cục. Lợi ích: hai dự án có thể dùng hai phiên bản khác nhau của cùng một thư viện mà xung đột, và danh sách thư viện của dự án luôn rõ ràng. Tạo môi trường ảo bằng module ",
+    " riêng — một thư mục chứa bản Python và bộ thư viện riêng của dự án đó, tách khỏi máy toàn cục. Lợi ích: hai dự án có thể dùng hai phiên bản khác nhau của cùng một thư viện mà không xung đột, và danh sách thư viện của dự án luôn rõ ràng. Tạo môi trường ảo bằng module ",
     { c: "venv" },
     " có sẵn trong Python:",
   ]),
@@ -237,7 +237,7 @@ const ch1 = [
     { c: ":," },
     " ngăn cách hàng nghìn, ",
     { c: ":.1%" },
-    " hiển thị tỉ lệ phần trăm. f-string còn hỗ đủ phép tính, gọi hàm, truy cập thuộc tính bên trong cặp ngoặc — hãy dùng f-string thay cho nối chuỗi bằng ",
+    " hiển thị tỉ lệ phần trăm. f-string còn hỗ trợ đủ phép tính, gọi hàm, truy cập thuộc tính bên trong cặp ngoặc — hãy dùng f-string thay cho nối chuỗi bằng ",
     { c: "+" },
     " mọi lúc có thể.",
   ]),
