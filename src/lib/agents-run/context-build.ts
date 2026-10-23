@@ -17,6 +17,9 @@ import {
 } from "@/lib/agent-context";
 // #106 C-VISION — tầm nhìn toàn cục hội đồng cho Chủ tịch (wave E)
 import { buildCouncilVisionBlock } from "@/lib/council/vision";
+// Task 178 (STATE_SPACE_BLUEPRINT Phase 2): cờ dữ liệu SS-8 + β động SS-5
+// cho prompt Chủ tịch (fail-soft, cache 60s — pattern các block khác).
+import { buildSsContextBlock } from "@/lib/context/ss-block";
 import { AGENT_ROSTER } from "@/lib/agent-roster";
 // L1 (ML_LEARNING_BLUEPRINT §2 — phiên #83): BM25 RAG — truy hồi tri thức
 // broadcast/tin cũ tiêm prompt 5 agent nghiên cứu + Chủ tịch + RetrievalLog.
@@ -392,6 +395,11 @@ export async function buildChairmanUserPrompt(
   // chu kỳ; 2 đường kia ở agent-context.ts single-run + chat).
   const councilVisionBlock = await buildCouncilVisionBlock().catch(() => null);
 
+  // Task 178 — khối STATE SPACE (SS-8 cờ dữ liệu + SS-5 β động, read-only):
+  // Chủ tịch khai báo độ confound khi trích dẫn giá mã có cờ + dùng β cho
+  // luận cứ rủi ro thị trường/riêng. Fail-soft như các block trên.
+  const ssContextBlock = await buildSsContextBlock().catch(() => null);
+
   const strategistUserPrompt = [
     [blocks.marketBlock, blocks.newsBlock, blocks.flowsBlock, blocks.valuationBlock, blocks.liquidityBlock].join("\n\n"),
     `TÍN HIỆU ĐANG MỞ:\n${blocks.openSignalsBlock}`,
@@ -418,6 +426,8 @@ export async function buildChairmanUserPrompt(
     ...(portfolioWeightsBlock ? ["", portfolioWeightsBlock] : []),
     // #106 C-VISION — tầm nhìn toàn cục hội đồng (tài khoản + kết quả quyết định + thí nghiệm)
     ...(councilVisionBlock ? ["", councilVisionBlock] : []),
+    // Task 178 — cờ SS-8/SS-5 (đọc-only — ngữ cảnh, không phải bằng chứng Bayes)
+    ...(ssContextBlock ? ["", ssContextBlock] : []),
     "",
     `BÁO CÁO TỪ ${digestLines.length} AGENTS CỦA HỘI ĐỒNG (để tổng hợp):`,
     ...digestLines,

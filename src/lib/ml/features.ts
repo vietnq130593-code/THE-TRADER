@@ -850,6 +850,8 @@ export interface SegmentSymbol {
   sector: string;
   market: string;
   type: string;
+  /** YYYY-MM-DD tăng dần — song song closes/volumes (SS-3 Task 178: căn lịch phiên). */
+  dates: string[];
   closes: number[];
   volumes: number[];
   last: number;
@@ -919,22 +921,24 @@ export async function loadSegmentBaskets(barsPerSymbol = 260): Promise<SegmentBa
   const barRows = await db.bar.findMany({
     where: { instrumentId: { in: quotedBase.map((q) => q.id) }, date: { gte: cutoff } },
     orderBy: [{ instrumentId: "asc" }, { date: "asc" }],
-    select: { instrumentId: true, close: true, volume: true },
+    select: { instrumentId: true, date: true, close: true, volume: true },
   });
-  const seriesById = new Map<string, { closes: number[]; volumes: number[] }>();
+  const seriesById = new Map<string, { dates: string[]; closes: number[]; volumes: number[] }>();
   for (const b of barRows) {
     if (!(b.close > 0)) continue;
     let entry = seriesById.get(b.instrumentId);
     if (!entry) {
-      entry = { closes: [], volumes: [] };
+      entry = { dates: [], closes: [], volumes: [] };
       seriesById.set(b.instrumentId, entry);
     }
+    entry.dates.push(b.date.toISOString().slice(0, 10));
     entry.closes.push(b.close);
     entry.volumes.push(b.volume);
   }
 
   const symbols: SegmentSymbol[] = quotedBase.map((q) => {
-    const s = seriesById.get(q.id) ?? { closes: [], volumes: [] };
+    const s = seriesById.get(q.id) ?? { dates: [], closes: [], volumes: [] };
+    const dates = s.dates.slice(-barsPerSymbol);
     const closes = s.closes.slice(-barsPerSymbol);
     const volumes = s.volumes.slice(-barsPerSymbol);
     const tail = closes.slice(-20);
@@ -952,6 +956,7 @@ export async function loadSegmentBaskets(barsPerSymbol = 260): Promise<SegmentBa
       sector: q.sector,
       market: q.market,
       type: q.type,
+      dates,
       closes,
       volumes,
       last: q.last,

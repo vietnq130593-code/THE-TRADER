@@ -59,11 +59,20 @@ export function bonferroniAlpha(nSymbols: number, checksPerDay = 1): number {
   return SURPRISE_ALPHA_BASE / n;
 }
 
-/** p-value KS tiệm cận (phân phối Kolmogorov Q(λ) — chuỗi 100 số hạng đủ hội tụ). */
+/**
+ * p-value KS tiệm cận (phân phối Kolmogorov Q(λ)).
+ * F-177-5 (Task 177 vá ở Task 178): chuỗi 2Σ(−1)^{j−1}e^{−2j²λ²} KHÔNG hội
+ * tụ khi λ siêu nhỏ (các số hạng ≈ ±2 nhảy vách mãi — tổng riêng dao động
+ * 2/0 thay vì tiến 1). Với λ < 0,4 ta có Q(λ) ≥ 0,996 ≈ 1 (tính tay: λ=0,4
+ * → 0,996; λ=0,2 → 0,982) — trả thẳng 1, đúng nghĩa "D siêu nhỏ = không bác
+ * bỏ". KS chỉ là TIN PHỤ Bonferroni (F6) nên mất vài chữ số cuối ở vùng p≈1
+ * vô hại với quyết định cờ.
+ */
 export function ksPValue(d: number, n: number): number {
   if (!(d > 0) || n <= 0) return 1;
   const lambda = (Math.sqrt(n) + 0.12 + 0.11 / Math.sqrt(n)) * d;
-  // Q(λ) = 2 Σ_{j≥1} (−1)^{j−1} exp(−2j²λ²)
+  if (lambda < 0.4) return 1; // F-177-5: vùng không hội tụ — Q ≈ 1
+  // Q(λ) = 2 Σ_{j≥1} (−1)^{j−1} exp(−2j²λ²) — hội tụ nhanh khi λ ≥ 0,4
   let q = 0;
   for (let j = 1; j <= 100; j++) {
     const term = 2 * (j % 2 === 1 ? 1 : -1) * Math.exp(-2 * j * j * lambda * lambda);

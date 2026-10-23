@@ -28,11 +28,12 @@
 
 import { db } from "@/lib/db";
 import { loadSegmentBaskets } from "@/lib/ml/features";
-import { buildBasketIndex } from "@/lib/bayes/evidence";
 import { holtForecastPct } from "@/lib/quant/forecast";
 import { holtSsFit, holtSsForecast } from "@/lib/ml/ss/holt-ss";
 import { holdoutLogScores } from "@/lib/ml/ss/logscore";
 import { bonferroniAlpha, surpriseDiagnostics, SURPRISE_WINDOW } from "@/lib/ml/ss/diag";
+// Task 178 — SS-3: dựng chỉ số rổ THEO LỊCH PHIÊN (null = phiên thiếu).
+import { alignedBasketIndex, alignSeries, unionCalendar } from "@/lib/ml/ss/calendar";
 
 /* ───────────────────────── Cấu hình & kill-switch ───────────────────────── */
 
@@ -46,6 +47,10 @@ export const SS_AB_VERDICT_AUDIT_ACTION = "SS_AB_VERDICT";
 export const SS_SURPRISE_SETTING_KEY = "ml-ss-surprise";
 /** Audit action guard ngạc nhiên (1 dòng/ngày tổng hợp 10 mã). */
 export const SS_SURPRISE_AUDIT_ACTION = "SS_SURPRISE";
+/** F-177-1 (Task 177 vá ở Task 178): audit CẢ lần skip — "mọi lần chạy đều
+ * audit, im lặng là lỗi giám sát" (quy tắc 5 — bài học F-166c-1). Action
+ * RIÊNG (không đếm vào SS_AB_LOG vì đó là khóa ngày bóng). */
+export const SS_SKIP_AUDIT_ACTION = "SS_CYCLE_SKIP";
 
 /** Số ngày bóng trước khi so sánh verdict (quy tắc 6). */
 export const SS_AB_DAYS = 14;
@@ -171,6 +176,9 @@ export interface SsEvidenceDecision {
  *   kill-switch off → KHÔNG (hệ về đúng hành vi cũ — checklist Phụ lục B)
  *   mode shadow    → KHÔNG (bóng chỉ log — quy tắc 6)
  *   mode live + w=0 (sd-guard) → KHÔNG (fail-soft)
+ *   mode live + |meanPct| < 0,1% → KHÔNG (F-177-3 Task 177: PARITY với driver
+ *     cũ — A15 chỉ push khi |expectedPct| ≥ 0,1%; A15b cũng vậy, không push
+ *     mọi meanPct ≠ 0 với sàn trọng số 0,3 như trước)
  *   mode live + w>0 → CÓ — source "ml-forecast.holt-ss", gen1 A15b, trọng số
  *   theo z, lr mirror công thức driver cũ (so sánh A/B công bằng).
  */
@@ -193,6 +201,11 @@ export function ssEvidenceDecision(
   if (fc.weight <= 0) {
     return { push: false, reason: "sd-guard phình — model tự nhận không biết (SS-2 fail-soft)" };
   }
+  // F-177-3: parity floor 0,1% — cùng ngưỡng im lặng như driver cũ A15
+  // (evidence.ts: Math.abs(basketForecast.expectedPct) >= 0.1).
+  if (Math.abs(fc.meanPct) < 0.1) {
+    return { push: false, reason: "parity floor — |meanPct| < 0,1% im lặng như driver cũ A15 (F-177-3)" };
+  }
   const strength = Math.min(1, Math.abs(fc.meanPct) / 1.5);
   return {
     push: true,
@@ -210,6 +223,24 @@ export function ictDate(d: Date = new Date()): string {
   return new Date(d.getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
 }
 
+/** F-177-1 (Task 177 vá ở Task 178): audit lần skip — fail-soft 2 tầng (lỗi
+ * ghi audit KHÔNG được nuốt kết quả gốc — chỉ log console). Export cho
+ * phase2.ts tái dùng (cùng quy tắc 5 trên mọi tầng SS). */
+export async function auditSkip(layer: string, outcome: string, reason: string): Promise<void> {
+  try {
+    await db.auditLog.create({
+      data: {
+        action: SS_SKIP_AUDIT_ACTION,
+        entity: "MlModel",
+        entityId: `ss-${layer}`,
+        after: JSON.stringify({ layer, outcome, reason, date: ictDate() }),
+      },
+    });
+  } catch (err) {
+    console.error(`[ss/${layer}] auditSkip ghi SS_CYCLE_SKIP lỗi (bỏ qua):`, err);
+  }
+}
+
 /* ───────────────────────── Chu kỳ bóng (mỗi settle) ───────────────────────── */
 
 export interface SsShadowCycleResult {
@@ -221,12 +252,18 @@ export interface SsShadowCycleResult {
   verdict?: string | null;
 }
 
-/** sd cuộn của biến động 5-phiên (%) trên cửa sổ — guard SS-2. */
-function rollingSdPctH5(closes: number[]): number {
+/** sd cuộn của biến động 5-phiên (%) trên cửa sổ — guard SS-2.
+ * F-177-2 (Task 177 vá ở Task 178): EXPORT dùng chung — evidence.ts hết nhân
+ * đôi công thức (drift risk). SS-3: null-tolerant (bỏ cặp có lỗ). */
+export function rollingSdPctH5(closes: (number | null)[]): number {
   if (closes.length < 12) return 0;
   const rets: number[] = [];
   for (let i = 0; i + 5 < closes.length; i++) {
-    if (closes[i] > 0) rets.push(((closes[i + 5] - closes[i]) / closes[i]) * 100);
+    const a = closes[i];
+    const b = closes[i + 5];
+    if (a != null && a > 0 && b != null) {
+      rets.push(((b - a) / a) * 100);
+    }
   }
   if (rets.length < 2) return 0;
   const mean = rets.reduce((s, x) => s + x, 0) / rets.length;
@@ -243,28 +280,41 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
   try {
     const setting = await getSsShadowSetting();
     if (!setting.enabled) {
+      await auditSkip("shadow", "skip-disabled", "kill-switch ml-ss-shadow TẮT");
       return { outcome: "skip-disabled", reason: "kill-switch ml-ss-shadow TẮT" };
     }
 
     const baskets = await loadSegmentBaskets(SS_BASKET_SESSIONS + 10);
     const hose = baskets.find((b) => b.segment === "VN-HOSE-STOCK");
     if (!hose || hose.symbols.length === 0) {
+      await auditSkip("shadow", "skip-insufficient-data", "không tải được rổ VN-HOSE-STOCK");
       return { outcome: "skip-insufficient-data", reason: "không tải được rổ VN-HOSE-STOCK" };
     }
-    const basketCloses = buildBasketIndex(
-      hose.symbols.map((s) => s.closes),
+    // SS-3 (Task 178): chỉ số rổ THEO LỊCH PHIÊN — mã thiếu phiên trở thành
+    // null (skip-update, variance phình trung thực) thay vì trôi pha theo
+    // index mảng compact của bản buildBasketIndex cũ.
+    const aligned = alignedBasketIndex(
+      hose.symbols.map((s) => ({ dates: s.dates, closes: s.closes })),
       SS_BASKET_SESSIONS
     );
-    if (basketCloses.length < 120) {
+    const basketCloses: (number | null)[] = aligned.closes;
+    const presentCloses = basketCloses.filter((c): c is number => c != null);
+    if (presentCloses.length < 120) {
+      await auditSkip(
+        "shadow",
+        "skip-insufficient-data",
+        `basket closes có-mặt ${presentCloses.length} < 120 (lịch ${basketCloses.length})`
+      );
       return {
         outcome: "skip-insufficient-data",
-        reason: `basket closes ${basketCloses.length} < 120`,
+        reason: `basket closes ${presentCloses.length} < 120`,
       };
     }
 
     /* A/B log-score trên holdout (tham số đóng băng — logscore.ts) */
     const ab = holdoutLogScores(basketCloses, { horizons: [1, SS_EVIDENCE_HORIZON] });
     if (!ab) {
+      await auditSkip("shadow", "skip-insufficient-data", "cửa sổ quá ngắn cho holdout log-score");
       return { outcome: "skip-insufficient-data", reason: "cửa sổ quá ngắn cho holdout log-score" };
     }
 
@@ -312,7 +362,7 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
       daysElapsed: daysElapsed + (isNewDay ? 1 : 0),
       sameDayRerun: !isNewDay,
       totalDays: SS_AB_DAYS,
-      window: { closes: basketCloses.length, trainN: ab.trainN, holdoutN: ab.holdoutN },
+      window: { closes: basketCloses.length, presentCloses: presentCloses.length, trainN: ab.trainN, holdoutN: ab.holdoutN },
       new: {
         driver: "ml-forecast.holt-ss",
         gen1: "A15b",
@@ -394,7 +444,7 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
         const advByDay = new Map<string, number>();
         for (const r of allRows) {
           try {
-            const p = JSON.parse(r.after) as { advDaily?: unknown };
+            const p = JSON.parse(r.after ?? "{}") as { advDaily?: unknown };
             if (typeof p.advDaily === "number" && Number.isFinite(p.advDaily)) {
               advByDay.set(ictDate(r.createdAt), p.advDaily); // asc → dòng cuối mỗi ngày thắng
             }
@@ -442,6 +492,11 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
       verdict: verdictNote,
     };
   } catch (err) {
+    await auditSkip(
+      "shadow",
+      "error",
+      err instanceof Error ? err.message : String(err)
+    );
     return {
       outcome: "error",
       reason: err instanceof Error ? err.message : String(err),
@@ -469,15 +524,21 @@ export async function runSsSurpriseCheck(): Promise<SsSurpriseCycleResult> {
   try {
     const { enabled } = await getSsSurpriseSetting();
     if (!enabled) {
+      await auditSkip("surprise", "skip-disabled", "kill-switch ml-ss-surprise TẮT");
       return { outcome: "skip-disabled", reason: "kill-switch ml-ss-surprise TẮT" };
     }
     const baskets = await loadSegmentBaskets(SS_BASKET_SESSIONS + 10);
     const hose = baskets.find((b) => b.segment === "VN-HOSE-STOCK");
     if (!hose || hose.symbols.length === 0) {
+      await auditSkip("surprise", "skip-insufficient-data", "không tải được rổ VN-HOSE-STOCK");
       return { outcome: "skip-insufficient-data", reason: "không tải được rổ VN-HOSE-STOCK" };
     }
     const symbols = hose.symbols.slice(0, 10);
     const alpha = bonferroniAlpha(Math.max(1, symbols.length), 1);
+    // SS-3 (Task 178): căn từng mã về LỊCH PHIÊN UNION của rổ 10 mã — phiên
+    // thiếu (mã treo/nghỉ) = null → fit skip-update, variance phình trung thực
+    // theo lượng bất định tích luỹ (ch. 5) thay vì compact lệch pha.
+    const calendar = unionCalendar(symbols.map((s) => s.dates)).slice(-SS_BASKET_SESSIONS);
 
     const checked: {
       symbol: string;
@@ -491,12 +552,12 @@ export async function runSsSurpriseCheck(): Promise<SsSurpriseCycleResult> {
     const skipped: { symbol: string; reason: string }[] = [];
 
     for (const s of symbols) {
-      const closes = s.closes.slice(-SS_BASKET_SESSIONS);
-      if (closes.length < 60 || closes.some((c) => !(c > 0))) {
-        skipped.push({ symbol: s.symbol, reason: `closes ${closes.length} < 60 hoặc có giá ≤ 0` });
+      const { closes: alignedCloses, present } = alignSeries(s.dates, s.closes, calendar);
+      if (present < 60 || alignedCloses.some((c) => c != null && !(c > 0))) {
+        skipped.push({ symbol: s.symbol, reason: `closes có-mặt ${present} < 60 hoặc có giá ≤ 0` });
         continue;
       }
-      const logCloses = closes.map((c) => Math.log(c));
+      const logCloses: (number | null)[] = alignedCloses.map((c) => (c == null ? null : Math.log(c)));
       const fit = holtSsFit(logCloses);
       if (!fit) {
         skipped.push({ symbol: s.symbol, reason: "fit không hội tụ (chuỗi ngắn)" });
@@ -516,6 +577,7 @@ export async function runSsSurpriseCheck(): Promise<SsSurpriseCycleResult> {
     }
 
     if (checked.length === 0) {
+      await auditSkip("surprise", "skip-insufficient-data", "0 mã đủ điều kiện kiểm định");
       return { outcome: "skip-insufficient-data", reason: "0 mã đủ điều kiện kiểm định" };
     }
 
@@ -529,6 +591,7 @@ export async function runSsSurpriseCheck(): Promise<SsSurpriseCycleResult> {
         entityId: "ss-surprise",
         after: JSON.stringify({
           date: ictDate(),
+          calendarDays: calendar.length,
           checked,
           skipped,
           flaggedCount,
@@ -545,6 +608,11 @@ export async function runSsSurpriseCheck(): Promise<SsSurpriseCycleResult> {
 
     return { outcome: "ran", checked: checked.length, flagged: flaggedCount, tier };
   } catch (err) {
+    await auditSkip(
+      "surprise",
+      "error",
+      err instanceof Error ? err.message : String(err)
+    );
     return {
       outcome: "error",
       reason: err instanceof Error ? err.message : String(err),

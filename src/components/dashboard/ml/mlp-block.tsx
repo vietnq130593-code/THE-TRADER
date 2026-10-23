@@ -83,16 +83,21 @@ function ServingArchBadge({
 /* ───────────── Task 176 · tầng State Space (khối kiểm định 4 ô) ───────────── */
 
 /**
- * SsShadowNote — STATE_SPACE_BLUEPRINT Phase 1 (quy tắc 7: hiển thị mới theo
- * khối kiểm định 4 ô kiểu W3/W4). 4 ô: (1) chế độ bóng/live + ngày n/14,
- * (2) log-score A/B mới vs cũ (SS-11 — điều kiện hoán đổi), (3) guard ngạc
- * nhiên CUSUM SS-7 (đọc-only Phase 1), (4) kill-switch 2 tầng. Không có dữ
- * liệu (API cũ/chưa chu kỳ nào) → ẩn im lặng như W3 (không bịa trạng thái).
+ * SsShadowNote — STATE_SPACE_BLUEPRINT Phase 1 + Phase 2 (quy tắc 7: hiển thị
+ * mới theo khối kiểm định 4 ô kiểu W3/W4). Hàng 1 (Task 176): (1) chế độ
+ * bóng/live + ngày n/14, (2) log-score A/B mới vs cũ (SS-11), (3) guard ngạc
+ * nhiên CUSUM SS-7 (đọc-only), (4) kill-switch 2 tầng. Hàng 2 (Task 178):
+ * (5) CI80 dự báo rổ h=5 (SS-2 bullet 3 — driver mới predictive variance vs
+ * driver cũ heuristic), (6) cờ dữ liệu SS-8 aux residuals (OUTLIER/LEVEL_SHIFT
+ * read-only), (7) β động SS-5 TVP so VNINDEX, (8) kill-switch 2 tầng Phase 2.
+ * Không có dữ liệu (API cũ/chưa chu kỳ nào) → ẩn im lặng như W3 (không bịa).
  */
 function SsShadowNote({ ss }: { ss: MlSsStatus | null }) {
   if (!ss) return null;
   const live = ss.mode === "live";
   const winning = ss.cumulativeAdv != null && ss.cumulativeAdv > 0;
+  const fmtPct = (v: number) =>
+    `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
   return (
     <div className="rounded-lg border bg-muted/20 px-3 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -180,12 +185,107 @@ function SsShadowNote({ ss }: { ss: MlSsStatus | null }) {
           </div>
         </div>
       </div>
+      {/* ───── Task 178 · Phase 2 — hàng 4 ô thứ hai (additive — ẩn khi chưa có) ───── */}
+      {(ss.forecast != null || ss.lastDataFlagAt != null || ss.lastBetaAt != null ||
+        ss.dataFlagEnabled != null || ss.betaEnabled != null) && (
+        <div className="mt-1.5 grid grid-cols-1 gap-1.5 min-[420px]:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-md bg-background/60 px-2 py-1.5">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              CI80 dự báo rổ h=5 (SS-2)
+            </div>
+            <div className="text-xs font-semibold tabular-nums">
+              {ss.forecast?.newDriver != null || ss.forecast?.oldDriver != null ? (
+                <>
+                  {ss.forecast?.newDriver != null ? (
+                    <>
+                      mới <span className="text-muted-foreground">{fmtPct(ss.forecast.newDriver.lowPct)}…{fmtPct(ss.forecast.newDriver.highPct)}%</span>
+                    </>
+                  ) : null}
+                  {ss.forecast?.newDriver != null && ss.forecast?.oldDriver != null ? (
+                    <span className="text-muted-foreground"> · </span>
+                  ) : null}
+                  {ss.forecast?.oldDriver != null ? (
+                    <>
+                      cũ <span className="text-muted-foreground">{fmtPct(ss.forecast.oldDriver.lowPct)}…{fmtPct(ss.forecast.oldDriver.highPct)}%</span>
+                    </>
+                  ) : null}
+                  <span className="block text-[10px] font-normal text-muted-foreground">
+                    mới: mean ± 1,2816·sd (predictive variance MLE) · cũ: heuristic Z80·σ√h
+                  </span>
+                </>
+              ) : (
+                <span className="text-muted-foreground">— chưa có dòng bóng</span>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md bg-background/60 px-2 py-1.5">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              Cờ dữ liệu SS-8 (aux residuals)
+            </div>
+            <div className="text-xs font-semibold tabular-nums">
+              {ss.lastDataFlagChecked != null ? (
+                <>
+                  {ss.lastDataFlagOutliers ?? 0} outlier · {ss.lastDataFlagLevelShifts ?? 0} level-shift{" "}
+                  <span className="text-muted-foreground">/ {ss.lastDataFlagChecked} mã</span>
+                  <span className="block text-[10px] font-normal text-muted-foreground">
+                    đọc-only Phase 2 — OUTLIER = dữ liệu bẩn · LEVEL_SHIFT = đổi chế
+                  </span>
+                </>
+              ) : (
+                <span className="text-muted-foreground">— chưa chạy</span>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md bg-background/60 px-2 py-1.5">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              β động SS-5 (TVP vs VNINDEX)
+            </div>
+            <div className="text-xs font-semibold tabular-nums">
+              {ss.lastBetaChecked != null ? (
+                <>
+                  {(ss.topBetas ?? [])
+                    .map((b) => `${b.symbol} β=${b.beta.toFixed(2)}±${b.betaSd.toFixed(2)}`)
+                    .join(" · ") || `${ss.lastBetaChecked} mã`}
+                  {ss.lastBetaChecked != null && (ss.topBetas?.length ?? 0) > 0 ? (
+                    <span className="block text-[10px] font-normal text-muted-foreground">
+                      {ss.lastBetaChecked} mã · {ss.lastBetaDestabilising ?? 0} destabilising (Var β phình)
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                <span className="text-muted-foreground">— chưa chạy</span>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md bg-background/60 px-2 py-1.5">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              Kill-switch Phase 2
+            </div>
+            <div className="text-xs font-semibold">
+              {ss.dataFlagEnabled == null && ss.betaEnabled == null ? (
+                <span className="text-muted-foreground">— API chưa có tầng Phase 2</span>
+              ) : (
+                <>
+                  <span className={ss.dataFlagEnabled ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                    ml-ss-dataflag {ss.dataFlagEnabled ? "BẬT" : "TẮT"}
+                  </span>{" "}
+                  ·{" "}
+                  <span className={ss.betaEnabled ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                    ml-ss-beta {ss.betaEnabled ? "BẬT" : "TẮT"}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
         Quy tắc hoán đổi: đủ {ss.totalDays} ngày bóng và log-score (SS-11) trung
         bình ngày của Holt-SS (MLE + predictive variance) vượt driver Holt
         heuristic cũ thì evidence A15 tự tắt, A15b lên thay — không chạy song
         song hai driver cùng nguồn (đếm kép thông tin trend). Thua thì bóng
-        tiếp. <span className="sr-only"> — {ss.schedule}</span>
+        tiếp. Cờ SS-8/β SS-5 là kiểm định đọc-only — không tự chặn lệnh.{" "}
+        <span className="sr-only"> — {ss.schedule}</span>
       </p>
     </div>
   );

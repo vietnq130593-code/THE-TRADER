@@ -63,12 +63,25 @@ function meanOf(sum: number, n: number): number {
   return n > 0 ? sum / n : 0;
 }
 
-/** Var mẫu (n−1) — helper nội bộ. */
-function varOf(xs: number[]): number {
-  if (xs.length < 2) return 1e-6;
-  const mean = xs.reduce((s, x) => s + x, 0) / xs.length;
-  const v = xs.reduce((s, x) => s + (x - mean) * (x - mean), 0) / (xs.length - 1);
-  return Number.isFinite(v) && v > 0 ? v : 1e-6;
+/** Var mẫu (n−1) — helper nội bộ. SS-3: lọc null trước khi tính. */
+function varOf(xs: (number | null)[]): number {
+  const v = xs.filter((x): x is number => x != null && Number.isFinite(x));
+  if (v.length < 2) return 1e-6;
+  const mean = v.reduce((s, x) => s + x, 0) / v.length;
+  const out = v.reduce((s, x) => s + (x - mean) * (x - mean), 0) / (v.length - 1);
+  return Number.isFinite(out) && out > 0 ? out : 1e-6;
+}
+
+/** 2 phần tử CÓ MẶT đầu tiên — khởi tạo Holt/LLT trên chuỗi có lỗ (SS-3). */
+function firstTwoPresent(xs: (number | null)[]): { a: number; b: number } | null {
+  let a: number | null = null;
+  for (const x of xs) {
+    if (x != null && Number.isFinite(x)) {
+      if (a == null) a = x;
+      else return { a, b: x };
+    }
+  }
+  return null;
 }
 
 /**
@@ -76,18 +89,25 @@ function varOf(xs: number[]): number {
  * tại t chỉ dùng dữ liệu ≤ t). Horizons mặc định [1, 5] — 1 bước (calibration
  * tinh nhất) + 5 bước (đúng horizon evidence thật của cả 2 driver).
  * Trả null khi cửa sổ quá ngắn (< 90 phiên sau khi chia).
+ * SS-3 (Task 178): closes chấp nhận null (phiên thiếu) — driver mới skip-update
+ * (variance phình trung thực), driver cũ bỏ cập nhật Holt (level/trend giữ
+ * nguyên) — 2 driver cùng xử lý lỗ trung thực, so sánh công bằng.
  */
 export function holdoutLogScores(
-  closes: number[],
+  closes: (number | null)[],
   opts: { trainN?: number; horizons?: number[] } = {}
 ): HoldoutLogScores | null {
   const n = closes.length;
-  if (n < 90) return null;
+  // Số phiên lịch (kể cả null) phải ≥ 90; số CÓ MẶT cũng ≥ 90 (fit cần dữ liệu)
+  const presentCount = closes.filter((c): c is number => c != null && Number.isFinite(c)).length;
+  if (n < 90 || presentCount < 90) return null;
   const holdoutN = Math.min(60, Math.floor(n / 4));
   const trainN = opts.trainN ?? n - holdoutN;
   if (trainN < 60 || n - trainN < 20) return null;
   const horizons = (opts.horizons ?? [1, 5]).slice().sort((a, b) => a - b);
   const train = closes.slice(0, trainN);
+  const initPair = firstTwoPresent(train);
+  if (!initPair) return null;
 
   /* ── Driver MỚI: fit train + filter xuyên holdout (tham số đóng băng) ── */
   const fit = holtSsFit(train);
@@ -112,11 +132,12 @@ export function holdoutLogScores(
   // 1-bước ngoài mẫu (trạng thái tại t−1 chỉ thấy dữ liệu ≤ t−1: PIT).
   // burn-in 0: likelihood này KHÔNG dùng làm mục tiêu tối ưu (fit đã xong với
   // burnIn=5 trên train); đây chỉ lấy mảng trạng thái từng bước.
+  const kappa = 1e6 * Math.max(varOf(train), Number.MIN_VALUE);
   const full = kalmanFilter(closes, spec, {
-    a: [train[0], train[1] - train[0]],
+    a: [initPair.a, initPair.b - initPair.a],
     P: [
-      [1e6 * Math.max(varOf(train), Number.MIN_VALUE), 0],
-      [0, 1e6 * Math.max(varOf(train), Number.MIN_VALUE)],
+      [kappa, 0],
+      [0, kappa],
     ],
   }, { burnIn: 0 });
 
@@ -127,17 +148,19 @@ export function holdoutLogScores(
       for (let t = trainN; t < n; t++) {
         const s = full.steps[t];
         if (s.v != null && s.F != null) {
-          sum += logNormalDensity(closes[t], s.aPred[0], s.F);
+          sum += logNormalDensity(closes[t] as number, s.aPred[0], s.F);
           cnt++;
         }
       }
     } else {
       for (let t = trainN; t <= n - 1 - h; t++) {
+        const target = closes[t + h];
+        if (target == null) continue; // SS-3: mục tiêu thiếu → không chấm
         const s = full.steps[t];
         const pts = kalmanForecast(spec, s.aUpd, s.PUpd, h);
         const p = pts[pts.length - 1];
         if (p) {
-          sum += logNormalDensity(closes[t + h], p.mean, p.variance);
+          sum += logNormalDensity(target, p.mean, p.variance);
           cnt++;
         }
       }
@@ -147,13 +170,17 @@ export function holdoutLogScores(
 
   /* ── Driver CŨ: Holt heuristic qua train (σ đóng băng) + xuyên holdout ── */
   // residualSigma từ train (đóng băng — cùng kỷ luật freeze như driver mới).
-  let level = train[0];
-  let trend = train[1] - train[0];
+  // SS-3: y thiếu → BỎ cập nhật Holt (level/trend giữ nguyên — không bịa số).
+  let level = initPair.a;
+  let trend = initPair.b - initPair.a;
   const residuals: number[] = [];
   for (let t = 1; t < trainN; t++) {
-    residuals.push(train[t] - (level + trend));
+    const y = train[t];
+    if (y == null) continue; // skip-update
+    // Dự đoán 1-bước-lùi: dùng trạng thái TRƯỚC khi thấy y_t
+    residuals.push(y - (level + trend));
     const prevLevel = level;
-    level = OLD_ALPHA * train[t] + (1 - OLD_ALPHA) * (level + trend);
+    level = OLD_ALPHA * y + (1 - OLD_ALPHA) * (level + trend);
     trend = OLD_BETA * (level - prevLevel) + (1 - OLD_BETA) * trend;
   }
   const rMean = residuals.reduce((s, x) => s + x, 0) / Math.max(1, residuals.length);
@@ -168,8 +195,10 @@ export function holdoutLogScores(
   const statesHoldout: { level: number; trend: number }[] = [];
   for (let t = trainN; t < n; t++) {
     statesHoldout.push({ level, trend });
+    const y = closes[t];
+    if (y == null) continue; // SS-3 skip-update
     const prevLevel = level;
-    level = OLD_ALPHA * closes[t] + (1 - OLD_ALPHA) * (level + trend);
+    level = OLD_ALPHA * y + (1 - OLD_ALPHA) * (level + trend);
     trend = OLD_BETA * (level - prevLevel) + (1 - OLD_BETA) * trend;
   }
 
@@ -178,19 +207,25 @@ export function holdoutLogScores(
     let cnt = 0;
     if (h === 1) {
       for (let t = trainN; t < n; t++) {
+        const y = closes[t];
+        if (y == null) continue; // SS-3
         const st = statesHoldout[t - trainN]; // trạng thái TRƯỚC khi thấy y_t
+        if (!st) continue;
         const pred = st.level + st.trend;
-        sum += logNormalDensity(closes[t], pred, sigma2Floor);
+        sum += logNormalDensity(y, pred, sigma2Floor);
         cnt++;
       }
     } else {
       for (let t = trainN; t <= n - 1 - h; t++) {
+        const target = closes[t + h];
+        if (target == null) continue; // SS-3
         // Dự báo h-bước từ trạng thái SAU khi thấy y_t: statesHoldout[t+1−trainN]
         // là trạng thái sau cập nhật y_t (trạng thái trước y_{t+1}).
         const st = statesHoldout[t - trainN + 1] ?? statesHoldout[statesHoldout.length - 1];
+        if (!st) continue;
         const pred = st.level + h * st.trend;
         const varH = sigma2Floor * h; // hàm ý từ CI80 heuristic: σ·√h ⇒ var σ²·h
-        sum += logNormalDensity(closes[t + h], pred, varH);
+        sum += logNormalDensity(target, pred, varH);
         cnt++;
       }
     }

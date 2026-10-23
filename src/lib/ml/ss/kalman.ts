@@ -59,6 +59,9 @@ export interface KalmanStep {
   F: number | null;
   /** Innovation chuẩn hoá e_t = v/√F — thước "độ ngạc nhiên" SS-7. */
   e: number | null;
+  /** True khi F degenerate (P triệt để + H=0 — nghiệm biên F4): K=0,
+  * smoother/aux phải coi như KHÔNG có cập nhật (F-177-4 Task 177). */
+  degenerate?: boolean;
   aPred: number[];
   PPred: number[][];
   aUpd: number[];
@@ -118,12 +121,15 @@ function symmetrise(P: number[][]): number[][] {
  * burnIn: bỏ m điểm quan sát CÓ MẶT ĐẦU khỏi likelihood (Phụ lục A — đoạn
  * khởi tạo xấp xỉ diffuse hữu hạn chưa ổn định; bước bị bỏ VẪN cập nhật
  * trạng thái, chỉ không đóng góp vào ℓ).
+ * ZSeq (Task 178 — SS-5 TVP ch. 8 + SS-9 seasonal dummy): Z_t đổi theo
+ * bước — truyền mảng cùng độ dài ys; thiếu phần tử → dùng spec.Z. Đường
+ * không truyền giữ NGUYÊN VĂN hành vi cũ (regression p176/p178).
  */
 export function kalmanFilter(
   ys: (number | null)[],
   spec: KalmanSpec,
   init: KalmanInit,
-  opts: { burnIn?: number } = {}
+  opts: { burnIn?: number; ZSeq?: number[][] } = {}
 ): KalmanFilterResult {
   const burnIn = Math.max(0, Math.floor(opts.burnIn ?? 0));
   const n = ys.length;
@@ -148,11 +154,12 @@ export function kalmanFilter(
         aUpd: aUpd.slice(), PUpd: PUpd.map((r) => r.slice()),
       });
     } else {
-      const zA = spec.Z.reduce((s, z, i) => s + z * aPred[i], 0);
+      const Zt = opts.ZSeq && opts.ZSeq[t] ? opts.ZSeq[t]! : spec.Z;
+      const zA = Zt.reduce((s, z, i) => s + z * aPred[i], 0);
       const v = y - zA;
       // F = Z·P·Z' + H
-      const zPz = spec.Z.reduce(
-        (s, z, i) => s + z * spec.Z.reduce((s2, z2, j) => s2 + z2 * PPred[i][j], 0),
+      const zPz = Zt.reduce(
+        (s, z, i) => s + z * Zt.reduce((s2, z2, j) => s2 + z2 * PPred[i][j], 0),
         0
       );
       const F = zPz + spec.H;
@@ -166,13 +173,13 @@ export function kalmanFilter(
         seen++;
         if (seen > burnIn) logLik += -0.5 * (Math.log(2 * Math.PI * Fsafe) + (v * v) / Fsafe);
         steps.push({
-          t, y, v, F: Fsafe, e,
+          t, y, v, F: Fsafe, e, degenerate: true,
           aPred: aPred.slice(), PPred: PPred.map((r) => r.slice()),
           aUpd: aUpd.slice(), PUpd: PUpd.map((r) => r.slice()),
         });
       } else {
         // K = P·Z'/F (m×1)
-        const PZ = PPred.map((row) => row.reduce((s, p, j) => s + p * spec.Z[j], 0));
+        const PZ = PPred.map((row) => row.reduce((s, p, j) => s + p * Zt[j], 0));
         aUpd = aPred.map((a, i) => a + (PZ[i] / Fsafe) * v);
         // P − K·F·K' ≡ P − (PZ·PZ')/F (dạng ổn định số học — Joseph rút gọn)
         PUpd = symmetrise(PPred.map((row, i) => row.map((p, j) => p - (PZ[i] * PZ[j]) / Fsafe)));
@@ -249,19 +256,23 @@ export function kalmanSmoother(spec: KalmanSpec, steps: KalmanStep[]): number[][
     const s = steps[t];
     // r_{t−1} = Z_t'F_t^{−1}v_t + L_t'·r_t · L_t = T(I − K_tZ_t)
     let rPrev: number[];
-    if (s.v != null && s.F != null && s.F > 0) {
+    if (s.v != null && s.F != null && s.F > 0 && !s.degenerate) {
+      // Capture local — narrowing không sống sót trong closure (tsc strict)
+      const vT = s.v;
+      const FT = s.F;
       const PZ = s.PPred.map((row) => row.reduce((acc, p, j) => acc + p * spec.Z[j], 0));
       const L = matMul(
         spec.T,
         spec.T.map((row, i) =>
-          row.map((_, j) => (i === j ? 1 : 0) - (PZ[i] / s.F!) * spec.Z[j])
+          row.map((_, j) => (i === j ? 1 : 0) - (PZ[i] / FT) * spec.Z[j])
         )
       );
-      const ZFv = spec.Z.map((z) => (z * s.v) / s.F!);
+      const ZFv = spec.Z.map((z) => (z * vT) / FT);
       const LTr = matVec(matT(L), r);
       rPrev = ZFv.map((zf, i) => zf + LTr[i]);
     } else {
-      // y thiếu ⇒ K_t = 0 ⇒ L_t = T_t ⇒ r_{t−1} = T_t'·r_t (chuẩn ch. 4/5)
+      // y thiếu HOẶC F degenerate (F-177-4 Task 177 — K_t = 0 ⇒ L_t = T_t ⇒
+      // KHÔNG chia F ~ MIN_VALUE như trước; r đi qua không đổi thành phần cập nhật)
       rPrev = matVec(matT(spec.T), r);
     }
     // α̂_{t|T} = a_{t|t−1} + P_{t|t−1}·r_{t−1}
@@ -269,4 +280,124 @@ export function kalmanSmoother(spec: KalmanSpec, steps: KalmanStep[]): number[][
     r = rPrev;
   }
   return alpha;
+}
+
+/* ───────────── Task 178 · SS-8 — AUXILIARY RESIDUALS (ch. 9) ───────────── */
+
+/** Phần dư phụ trợ chuẩn hoá một bước (SS-8 — Durbin & Koopman 2012 ch. 9). */
+export interface AuxResidual {
+  /** Chỉ số bước (0-based — caller map về ngày). */
+  t: number;
+  /** ε̂_t = E(ε_t | y_1..T) — sốc QUAN SÁT (outlier giá). */
+  uHat: number;
+  /** √Var(ε̂_t) — chuẩn hoá (null khi ≤0/NaN: bỏ cờ trung thực). */
+  uSd: number | null;
+  /** η̂_t từng chiều trạng thái (chi 0 = sốc LEVEL · chi 1 = sốc TREND). */
+  etaHat: number[];
+  /** √diag Var(η̂_t) từng chiều (0 = sentinel ≤0 → caller bỏ cờ chiều đó). */
+  etaSd: number[];
+  /** Quan sát có mặt + F lành ở bước này không (false ⇒ chỉ có state residual). */
+  observed: boolean;
+}
+
+export interface AuxResidualsResult {
+  aux: AuxResidual[];
+  /** Số lần phương sai chuẩn hoá ≤0 bị bỏ (degenerate — đếm trung thực). */
+  skippedVariance: number;
+}
+
+/**
+ * kalmanAuxResiduals — SMOOTHED DISTURBANCE RESIDUALS (SS-8 · ch. 4.4.4 + 9):
+ *   ε̂_t = H(F_t^{-1}v_t − K_t'·r_t) · Var(ε̂_t) = H − Z(P − P·N_{t−1}·P)Z'
+ *   η̂_t = Q·R'·r_t                    · Var(η̂_t) = Q·R'·N_t·R·Q
+ * với r_t/N_t từ backward pass (r_T = N_T = 0 · L_t = T(I − K_tZ_t)):
+ *   r_{t−1} = Z'F^{-1}v + L'r_t · N_{t−1} = Z'F^{-1}Z + L'N_tL
+ * (y thiếu hoặc F degenerate ⇒ K=0 ⇒ L=T — r/N đi qua thuần thành phần cập
+ * nhật; ε̂_t chỉ tính khi quan sát có mặt + F lành.) Var(ε̂) kiểm chứng chéo
+ * với dạng đại số H²(F^{-1}+K'N_tK) ở p178 T-P2-4 (hai dạng tương đương —
+ * bảo hiểm chống sai ký hiệu; suy ra bằng law-of-total-variance + kiểm biên
+ * t=T: Var(ε̂_T) = H²/F khớp hậu nghiệm lọc 1 bước). AUDIT-ONLY (quy tắc 2).
+ */
+export function kalmanAuxResiduals(
+  spec: KalmanSpec,
+  steps: KalmanStep[],
+  opts: { ZSeq?: number[][] } = {}
+): AuxResidualsResult {
+  const n = steps.length;
+  if (n === 0) return { aux: [], skippedVariance: 0 };
+  const m = spec.T.length;
+  const aux: AuxResidual[] = [];
+  let skippedVariance = 0;
+  let r: number[] = Array(m).fill(0); // r_T = 0
+  let N: number[][] = Array.from({ length: m }, () => Array(m).fill(0)); // N_T = 0
+  const eye = (k: number): number[][] =>
+    Array.from({ length: k }, (_, i) => Array.from({ length: k }, (_, j) => (i === j ? 1 : 0)));
+
+  for (let t = n - 1; t >= 0; t--) {
+    const s = steps[t];
+    const Zt = opts.ZSeq && opts.ZSeq[t] ? opts.ZSeq[t]! : spec.Z;
+    const healthy = s.v != null && s.F != null && s.F > 0 && !s.degenerate;
+
+    // η̂_t = Q·R'·r_t (r_t = giá trị TRƯỚC contribution bước t) — luôn tính
+    // được (state disturbance tồn tại kể cả ngày y thiếu — tương thích SS-3).
+    const Rr = matVec(matT(spec.R), r); // R'·r_t (r×1)
+    const etaHat = matVec(spec.Q, Rr); // Q·R'·r_t (r×1)
+    // Var(η̂_t) = Q·R'·N_t·R·Q — chặn âm từng chiều (trung thực, không bịa)
+    const RN = matMul(matT(spec.R), N);
+    const RNR = matMul(RN, spec.R);
+    const QRNR = matMul(matMul(spec.Q, RNR), spec.Q);
+    const etaSd: number[] = [];
+    for (let j = 0; j < m; j++) {
+      const v = QRNR[j]?.[j] ?? -1;
+      if (v > 0 && Number.isFinite(v)) etaSd.push(Math.sqrt(v));
+      else {
+        etaSd.push(0); // sentinel ≤0 → caller bỏ cờ chiều này
+        skippedVariance++;
+      }
+    }
+
+    let uHat = 0;
+    let uSd: number | null = null;
+    let rPrev: number[];
+    let NPrev: number[][];
+    if (healthy) {
+      const F = s.F!;
+      const PZ = s.PPred.map((row) => row.reduce((acc, p, j) => acc + p * Zt[j], 0));
+      const K = PZ.map((pz) => pz / F);
+      // ε̂_t = H(F^{-1}v − K'r_t)
+      const Kr = K.reduce((acc, k, i) => acc + k * r[i], 0);
+      uHat = spec.H * (s.v! / F - Kr);
+      // L = T(I − KZ)
+      const L = matMul(
+        spec.T,
+        eye(m).map((row, i) => row.map((c, j) => c - K[i]! * Zt[j]))
+      );
+      const LTr = matVec(matT(L), r);
+      const ZFv = Zt.map((z) => (z * s.v!) / F);
+      rPrev = ZFv.map((zf, i) => zf + LTr[i]);
+      // N_{t−1} = Z'F^{-1}Z + L'N_tL
+      const ZFZ = Zt.map((zi) => Zt.map((zj) => (zi * zj) / F));
+      const LNL = matMul(matMul(matT(L), N), L);
+      NPrev = symmetrise(ZFZ.map((row, i) => row.map((c, j) => c + LNL[i]![j]!)));
+      // Var(ε̂_t) = H − Z(P − P·N_{t−1}·P)Z' (NPrev VỪA tính ở bước này)
+      const PNP = matMul(matMul(s.PPred, NPrev), s.PPred);
+      const Pdiff = symmetrise(s.PPred.map((row, i) => row.map((p, j) => p - PNP[i][j])));
+      const zPz = Zt.reduce(
+        (acc, z, i) => acc + z * Zt.reduce((s2, z2, j) => s2 + z2 * Pdiff[i][j], 0),
+        0
+      );
+      const uVar = spec.H - zPz;
+      if (uVar > 0 && Number.isFinite(uVar)) uSd = Math.sqrt(uVar);
+      else skippedVariance++;
+    } else {
+      // y thiếu / F degenerate: K=0 ⇒ L=T ⇒ r,N đi qua thuần túy
+      rPrev = matVec(matT(spec.T), r);
+      NPrev = symmetrise(matMul(matMul(matT(spec.T), N), spec.T));
+    }
+    aux.push({ t, uHat, uSd, etaHat, etaSd, observed: healthy });
+    r = rPrev;
+    N = NPrev;
+  }
+  aux.reverse(); // tăng dần theo t — dễ đọc audit
+  return { aux, skippedVariance };
 }

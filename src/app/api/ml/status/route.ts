@@ -32,6 +32,13 @@ import {
   getSsSurpriseSetting,
   ictDate,
 } from "@/lib/ml/ss/shadow";
+// Task 178 — Phase 2: đọc thêm tầng SS-8 (cờ dữ liệu) + SS-5 (β động).
+import {
+  SS_BETA_AUDIT_ACTION,
+  SS_DATA_FLAG_AUDIT_ACTION,
+  getSsBetaSetting,
+  getSsDataFlagSetting,
+} from "@/lib/ml/ss/phase2";
 import { PSI_WARN } from "@/lib/ml/psi";
 // F-18B (#132): đọc arch-string thật của bản serving từ weights JSON — dùng
 // chung parser chuẩn với /api/ml/architecture (nn.ts) thay vì đoán.
@@ -298,7 +305,11 @@ async function holdoutForServing(version: number | null): Promise<HoldoutPayload
 
 /* ───── Task 176 — trạng thái tầng State Space (additive · fail-soft null) ───── */
 
-/** Field `ss` — A/B bóng holt-ss (SS-1) + guard ngạc nhiên (SS-7). */
+/** z hai phía 80% ≈ 1,2816 (chuẩn CI80 của dự báo — mirror quant/forecast.ts). */
+const Z80 = 1.2816;
+
+/** Field `ss` — A/B bóng holt-ss (SS-1) + guard ngạc nhiên (SS-7) + Phase 2
+ * (Task 178): CI80 dự báo rổ (SS-2 bullet 3) + cờ dữ liệu SS-8 + β động SS-5. */
 interface SsPayload {
   /** Kill-switch ml-ss-shadow + chế độ (shadow mặc định — không đốt Bayes). */
   enabled: boolean;
@@ -307,27 +318,51 @@ interface SsPayload {
   days: number;
   totalDays: number;
   lastAt: string | null;
-  /** Log-score trung bình ngày (trung bình 2 horizon) — mới vs cũ. */
+  /** Log-score trung bình ngày (trung bình 2 horizon) — mới vs cũ.
+   * F-177-8 (Task 178): dedupe theo NGÀY ICT (dòng cuối mỗi ngày) — khớp
+   * metric verdict cumAdv một-dòng/ngày của lib shadow.ts. */
   newMeanLogScore: number | null;
   oldMeanLogScore: number | null;
   /** Lợi thế luỹ kế của driver mới (dương = đang thắng). */
   cumulativeAdv: number | null;
+  /** CI80 dự báo rổ h=5 từ dòng SS_AB_LOG gần nhất (SS-2 bullet 3 — Task 178):
+   * driver mới mean ± 1,2816·sd (predictive variance MLE) · driver cũ
+   * lowPct..highPct heuristic Z80·σ√h. */
+  forecast: {
+    asOf: string;
+    horizon: number;
+    newDriver: { meanPct: number; lowPct: number; highPct: number } | null;
+    oldDriver: { meanPct: number; lowPct: number; highPct: number } | null;
+  } | null;
   /** Guard ngạc nhiên SS-7 — kill-switch + lần gần nhất. */
   surpriseEnabled: boolean;
   lastSurpriseAt: string | null;
   lastSurpriseFlagged: number | null;
   lastSurpriseChecked: number | null;
   lastSurpriseTier: string | null;
+  /** Task 178 · SS-8 — cờ dữ liệu aux residuals (read-only). */
+  dataFlagEnabled: boolean;
+  lastDataFlagAt: string | null;
+  lastDataFlagOutliers: number | null;
+  lastDataFlagLevelShifts: number | null;
+  lastDataFlagChecked: number | null;
+  /** Task 178 · SS-5 — β động TVP so VNINDEX. */
+  betaEnabled: boolean;
+  lastBetaAt: string | null;
+  lastBetaChecked: number | null;
+  lastBetaDestabilising: number | null;
+  /** Top-3 β cao nhất (hiển thị khối kiểm định). */
+  topBetas: { symbol: string; beta: number; betaSd: number }[];
   /** Lịch engine (doc/hiển thị). */
   schedule: string;
 }
 
 const SS_SCHEDULE = "engine :3003 — T2–T6 16:50 ICT sau settle, 1 lần/ngày";
 
-/** Đọc AppSetting + AuditLog SS_* (3 query nhẹ, fail-soft null như W3). */
+/** Đọc AppSetting + AuditLog SS_* (query nhẹ, fail-soft null như W3). */
 async function ssPayload(): Promise<SsPayload | null> {
   try {
-    const [shadowSetting, surpriseSetting, abRows, surpriseRow] = await Promise.all([
+    const [shadowSetting, surpriseSetting, abRows, surpriseRow, flagSetting, betaSetting, flagRow, betaRow] = await Promise.all([
       getSsShadowSetting(),
       getSsSurpriseSetting(),
       db.auditLog.findMany({
@@ -341,49 +376,66 @@ async function ssPayload(): Promise<SsPayload | null> {
         orderBy: { createdAt: "desc" },
         select: { createdAt: true, after: true },
       }),
+      getSsDataFlagSetting(),
+      getSsBetaSetting(),
+      db.auditLog.findFirst({
+        where: { action: SS_DATA_FLAG_AUDIT_ACTION },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, after: true },
+      }),
+      db.auditLog.findFirst({
+        where: { action: SS_BETA_AUDIT_ACTION },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, after: true },
+      }),
     ]);
     const days = new Set(abRows.map((r) => ictDate(r.createdAt))).size;
     let newMean: number | null = null;
     let oldMean: number | null = null;
     let cumAdv: number | null = null;
     let lastAt: string | null = null;
+    let forecast: SsPayload["forecast"] = null;
     if (abRows.length > 0) {
       lastAt = abRows[0].createdAt.toISOString();
       let sumNew = 0;
       let sumOld = 0;
       let sumAdv = 0;
       let cnt = 0;
-      // Dedupe theo NGÀY ICT (desc → gặp ngày trước đã đếm thì bỏ dòng lặp
-      // cùng ngày — metric khớp verdict một-dòng/ngày của lib shadow.ts)
+      // Dedupe theo NGÀY ICT (desc → dòng ĐẦU gặp của mỗi ngày là dòng cuối
+      // cùng ngày) — metric khớp verdict một-dòng/ngày của lib shadow.ts.
+      // F-177-8 (Task 178): newMean/oldMean CŨNG dedupe theo ngày — trước đây
+      // trung bình MỌI dòng lệch display khi rerun cùng ngày (chỉ display,
+      // metric verdict vẫn đúng — nhưng display sai vẫn là sai).
       const seenDays = new Set<string>();
       let advByDay = 0;
       let advDays = 0;
       for (const r of abRows) {
         const day = ictDate(r.createdAt);
+        const firstOfDay = !seenDays.has(day);
         try {
-          const p = JSON.parse(r.after) as {
-            new?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } } };
-            old?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } } };
+          const p = JSON.parse(r.after ?? "{}") as {
+            new?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } }; forecastH5?: { meanPct?: unknown; sdPct?: unknown } };
+            old?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } }; forecastH5?: { expectedPct?: unknown; lowPct?: unknown; highPct?: unknown } };
             advDaily?: unknown;
           };
-          if (!seenDays.has(day)) {
+          if (firstOfDay) {
             seenDays.add(day);
             if (typeof p.advDaily === "number" && Number.isFinite(p.advDaily)) {
               advByDay += p.advDaily;
               advDays++;
             }
-          }
-          const n1 = p.new?.logScore?.h1?.mean;
-          const n5 = p.new?.logScore?.h5?.mean;
-          const o1 = p.old?.logScore?.h1?.mean;
-          const o5 = p.old?.logScore?.h5?.mean;
-          if (
-            typeof n1 === "number" && typeof n5 === "number" &&
-            typeof o1 === "number" && typeof o5 === "number"
-          ) {
-            sumNew += (n1 + n5) / 2;
-            sumOld += (o1 + o5) / 2;
-            cnt++;
+            const n1 = p.new?.logScore?.h1?.mean;
+            const n5 = p.new?.logScore?.h5?.mean;
+            const o1 = p.old?.logScore?.h1?.mean;
+            const o5 = p.old?.logScore?.h5?.mean;
+            if (
+              typeof n1 === "number" && typeof n5 === "number" &&
+              typeof o1 === "number" && typeof o5 === "number"
+            ) {
+              sumNew += (n1 + n5) / 2;
+              sumOld += (o1 + o5) / 2;
+              cnt++;
+            }
           }
           if (typeof p.advDaily === "number" && Number.isFinite(p.advDaily)) sumAdv += p.advDaily;
         } catch {
@@ -395,6 +447,33 @@ async function ssPayload(): Promise<SsPayload | null> {
         oldMean = sumOld / cnt;
         cumAdv = advDays > 0 ? advByDay / advDays : sumAdv / abRows.length;
       }
+      // SS-2 bullet 3 (Task 178): CI80 dự báo rổ h=5 từ dòng bóng gần nhất —
+      // driver mới mean ± 1,2816·sd (predictive variance) · driver cũ heuristic.
+      try {
+        const p = JSON.parse(abRows[0]!.after ?? "{}") as {
+          new?: { forecastH5?: { meanPct?: unknown; sdPct?: unknown } };
+          old?: { forecastH5?: { expectedPct?: unknown; lowPct?: unknown; highPct?: unknown } };
+        };
+        const m = p.new?.forecastH5?.meanPct;
+        const s = p.new?.forecastH5?.sdPct;
+        const e = p.old?.forecastH5?.expectedPct;
+        const lo = p.old?.forecastH5?.lowPct;
+        const hi = p.old?.forecastH5?.highPct;
+        forecast = {
+          asOf: lastAt,
+          horizon: 5,
+          newDriver:
+            typeof m === "number" && typeof s === "number" && s > 0
+              ? { meanPct: m, lowPct: m - Z80 * s, highPct: m + Z80 * s }
+              : null,
+          oldDriver:
+            typeof e === "number" && typeof lo === "number" && typeof hi === "number"
+              ? { meanPct: e, lowPct: lo, highPct: hi }
+              : null,
+        };
+      } catch {
+        forecast = null;
+      }
     }
     let lastSurpriseAt: string | null = null;
     let lastSurpriseFlagged: number | null = null;
@@ -403,7 +482,7 @@ async function ssPayload(): Promise<SsPayload | null> {
     if (surpriseRow) {
       lastSurpriseAt = surpriseRow.createdAt.toISOString();
       try {
-        const p = JSON.parse(surpriseRow.after) as {
+        const p = JSON.parse(surpriseRow.after ?? "{}") as {
           flaggedCount?: unknown;
           tier?: unknown;
           checked?: { length?: number } | { symbol?: string }[] | null;
@@ -411,6 +490,59 @@ async function ssPayload(): Promise<SsPayload | null> {
         if (typeof p.flaggedCount === "number") lastSurpriseFlagged = p.flaggedCount;
         if (typeof p.tier === "string") lastSurpriseTier = p.tier;
         if (Array.isArray(p.checked)) lastSurpriseChecked = p.checked.length;
+      } catch {
+        // after hỏng → null trung thực
+      }
+    }
+    // Task 178 · SS-8 — cờ dữ liệu aux residuals (read-only Phase 2)
+    let lastDataFlagAt: string | null = null;
+    let lastDataFlagOutliers: number | null = null;
+    let lastDataFlagLevelShifts: number | null = null;
+    let lastDataFlagChecked: number | null = null;
+    if (flagRow) {
+      lastDataFlagAt = flagRow.createdAt.toISOString();
+      try {
+        const p = JSON.parse(flagRow.after ?? "{}") as {
+          totals?: { outliers?: unknown; levelShifts?: unknown };
+          checked?: unknown;
+          symbols?: unknown;
+        };
+        if (typeof p.totals?.outliers === "number") lastDataFlagOutliers = p.totals.outliers;
+        if (typeof p.totals?.levelShifts === "number") lastDataFlagLevelShifts = p.totals.levelShifts;
+        if (typeof p.checked === "number") lastDataFlagChecked = p.checked;
+        else if (Array.isArray(p.symbols)) lastDataFlagChecked = p.symbols.length;
+      } catch {
+        // after hỏng → null trung thực
+      }
+    }
+    // Task 178 · SS-5 — β động TVP so VNINDEX
+    let lastBetaAt: string | null = null;
+    let lastBetaChecked: number | null = null;
+    let lastBetaDestabilising: number | null = null;
+    let topBetas: { symbol: string; beta: number; betaSd: number }[] = [];
+    if (betaRow) {
+      lastBetaAt = betaRow.createdAt.toISOString();
+      try {
+        const p = JSON.parse(betaRow.after ?? "{}") as {
+          checked?: unknown;
+          summary?: { destabilising?: unknown };
+          symbols?: { symbol?: unknown; beta?: unknown; betaSd?: unknown; destabilising?: unknown }[];
+        };
+        if (typeof p.checked === "number") lastBetaChecked = p.checked;
+        else if (Array.isArray(p.symbols)) lastBetaChecked = p.symbols.length;
+        if (typeof p.summary?.destabilising === "number") {
+          lastBetaDestabilising = p.summary.destabilising;
+        }
+        topBetas = (p.symbols ?? [])
+          .filter(
+            (s): s is { symbol: string; beta: number; betaSd: number } =>
+              typeof s.symbol === "string" &&
+              typeof s.beta === "number" &&
+              typeof s.betaSd === "number"
+          )
+          .sort((a, b) => b.beta - a.beta)
+          .slice(0, 3)
+          .map((s) => ({ symbol: s.symbol, beta: s.beta, betaSd: s.betaSd }));
       } catch {
         // after hỏng → null trung thực
       }
@@ -424,11 +556,22 @@ async function ssPayload(): Promise<SsPayload | null> {
       newMeanLogScore: newMean,
       oldMeanLogScore: oldMean,
       cumulativeAdv: cumAdv,
+      forecast,
       surpriseEnabled: surpriseSetting.enabled,
       lastSurpriseAt,
       lastSurpriseFlagged,
       lastSurpriseChecked,
       lastSurpriseTier,
+      dataFlagEnabled: flagSetting.enabled,
+      lastDataFlagAt,
+      lastDataFlagOutliers,
+      lastDataFlagLevelShifts,
+      lastDataFlagChecked,
+      betaEnabled: betaSetting.enabled,
+      lastBetaAt,
+      lastBetaChecked,
+      lastBetaDestabilising,
+      topBetas,
       schedule: SS_SCHEDULE,
     };
   } catch {

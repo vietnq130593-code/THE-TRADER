@@ -175,6 +175,13 @@ export interface MlSsStatus {
   oldMeanLogScore: number | null;
   /** Lợi thế luỹ kế (dương = driver mới đang thắng — điều kiện hoán đổi). */
   cumulativeAdv: number | null;
+  /** Task 178 · SS-2 bullet 3 — CI80 dự báo rổ h=5 (từ SS_AB_LOG gần nhất). */
+  forecast?: {
+    asOf: string;
+    horizon: number;
+    newDriver: { meanPct: number; lowPct: number; highPct: number } | null;
+    oldDriver: { meanPct: number; lowPct: number; highPct: number } | null;
+  } | null;
   /** Kill-switch guard ngạc nhiên ml-ss-surprise. */
   surpriseEnabled: boolean;
   lastSurpriseAt: string | null;
@@ -183,6 +190,18 @@ export interface MlSsStatus {
   lastSurpriseChecked: number | null;
   /** normal | surprise-broad (>30% rổ sốc — cùng tín hiệu với PSI). */
   lastSurpriseTier: string | null;
+  /** Task 178 · SS-8 — cờ dữ liệu aux residuals (read-only). */
+  dataFlagEnabled?: boolean;
+  lastDataFlagAt?: string | null;
+  lastDataFlagOutliers?: number | null;
+  lastDataFlagLevelShifts?: number | null;
+  lastDataFlagChecked?: number | null;
+  /** Task 178 · SS-5 — β động TVP so VNINDEX. */
+  betaEnabled?: boolean;
+  lastBetaAt?: string | null;
+  lastBetaChecked?: number | null;
+  lastBetaDestabilising?: number | null;
+  topBetas?: { symbol: string; beta: number; betaSd: number }[];
   /** Mô tả lịch engine (chỉ hiển thị). */
   schedule: string;
 }

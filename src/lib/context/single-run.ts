@@ -21,6 +21,9 @@ import { retrieveForCycleL2 } from "@/lib/ml/l2";
 import { buildXrelPromptBlock } from "@/lib/ml/xrel";
 // #106 C-VISION — tầm nhìn toàn cục hội đồng cho Chủ tịch.
 import { buildCouncilVisionBlock } from "@/lib/council/vision";
+// Task 178 (STATE_SPACE_BLUEPRINT Phase 2): cờ SS-8 + β động SS-5 cho
+// strategist single-run (parity với đường chu kỳ context-build.ts).
+import { buildSsContextBlock } from "@/lib/context/ss-block";
 
 /**
  * Prompt chạy riêng 1 agent LLM (PHASE3_BLUEPRINT §4.3) — chọn block theo vai:
@@ -98,10 +101,12 @@ export async function buildSingleRunPrompt(
       // allocation cần currentPct đo từ DB, không để LLM bịa.
       // #106 C-VISION + #108 v2.2: kèm TÀI KHOẢN HỘI ĐỒNG + THỊ TRƯỜNG
       // QUỐC TẾ THAM CHIẾU (fail-soft .catch như XREL — 3 đường parity #103).
-      const [weights, councilVision, intlReference] = await Promise.all([
+      // Task 178: kèm cờ SS-8/SS-5 (parity đường chu kỳ).
+      const [weights, councilVision, intlReference, ssBlock] = await Promise.all([
         buildPortfolioWeightsBlock().catch(() => null),
         buildCouncilVisionBlock().catch(() => null),
         buildIntlReferenceBlock().catch(() => null),
+        buildSsContextBlock().catch(() => null),
       ]);
       return {
         system: role.system,
@@ -118,6 +123,7 @@ export async function buildSingleRunPrompt(
           ...(intlReference ? ["", intlReference] : []),
           ...(weights ? ["", weights] : []),
           ...(councilVision ? ["", councilVision] : []),
+          ...(ssBlock ? ["", ssBlock] : []),
         ].join("\n\n"),
       };
     }

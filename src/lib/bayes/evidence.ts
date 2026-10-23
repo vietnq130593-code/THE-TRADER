@@ -32,12 +32,17 @@ import { holtForecastPct } from "@/lib/quant/forecast";
 // Task 176 — STATE_SPACE_BLUEPRINT Phase 1: driver holt-ss (A15b) bóng/live.
 import {
   getSsShadowSetting,
+  rollingSdPctH5,
   sdInflated,
   ssEvidenceDecision,
   zWeight,
   type SsEvidenceDecision,
   type SsShadowSetting,
 } from "@/lib/ml/ss/shadow";
+// Task 178 — SS-3: chỉ số rổ THEO LỊCH PHIÊN (null = phiên thiếu).
+import { alignedBasketIndex } from "@/lib/ml/ss/calendar";
+// (Task 176 — latent tsc error vá ở Task 178: holtSsFit/holtSsForecast thiếu import)
+import { holtSsFit, holtSsForecast } from "@/lib/ml/ss/holt-ss";
 import { aggregateSentiment } from "@/lib/quant/sentiment";
 import { historicalBaseRates, zscore } from "@/lib/quant/statistics";
 import { loadSegmentBaskets, loadTopSeries, latestFeatureSnapshot, type SegmentBasket } from "@/lib/ml/features";
@@ -203,7 +208,13 @@ export async function buildEvidenceBundle(
   // SS_AB_VERDICT thắng) hoán đổi evidence sang A15b ml-forecast.holt-ss +
   // TẮT driver cũ (không dual-live — 2 driver cùng closes sống song song trong
   // Bayes = đếm kép thông tin trend). Kill-switch off ⇒ nguyên văn đường cũ.
-  const basketCloses = buildBasketIndex(hoseBasket.map((s) => s.closes), PRIOR_SESSIONS);
+  // Task 178 · SS-3: basketCloses căn THEO LỊCH PHIÊN (union ngày rổ — mã
+  // thiếu phiên = null → cả 2 driver skip-update trung thực, so sánh A/B công
+  // bằng; chuỗi dày đồng nhất buildBasketIndex cũ — p178 T-P2-2 regression).
+  const basketCloses: (number | null)[] = alignedBasketIndex(
+    hoseBasket.map((s) => ({ dates: s.dates, closes: s.closes })),
+    PRIOR_SESSIONS
+  ).closes;
   const ssSetting = await getSsShadowSetting();
   const ssSwapped = await pushHoltSsEvidence(marketEvidence, ssSetting, basketCloses);
   if (!ssSwapped) {
@@ -223,7 +234,10 @@ export async function buildEvidenceBundle(
       });
     }
   }
-  const regime = classifyRegime(basketCloses);
+  // Task 178 · SS-3: classifyRegime giữ đầu vào compact (lọc null) — regime
+  // là SMA20/50 heuristic tầng QUANT (không phải driver forecast SS); chuỗi
+  // dày đồng nhất tuyệt đối như trước (p178 T-P2-2 regression).
+  const regime = classifyRegime(basketCloses.filter((c): c is number => c != null));
   if (regime.regime === "BULL_TREND" || regime.regime === "BEAR_TREND") {
     marketEvidence.push({
       source: "regime",
@@ -916,28 +930,18 @@ export function buildBasketIndex(closesBySymbol: number[][], sessions: number): 
 async function pushHoltSsEvidence(
   marketEvidence: BayesEvidence[],
   setting: SsShadowSetting,
-  basketCloses: number[]
+  basketCloses: (number | null)[]
 ): Promise<boolean> {
-  if (!setting.enabled || setting.mode !== "live" || basketCloses.length < 60) return false;
+  const presentCloses = basketCloses.filter((c): c is number => c != null);
+  if (!setting.enabled || setting.mode !== "live" || presentCloses.length < 60) return false;
   const fit = holtSsFit(basketCloses);
   if (!fit) return false;
   const fc = holtSsForecast(fit, basketCloses, 5);
   if (!fc) return false;
   const hIdx = 4; // h=5
-  // Guard sd cuộn SS-2 (mirror lib shadow.ts — cùng công thức, tính tại đây
-  // vì evidence chạy mỗi chu kỳ không đợi settle)
-  const rets: number[] = [];
-  for (let i = 0; i + 5 < basketCloses.length; i++) {
-    if (basketCloses[i] > 0) {
-      rets.push(((basketCloses[i + 5] - basketCloses[i]) / basketCloses[i]) * 100);
-    }
-  }
-  const rMean = rets.reduce((s, x) => s + x, 0) / Math.max(1, rets.length);
-  const rVar =
-    rets.length > 1
-      ? rets.reduce((s, x) => s + (x - rMean) * (x - rMean), 0) / (rets.length - 1)
-      : 0;
-  const rollingSd = Math.sqrt(Math.max(rVar, 0));
+  // Guard sd cuộn SS-2 — F-177-2 (Task 178): DÙNG CHUNG rollingSdPctH5 của
+  // shadow.ts (một nguồn sự thật — hết nhân đôi công thức drift risk).
+  const rollingSd = rollingSdPctH5(basketCloses);
   const sd5 = fc.sdPct[hIdx];
   const z5 = fc.z[hIdx];
   const decision: SsEvidenceDecision = ssEvidenceDecision(

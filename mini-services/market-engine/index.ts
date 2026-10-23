@@ -1475,7 +1475,8 @@ function ssDailyDue(): boolean {
 }
 
 /** POST /api/ml/ss-daily — route tự kill-switch từng tầng (ml-ss-shadow /
- *  ml-ss-surprise) + fail-soft; engine chỉ đôn đốc (pattern psiRetrain). */
+ *  ml-ss-surprise / ml-ss-dataflag / ml-ss-beta — Task 178 Phase 2 thêm 2
+ *  tầng) + fail-soft; engine chỉ đôn đốc (pattern psiRetrain). */
 async function ssDailyAndBroadcast(): Promise<void> {
   ssDailyInFlight = true;
   try {
@@ -1489,13 +1490,18 @@ async function ssDailyAndBroadcast(): Promise<void> {
     stats.lastSsDailyDate = ict.date;
     const shadow = (data as { shadow?: { outcome?: unknown; reason?: unknown; daysElapsed?: unknown } }).shadow;
     const surprise = (data as { surprise?: { outcome?: unknown; flagged?: unknown; checked?: unknown; tier?: unknown; reason?: unknown } }).surprise;
-    stats.lastSsDailyOutcome = `shadow:${String(shadow?.outcome ?? "?")} · surprise:${String(surprise?.outcome ?? "?")}`;
+    // Task 178 · Phase 2 — 2 tầng mới (additive parse: FE/route cũ không có vẫn "?")
+    const dataFlag = (data as { dataFlag?: { outcome?: unknown; outliers?: unknown; levelShifts?: unknown; checked?: unknown; reason?: unknown } }).dataFlag;
+    const beta = (data as { beta?: { outcome?: unknown; destabilising?: unknown; checked?: unknown; reason?: unknown } }).beta;
+    stats.lastSsDailyOutcome = `shadow:${String(shadow?.outcome ?? "?")} · surprise:${String(surprise?.outcome ?? "?")} · dataflag:${String(dataFlag?.outcome ?? "?")} · beta:${String(beta?.outcome ?? "?")}`;
     // Log 1 dòng/ngày (không rác như nhịp 15' của psi — SS chỉ chạy 1 lần).
     const shadowOut = String(shadow?.outcome ?? "?");
     const surpriseOut = String(surprise?.outcome ?? "?");
+    const dataFlagOut = String(dataFlag?.outcome ?? "?");
+    const betaOut = String(beta?.outcome ?? "?");
     log(
       "ss-daily",
-      `State Space hằng ngày: shadow ${shadowOut}${shadowOut === "ran" && typeof shadow?.daysElapsed === "number" ? ` (ngày ${String(shadow.daysElapsed)}/14)` : ""}${shadow?.reason ? ` — ${String(shadow.reason)}` : ""} · surprise ${surpriseOut}${surpriseOut === "ran" ? ` (${String(surprise?.flagged ?? "?")}/${String(surprise?.checked ?? "?")} mã sốc, tier ${String(surprise?.tier ?? "?")})` : ""}${surprise?.reason ? ` — ${String(surprise.reason)}` : ""}`
+      `State Space hằng ngày: shadow ${shadowOut}${shadowOut === "ran" && typeof shadow?.daysElapsed === "number" ? ` (ngày ${String(shadow.daysElapsed)}/14)` : ""}${shadow?.reason ? ` — ${String(shadow.reason)}` : ""} · surprise ${surpriseOut}${surpriseOut === "ran" ? ` (${String(surprise?.flagged ?? "?")}/${String(surprise?.checked ?? "?")} mã sốc, tier ${String(surprise?.tier ?? "?")})` : ""}${surprise?.reason ? ` — ${String(surprise.reason)}` : ""} · dataflag ${dataFlagOut}${dataFlagOut === "ran" ? ` (${String(dataFlag?.outliers ?? "?")} outlier · ${String(dataFlag?.levelShifts ?? "?")} level-shift/${String(dataFlag?.checked ?? "?")} mã)` : ""}${dataFlag?.reason ? ` — ${String(dataFlag.reason)}` : ""} · beta ${betaOut}${betaOut === "ran" ? ` (${String(beta?.checked ?? "?")} mã, ${String(beta?.destabilising ?? "?")} destabilising)` : ""}${beta?.reason ? ` — ${String(beta.reason)}` : ""}`
     );
     io.emit("ml-ss-daily", data);
   } catch (err) {

@@ -29,6 +29,7 @@
 import {
   kalmanFilter,
   kalmanForecast,
+  type KalmanFilterResult,
   type KalmanSpec,
 } from "@/lib/ml/ss/kalman";
 import { pUpFromPct } from "@/lib/ml/ss/gauss";
@@ -237,18 +238,20 @@ export interface LocalLevelFit extends SsFitBase {
   starts: { seed: number[]; logLik: number }[];
 }
 
-function validateCloses(closes: (number | null)[]): closes is number[] {
-  if (closes.length < SS_MIN_N) return false;
+function validateCloses(closes: (number | null)[]): boolean {
+  // SS-3: null = phiên thiếu (hợp lệ — skip-update ch. 5); chỉ đòi ≥ SS_MIN_N
+  // điểm CÓ MẶT + mọi điểm có mặt phải finite (log-giá có thể âm hợp lệ).
+  let present = 0;
   for (const c of closes) {
-    // Chỉ đòi FINITE — KHÔNG đòi > 0: SS-7 fit LOG-GIÁ (log có thể âm hợp
-    // lệ với giá < 1 — toán Kalman không cần dương). Guard dương chỉ nằm ở
-    // holtSsForecast (chia % theo close cuối — giá thật luôn dương).
-    if (c == null || !Number.isFinite(c)) return false;
+    if (c == null) continue; // thiếu — không phải lỗi
+    if (!Number.isFinite(c)) return false;
+    present++;
   }
-  return true;
+  return present >= SS_MIN_N;
 }
 
-/** Var của sai phân 1 bước — thước đo quy mô nhiễu dùng dựng mồi (floor chống 0). */
+/** Var của sai phân 1 bước — thước đo quy mô nhiễu dùng dựng mồi (floor chống 0).
+ * SS-3: chỉ dùng cặp liền kề CẢ HAI CÓ MẶT (bỏ qua khoảng trống). */
 function diffVar(ys: number[]): number {
   const d: number[] = [];
   for (let i = 1; i < ys.length; i++) d.push(ys[i] - ys[i - 1]);
@@ -296,12 +299,16 @@ function llSeeds(ys: number[]): number[][] {
  * holtSsFit — MLE local linear trend trên closes (SS-1). Trả null khi chuỗi
  * < 30 điểm hoặc chứa giá ≤ 0/NaN (fail-soft trung thực — không bịa fit).
  * Deterministic: mồi cố định, NM thuần, không RNG.
+ * SS-3 (Task 178 — ch. 5): chấp nhận null (phiên thiếu) — kalmanFilter bỏ
+ * bước cập nhật, trạng thái trôi theo T, P phình trung thực; đếm đủ 30 điểm
+ * CÓ MẶT là fit được. Chuỗi dày (không null) giữ NGUYÊN VĂN kết quả cũ.
  */
-export function holtSsFit(closes: number[], opts: { maxIter?: number } = {}): HoltSsFit | null {
+export function holtSsFit(closes: (number | null)[], opts: { maxIter?: number } = {}): HoltSsFit | null {
   if (!validateCloses(closes)) return null;
   const ys = closes;
-  const init = lltInit(ys);
-  const cap = SIGMA2_CAP_MULT * diffVar(ys);
+  const present = ys.filter((y): y is number => y != null && Number.isFinite(y));
+  const init = lltInit(present);
+  const cap = SIGMA2_CAP_MULT * diffVar(present);
   const nmOpts = {
     maxIter: Math.max(1, Math.floor(opts.maxIter ?? SS_NM_MAX_ITER)),
   };
@@ -313,7 +320,7 @@ export function holtSsFit(closes: number[], opts: { maxIter?: number } = {}): Ho
 
   const starts: { seed: number[]; logLik: number }[] = [];
   let best: { x: number[]; fx: number; iter: number; converged: boolean } | null = null;
-  for (const seed of lltSeeds(ys)) {
+  for (const seed of lltSeeds(present)) {
     const r = nelderMead(3, seed, negLik, nmOpts);
     starts.push({ seed, logLik: -r.fx });
     if (best == null || r.fx < best.fx) best = r;
@@ -354,12 +361,14 @@ export function holtSsFit(closes: number[], opts: { maxIter?: number } = {}): Ho
 /**
  * localLevelFit — MLE local level (ch. 2, 2 tham số). Dùng nghiệm thu TÀI LIỆU
  * (Nile — scripts/p176 T1) + baseline so sánh nhanh. Cùng sơ đồ khởi tạo/burn-in.
+ * SS-3: null-tolerant đồng bộ holtSsFit.
  */
-export function localLevelFit(closes: number[]): LocalLevelFit | null {
+export function localLevelFit(closes: (number | null)[]): LocalLevelFit | null {
   if (!validateCloses(closes)) return null;
   const ys = closes;
-  const init = llInit(ys);
-  const cap = SIGMA2_CAP_MULT * diffVar(ys);
+  const present = ys.filter((y): y is number => y != null && Number.isFinite(y));
+  const init = llInit(present);
+  const cap = SIGMA2_CAP_MULT * diffVar(present);
   const negLik = (x: number[]): number => {
     const [s2e, s2eta] = x.map((v) => Math.min(Math.max(v, 0), cap));
     const res = kalmanFilter(ys, localLevelSpec(s2e, s2eta), init, { burnIn: SS_BURN_IN });
@@ -367,7 +376,7 @@ export function localLevelFit(closes: number[]): LocalLevelFit | null {
   };
   const starts: { seed: number[]; logLik: number }[] = [];
   let best: { x: number[]; fx: number; iter: number; converged: boolean } | null = null;
-  for (const seed of llSeeds(ys)) {
+  for (const seed of llSeeds(present)) {
     const r = nelderMead(2, seed, negLik);
     starts.push({ seed, logLik: -r.fx });
     if (best == null || r.fx < best.fx) best = r;
@@ -424,12 +433,20 @@ export interface HoltSsForecast {
  */
 export function holtSsForecast(
   fit: HoltSsFit,
-  closes: number[],
+  closes: (number | null)[],
   horizon: number
 ): HoltSsForecast | null {
   const h = Math.max(1, Math.min(30, Math.round(horizon)));
-  if (closes.length === 0) return null;
-  const lastClose = closes[closes.length - 1];
+  // SS-3: neo % vào quan sát CÓ MẶT CUỐI (y_T thật) — null cuối chuỗi không
+  // được phép biến neo thành null (dự báo vẫn từ trạng thái lọc cuối).
+  let lastClose = 0;
+  for (let i = closes.length - 1; i >= 0; i--) {
+    const c = closes[i];
+    if (c != null && Number.isFinite(c)) {
+      lastClose = c;
+      break;
+    }
+  }
   if (!(lastClose > 0)) return null;
   const spec = localLinearTrendSpec(fit.sigma2Eps, fit.sigma2EtaMu, fit.sigma2EtaB);
   const pts = kalmanForecast(spec, fit.aFinal, fit.PFinal, h);
@@ -449,4 +466,28 @@ export function holtSsForecast(
     pUp: pUpFromPct(meanPct[lastIdx], sdPct[lastIdx]),
     lastClose,
   };
+}
+
+/* ──────────── Task 178 · SS-8 — refit steps cho auxiliary residuals ──────────── */
+
+/**
+ * holtSsRefitSteps — chạy LẠI filter với tham số đã fit (deterministic) trả
+ * KẾT QUẢ ĐẦY ĐỦ kèm steps từng bước — chu kỳ SS-8 cần steps (đầu vào của
+ * kalmanSmoother/kalmanAuxResiduals) mà HoltSsFit chỉ trả innovations/tóm
+ * tắt. Cùng init Phụ lục A trên các điểm có mặt → tái tạo đúng filter của
+ * fit (p178 kiểm chứng: logLik khớp fit.logLik tuyệt đối).
+ */
+export function holtSsRefitSteps(
+  closes: (number | null)[],
+  fit: HoltSsFit
+): KalmanFilterResult | null {
+  if (!validateCloses(closes)) return null;
+  const present = closes.filter((y): y is number => y != null && Number.isFinite(y));
+  const init = lltInit(present);
+  return kalmanFilter(
+    closes,
+    localLinearTrendSpec(fit.sigma2Eps, fit.sigma2EtaMu, fit.sigma2EtaB),
+    init,
+    { burnIn: SS_BURN_IN }
+  );
 }
