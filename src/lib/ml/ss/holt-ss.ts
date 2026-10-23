@@ -297,11 +297,14 @@ function llSeeds(ys: number[]): number[][] {
  * < 30 điểm hoặc chứa giá ≤ 0/NaN (fail-soft trung thực — không bịa fit).
  * Deterministic: mồi cố định, NM thuần, không RNG.
  */
-export function holtSsFit(closes: number[], _opts: { maxIter?: number } = {}): HoltSsFit | null {
+export function holtSsFit(closes: number[], opts: { maxIter?: number } = {}): HoltSsFit | null {
   if (!validateCloses(closes)) return null;
   const ys = closes;
   const init = lltInit(ys);
   const cap = SIGMA2_CAP_MULT * diffVar(ys);
+  const nmOpts = {
+    maxIter: Math.max(1, Math.floor(opts.maxIter ?? SS_NM_MAX_ITER)),
+  };
   const negLik = (x: number[]): number => {
     const [s2e, s2mu, s2b] = x.map((v) => Math.min(Math.max(v, 0), cap));
     const res = kalmanFilter(ys, localLinearTrendSpec(s2e, s2mu, s2b), init, { burnIn: SS_BURN_IN });
@@ -311,7 +314,7 @@ export function holtSsFit(closes: number[], _opts: { maxIter?: number } = {}): H
   const starts: { seed: number[]; logLik: number }[] = [];
   let best: { x: number[]; fx: number; iter: number; converged: boolean } | null = null;
   for (const seed of lltSeeds(ys)) {
-    const r = nelderMead(3, seed, negLik);
+    const r = nelderMead(3, seed, negLik, nmOpts);
     starts.push({ seed, logLik: -r.fx });
     if (best == null || r.fx < best.fx) best = r;
   }

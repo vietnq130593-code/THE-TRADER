@@ -353,13 +353,26 @@ async function ssPayload(): Promise<SsPayload | null> {
       let sumOld = 0;
       let sumAdv = 0;
       let cnt = 0;
+      // Dedupe theo NGÀY ICT (desc → gặp ngày trước đã đếm thì bỏ dòng lặp
+      // cùng ngày — metric khớp verdict một-dòng/ngày của lib shadow.ts)
+      const seenDays = new Set<string>();
+      let advByDay = 0;
+      let advDays = 0;
       for (const r of abRows) {
+        const day = ictDate(r.createdAt);
         try {
           const p = JSON.parse(r.after) as {
             new?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } } };
             old?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } } };
             advDaily?: unknown;
           };
+          if (!seenDays.has(day)) {
+            seenDays.add(day);
+            if (typeof p.advDaily === "number" && Number.isFinite(p.advDaily)) {
+              advByDay += p.advDaily;
+              advDays++;
+            }
+          }
           const n1 = p.new?.logScore?.h1?.mean;
           const n5 = p.new?.logScore?.h5?.mean;
           const o1 = p.old?.logScore?.h1?.mean;
@@ -380,7 +393,7 @@ async function ssPayload(): Promise<SsPayload | null> {
       if (cnt > 0) {
         newMean = sumNew / cnt;
         oldMean = sumOld / cnt;
-        cumAdv = sumAdv / abRows.length;
+        cumAdv = advDays > 0 ? advByDay / advDays : sumAdv / abRows.length;
       }
     }
     let lastSurpriseAt: string | null = null;

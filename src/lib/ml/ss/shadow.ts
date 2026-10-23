@@ -185,6 +185,11 @@ export function ssEvidenceDecision(
   if (setting.mode !== "live") {
     return { push: false, reason: "shadow-mode — KHÔNG đốt vào Bayes (quy tắc 6, tránh đếm kép)" };
   }
+  // Guard sd phình SS-2 — kiểm TRỰC TIẾP từ ngữ cảnh cuộn (một nguồn sự thật
+  // với caller đã pre-zero weight — 2 lớp phòng thủ cùng công thức).
+  if (sdInflated(fc.sdPct, ctx.rollingSdPctH5)) {
+    return { push: false, reason: "sd-guard phình — model tự nhận không biết (SS-2 fail-soft)" };
+  }
   if (fc.weight <= 0) {
     return { push: false, reason: "sd-guard phình — model tự nhận không biết (SS-2 fail-soft)" };
   }
@@ -287,7 +292,9 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
       ((ssMean(1) + ssMean(SS_EVIDENCE_HORIZON)) / 2 -
         (oldMean(1) + oldMean(SS_EVIDENCE_HORIZON)) / 2);
 
-    /* Số ngày bóng đã chạy (ngày ICT phân biệt từ audit) */
+    /* Số ngày bóng đã chạy (ngày ICT PHÂN BIỆT từ audit — chạy lặp cùng ngày
+     * không cộng: 14 lần POST tay trong 1 ngày KHÔNG được phép kích verdict
+     * sớm — đúng ngữ nghĩa "14 NGÀY bóng" của quy tắc 6) */
     const priorRows = await db.auditLog.findMany({
       where: { action: SS_SHADOW_AUDIT_ACTION },
       orderBy: { createdAt: "desc" },
@@ -295,12 +302,15 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
       select: { createdAt: true },
     });
     const days = new Set(priorRows.map((r) => ictDate(r.createdAt)));
-    const daysElapsed = days.size; // dòng sắp ghi sẽ cộng 1 nếu ngày mới
+    const today = ictDate();
+    const isNewDay = !days.has(today);
+    const daysElapsed = days.size; // dòng sắp ghi: +1 nếu ngày mới
 
     const after = JSON.stringify({
       phase: "ab-shadow",
       mode: setting.mode,
-      daysElapsed: daysElapsed + 1,
+      daysElapsed: daysElapsed + (isNewDay ? 1 : 0),
+      sameDayRerun: !isNewDay,
       totalDays: SS_AB_DAYS,
       window: { closes: basketCloses.length, trainN: ab.trainN, holdoutN: ab.holdoutN },
       new: {
@@ -363,34 +373,38 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
       },
     });
 
-    /* Verdict 14 ngày — tính MỘT LẦN (guard audit SS_AB_VERDICT tồn tại) */
+    /* Verdict 14 ngày — tính MỘT LẦN (guard audit SS_AB_VERDICT tồn tại).
+     * Chỉ tính trên NGÀY PHÂN BIỆT (isNewDay) — chống kích sớm bằng POST lặp
+     * cùng ngày (trên thì daysElapsed đã được sàn theo ngày riêng biệt). */
     let verdictNote: string | null = null;
-    if (daysElapsed + 1 >= SS_AB_DAYS && setting.mode === "shadow") {
+    if (isNewDay && daysElapsed + 1 >= SS_AB_DAYS && setting.mode === "shadow") {
       const already = await db.auditLog.findFirst({
         where: { action: SS_AB_VERDICT_AUDIT_ACTION },
         select: { id: true },
       });
       if (!already) {
-        // Lợi thế luỹ kế: trung bình advDaily trên mọi dòng bóng đã ghi
+        // Lợi thế luỹ kế: trung bình advDaily — MỘT DÒNG/NGÀY ICT (dòng cuối
+        // mỗi ngày; chạy lặp cùng ngày bị ghi đè khỏi trung bình — không lệch)
         const allRows = await db.auditLog.findMany({
           where: { action: SS_SHADOW_AUDIT_ACTION },
           orderBy: { createdAt: "asc" },
-          select: { after: true },
+          select: { createdAt: true, after: true },
           take: 120,
         });
-        let sumAdv = 0;
-        let cntAdv = 0;
+        const advByDay = new Map<string, number>();
         for (const r of allRows) {
           try {
             const p = JSON.parse(r.after) as { advDaily?: unknown };
             if (typeof p.advDaily === "number" && Number.isFinite(p.advDaily)) {
-              sumAdv += p.advDaily;
-              cntAdv++;
+              advByDay.set(ictDate(r.createdAt), p.advDaily); // asc → dòng cuối mỗi ngày thắng
             }
           } catch {
             // after hỏng — bỏ dòng (trung thực)
           }
         }
+        let sumAdv = 0;
+        for (const v of advByDay.values()) sumAdv += v;
+        const cntAdv = advByDay.size;
         const cumAdv = cntAdv > 0 ? sumAdv / cntAdv : 0;
         const win = cumAdv > 0;
         if (win) {
@@ -422,7 +436,7 @@ export async function runSsShadowCycle(): Promise<SsShadowCycleResult> {
 
     return {
       outcome: "ran",
-      daysElapsed: daysElapsed + 1,
+      daysElapsed: daysElapsed + (isNewDay ? 1 : 0),
       mode: setting.mode,
       adv,
       verdict: verdictNote,

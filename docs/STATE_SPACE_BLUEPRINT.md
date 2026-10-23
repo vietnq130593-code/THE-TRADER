@@ -3,7 +3,7 @@
 > Nguồn tri thức: **Durbin, J. & Koopman, S. J. (2012). Time Series Analysis by State Space Methods — 2nd edition.** Oxford University Press. (Bản 1: 2001; kèm SsfPack của Koopman–Shephard–Doornik.)
 > Tài liệu này tổng hợp tri thức cuốn sách và chi tiết hoá **cách áp dụng vào THE TRADER** theo từng module, có file code, guard PIT, kế hoạch nghiệm thu và lộ trình.
 > Bạn đọc đồng hành nên tra: Harvey (1989) *Forecasting, Structural Time Series Models and the Kalman Filter* (đối tác kết cấu cho phần structural/multivariate), Kim–Shephard–Chib (1998) cho stochastic volatility, Carter–Kohn (1994) cho simulation smoothing.
-> Ngày soạn: 22/10/2026 · Người soạn: Z.ai Code · Trạng thái: ĐỀ XUẤT, đã qua pass review kỹ sư AI/kiến trúc sư (v1.1 — 22/10/2026, chờ chủ sở hữu duyệt phạm vi Phase 1; xem mục Lịch sử hiệu đính cuối file).
+> Ngày soạn: 22/10/2026 · Người soạn: Z.ai Code · Trạng thái: **PHASE 1 ĐÃ TRIỂN KHAI (Task 176 — 23/10/2026): SS-1 holt-ss MLE + SS-2 predictive variance + SS-11 log-score + SS-7 CUSUM shadow — hermetic p176 36/36 PASS (Nile thật σ²ε=15 098,5 khớp sách 15 099 + đối chứng statsmodels), driver A15b chạy bóng 14 ngày, guard đọc-only**; v1.1 đã qua pass review kỹ sư AI/kiến trúc sư (22/10/2026; xem mục Lịch sử hiệu đính cuối file).
 
 ---
 
@@ -284,7 +284,7 @@ KHỞI TẠO (chuẩn hoá — áp cho mọi model SS):
 - D-LEDGER: Task 106 · meta v83 guard §1.5 giữ v73: Task 168
 
 ---
-*Tài liệu đề xuất — chưa có dòng code nào được viết cho SS-1..SS-12. Mọi con số hiện trạng trích từ DB/audit ngày 22/10/2026 (rl-q v22 · dlMlp v73 serving · v83 archived · L2 2372 chunk vector đầy đủ).*
+*Tài liệu đề xuất — Phase 1 đã viết code thật (Task 176, xem trên). Mọi con số hiện trạng trích từ DB/audit ngày 22/10/2026 (rl-q v22 · dlMlp v73 serving · v83 archived · L2 2372 chunk vector đầy đủ).*
 
 ## Lịch sử hiệu đính
 - **v1.0** (22/10/2026): so thảo đầu — 12 ứng dụng SS-1..SS-12.
