@@ -5738,3 +5738,24 @@ Stage Summary:
 - 7 quy tắc kiến trúc Phần IV giữ nguyên toàn bộ: thuần TS 0 dependency mới (6 file ss/: calendar/tvp/seasonal/phase2 mới + kalman/holt-ss/logscore/shadow mở rộng) · PIT lọc không mượt (smoother chỉ audit) · tham số đóng băng · KHÔNG digest bump featureset dl-mlp · kill-switch 4 tầng + audit kể cả skip · không dual-live (bóng A/B tiếp tục ngày 1/14 với driver mới đang thắng +0,294) · UI khối kiểm định
 - Chất lượng: hermetic p178 38/38 + p176 36/36 + lint 0 + live 4 tầng + kill-switch live + browser 2 viewport 0 lỗi; dữ liệu thật cho insight thật: 2026-03-06 = ngày level-shift toàn rổ, VHM β=2,3 không chắc (Var β phình) — đúng loại tri thức "biết mình chắc đến đâu" cuốn sách muốn
 - BỔ SUNG verify cuối: engine chết âm thầm sau restart đơn (Bash tool dọn process — setsid đơn không đủ); restart lại bằng double-fork `setsid -f` (pattern #167/#176) → PID 7887 sống vững qua nhiều lần gọi tool riêng biệt; do state restart quên lastSsDailyDate + 18:35 ICT > 16:50 → ENGINE TỰ ĐÔN ĐỐC ss-daily bằng CODE MỚI lúc 11:35:48Z: "shadow ran (ngày 1/14) · surprise ran (1/10 mã sốc, tier normal) · dataflag ran (5 outlier · 15 level-shift/10 mã) · beta ran (10 mã, 1 destabilising)" — chuỗi end-to-end engine→route→4 tầng→audit chứng minh TRÊN ĐƯỜNG ENGINE THẬT (tầng 1 live 4 lớp đủ chuẩn Phụ lục B)
+
+---
+Task ID: 179
+Agent: main-orchestrator (Z.ai Code)
+Task: YÊU CẦU CHỦ SỞ HỮU — "xóa giáo trình python, đồng thời xóa hết ảnh không cần thiết và các file liên quan cv"
+
+Work Log:
+- Inventory trước khi xoá (tham chiếu chéo 2 lớp độc lập): git ls-files quét 102 file ảnh tracked + find docx/pdf/cv toàn repo (ngoại trừ node_modules/skills/.git) + rg quét tham chiếu ảnh/file trong toàn bộ md/mjs/ts/tsx/json/html (ngoài worklog) = 0 tham chiếu — README dùng mermaid text, không file tài liệu/code nào tham chiếu ảnh hay GIAO_TRINH/CV_THE_TRADER (chỉ worklog.md nhắc — log lịch sử, không đụng)
+- Phân loại 102 ảnh tracked: KEEP 1 = src/app/favicon.ico (asset app Next.js tự dùng) · DELETE 101 = 76 verify-*.png gốc repo + 9 screenshots/ (p87/p107/p121) + 10 docs/screenshots/ (01-06 portfolio Task 147 + fixbug166/167) + 1 docs/diagrams/the-trader-architecture-vi.png (GIỮ NGUYÊN nguồn HTML tái sinh docs/diagrams/the-trader-architecture-vi.html) + 5 svg scaffolding mặc định public/ (file/globe/next/vercel/window — 0 tham chiếu trong src/)
+- Xoá giáo trình Python: GIAO_TRINH_PYTHON.docx (root) + scripts/gtp/ toàn bộ 12 file (ch1-ch7.js · front.js · main.js · helpers.js · extract_text.py · patch_footers.py) + dọn entry "scripts/gtp/**" khỏi globalIgnores eslint.config.mjs (folder đã hết, entry stale)
+- Xoá file CV: docs/CV_THE_TRADER.md (tài liệu dựng CV NEXGEN 213 dòng — đã có bản sao trên repo CV riêng theo Task 150, git history của repo này cũng còn) + dọn 2 block .gitignore stale (block Task 145 /public/cv/ + block Task 147 /docs/cv-*.docx — tham chiếu file không còn tồn tại)
+- Toàn bộ xoá qua git rm (115 file = 101 ảnh + 1 docx + 12 script gtp + 1 CV md) → KHÔNG mất dữ liệu: mọi file đều nằm trong git history, khôi phục được bằng git checkout <commit>^ -- <path>
+- Verify 5 phép sau xoá: (1) git status đúng 115 D + 2 M (eslint + .gitignore), 0 file ngoài danh sách bị đụng; (2) ảnh tracked còn lại = 1 duy nhất (favicon.ico); (3) bun run lint EXIT 0 — eslint config vẫn hợp lệ sau khi bỏ entry gtp; (4) dev.log 100 dòng cuối 0 error/warn (dev server + market-engine :3003 chạy liên tục, tick 200ms đều); (5) AGENT-BROWSER: / render đầy đủ (title + banner + main 7 region Tổng quan + footer contentinfo) · click "Mở workspace Đội Agent" → workspace chuyển đúng (heading + dropdown Model AI xuất hiện) · quay lại Tổng quan · footer bottom=scrollH=1633 (natural push đáy) · mobile 390px scrollWidth=clientWidth=390 (0 tràn ngang) · 0 console error / 0 page error cả desktop lẫn mobile · 2 screenshot bằng chứng lưu /tmp (ngoài repo — không tái bẩn repo vừa dọn)
+- Không đụng gì ngoài phạm vi: 0 dòng src/ sửa · prisma/db/mini-services/tests/docs md (trừ CV) nguyên vẹn · upload/ (4 PDF học liệu của owner) + tool-results/ (untracked) giữ nguyên
+
+Stage Summary:
+- Repo sạch 115 file không cần thiết (11,44 MB binary + ~3.936 dòng text): giáo trình Python hoàn chỉnh (docx + bộ sinh 12 script + eslint entry), 101 ảnh verify/portfolio lịch sử (chỉ còn favicon.ico là ảnh duy nhất được track), tài liệu CV + 2 entry .gitignore stale
+- An toàn dữ liệu: mọi file xoá qua git rm → nằm trong git history + CV docx/pdf đã push repo CV riêng từ Task 150 — khôi phục được bất kỳ lúc nào
+- Kiến trúc diagram không mất nguồn: docs/diagrams/the-trader-architecture-vi.html còn nguyên (21 KB, tái sinh PNG được)
+- App THE TRADER không hề ảnh hưởng (0 dòng app code đổi): lint PASS · dev.log sạch · browser verify desktop + mobile 0 lỗi, workspace switching hoạt động, footer đúng luật sticky/natural-push
+- Commit + push GitHub ngay sau verify (kỷ luật rollback tự vệ từ Task 176+)

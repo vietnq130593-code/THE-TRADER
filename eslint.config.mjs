@@ -18,8 +18,6 @@ const eslintConfig = defineConfig([
     "upload/**",
     // Ops scripts (not app code — mirror Gen-1 convention):
     "tools/**",
-    // One-off document generator scripts (CommonJS, not app code — Task 173):
-    "scripts/gtp/**",
   ]),
 ]);
 
