@@ -5657,3 +5657,14 @@ Stage Summary:
 - Câu 1: sandbox = bản mới nhất tuyệt đối (nothing behind); khác biệt duy nhất với GitHub là 2 commit giáo trình Python chưa push — gợi ý owner quyết có push không
 - Câu 2: lệnh BÁN được thực hiện khi và chỉ khi: (1) Chủ tịch đề xuất SELL mã VN (cắt tỷ trọng vượt ngưỡng/chốt lời-lỗ, targetPrice < giá < stopLoss); (2) không bị VETO Compliance/Control (Exposure A7 không chặn SELL); (3) cổng đồng thuận ≥80% trọng số KHÔP hướng số đông = DOWN (F-151-1 — đồng thuận FLAT/UP không duyệt BÁN); (4) pool ≥4/7 cử tri → duyệt tức thì ACTED + lệnh giấy 5% NAV (TWAP >1% ADTV-20), enforcement đã BẬT từ 08/10
 - Không thay đổi code, không restart dịch vụ nào; duy nhất worklog được append
+---
+Task ID: 175b
+Agent: Z.ai Code (orchestrator — tái xác nhận không-reset)
+Task: Owner hỏi lại: sandbox hiện tại có phải phiên bản mới nhất hay đã bị reset?
+
+Work Log:
+- git fetch + so sánh lại: local main = dace3f0 (worklog Task 175 tự-commit 17:42, +16 dòng worklog.md duy nhất), origin/main = 59e320a (Task 172), behind = 0 → vẫn là bản mới nhất; ahead 3 = 2 commit giáo trình (4e8df0e, 6d89200) + 1 auto-commit worklog
+- Bằng chứng KHÔNG reset: tiến trình next dev uptime ~23h liên tục · .env (05:00) + .env.local NIM key (07:22 — Task 171) còn nguyên (reset lịch sử #91/#167 mất đúng 2 file này) · DB sống: tín hiệu mới 23/10 01:07 TCB BUY 65,2% WEAK_MAJORITY tự từ chối (đúng hành vi cổng), tick market + /api/k/run 200 chảy liên tục trong dev.log
+
+Stage Summary:
+- Kết luận: KHÔNG reset — sandbox = phiên bản mới nhất, dịch vụ chạy liên tục ~23h; 3 commit ahead chưa push GitHub (2 giáo trình + 1 worklog)
