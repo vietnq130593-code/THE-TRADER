@@ -153,6 +153,40 @@ export interface MlAutoRetrainStatus {
   schedule: string;
 }
 
+/**
+ * Task 176 — STATE_SPACE_BLUEPRINT Phase 1: trạng thái tầng State Space
+ * (A/B bóng holt-ss SS-1 + guard ngạc nhiên CUSUM SS-7 — GET /api/ml/status
+ * field `ss`, additive — FE cũ bỏ qua).
+ */
+export interface MlSsStatus {
+  /** Kill-switch AppSetting "ml-ss-shadow" (mặc định BẬT — bóng chỉ ghi audit). */
+  enabled: boolean;
+  /** shadow = không đốt Bayes (quy tắc 6) · live = đã hoán đổi evidence A15b. */
+  mode: "shadow" | "live";
+  /** Số ngày ICT đã ghi SS_AB_LOG. */
+  days: number;
+  /** Mốc verdict (14 ngày). */
+  totalDays: number;
+  /** Chu kỳ bóng gần nhất (ISO) — null = chưa từng. */
+  lastAt: string | null;
+  /** Log-score trung bình ngày của driver mới (holt-ss) — null khi chưa có. */
+  newMeanLogScore: number | null;
+  /** Log-score trung bình ngày của driver cũ (holt-basket heuristic). */
+  oldMeanLogScore: number | null;
+  /** Lợi thế luỹ kế (dương = driver mới đang thắng — điều kiện hoán đổi). */
+  cumulativeAdv: number | null;
+  /** Kill-switch guard ngạc nhiên ml-ss-surprise. */
+  surpriseEnabled: boolean;
+  lastSurpriseAt: string | null;
+  /** Số mã cờ ở lần kiểm gần nhất. */
+  lastSurpriseFlagged: number | null;
+  lastSurpriseChecked: number | null;
+  /** normal | surprise-broad (>30% rổ sốc — cùng tín hiệu với PSI). */
+  lastSurpriseTier: string | null;
+  /** Mô tả lịch engine (chỉ hiển thị). */
+  schedule: string;
+}
+
 export interface MlStatusResponse {
   /** null khi chưa huấn luyện lần nào. */
   dlMlp: MlModelStatus<DlMlpMetrics> | null;
@@ -164,6 +198,8 @@ export interface MlStatusResponse {
   /** W3 (#164) — trạng thái cơ chế auto-retrain theo PSI (BẬT mặc định;
   *  additive — FE cũ bỏ qua). */
   autoRetrain?: MlAutoRetrainStatus | null;
+  /** Task 176 — tầng State Space (additive — FE cũ bỏ qua). */
+  ss?: MlSsStatus | null;
   /** B2 (#81) — verdict cổng bằng chứng chuỗi (additive; chưa đo →
    *  available:false + reason). */
   gate?: MlGateStatus;

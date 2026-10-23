@@ -24,6 +24,7 @@ import {
   useSettleMl,
   useTrainMl,
   type MlAutoRetrainStatus,
+  type MlSsStatus,
 } from "@/hooks/use-ml";
 import { MlpBlock } from "./ml/mlp-block";
 import { GateBlock } from "./ml/gate-block";
@@ -70,6 +71,9 @@ export function MlOverviewTab() {
   // theo PSI) — đọc qua cast cục bộ như drift.
   const autoRetrain =
     (data as ({ autoRetrain?: MlAutoRetrainStatus } | undefined))?.autoRetrain ?? null;
+  // Task 176 — field `ss` additive (tầng State Space: A/B bóng holt-ss +
+  // guard ngạc nhiên CUSUM) — đọc qua cast cục bộ như drift/autoRetrain.
+  const ss = (data as ({ ss?: MlSsStatus } | undefined))?.ss ?? null;
 
   if (isLoading) {
     return <MlOverviewSkeleton />;
@@ -91,7 +95,7 @@ export function MlOverviewTab() {
       <OverviewStrip data={data} drift={drift} />
 
       {/* Khối 1 — MLP dự báo 5 phiên (học sâu) */}
-      <MlpBlock model={data?.dlMlp ?? null} drift={drift} autoRetrain={autoRetrain} />
+      <MlpBlock model={data?.dlMlp ?? null} drift={drift} autoRetrain={autoRetrain} ss={ss} />
 
       <Separator />
 

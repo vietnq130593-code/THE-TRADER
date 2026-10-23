@@ -22,6 +22,16 @@ import {
   PSI_RETRAIN_COOLDOWN_HOURS,
   readPsiRetrainSetting,
 } from "@/lib/ml/psi-retrain";
+// Task 176 — STATE_SPACE_BLUEPRINT Phase 1: trạng thái tầng SS (A/B bóng
+// holt-ss + guard ngạc nhiên CUSUM) cho khối kiểm định 4 ô ở FE.
+import {
+  SS_AB_DAYS,
+  SS_SHADOW_AUDIT_ACTION,
+  SS_SURPRISE_AUDIT_ACTION,
+  getSsShadowSetting,
+  getSsSurpriseSetting,
+  ictDate,
+} from "@/lib/ml/ss/shadow";
 import { PSI_WARN } from "@/lib/ml/psi";
 // F-18B (#132): đọc arch-string thật của bản serving từ weights JSON — dùng
 // chung parser chuẩn với /api/ml/architecture (nn.ts) thay vì đoán.
@@ -286,6 +296,133 @@ async function holdoutForServing(version: number | null): Promise<HoldoutPayload
 
 /* ───────── W3 (#164) — trạng thái auto-retrain theo PSI (additive) ───────── */
 
+/* ───── Task 176 — trạng thái tầng State Space (additive · fail-soft null) ───── */
+
+/** Field `ss` — A/B bóng holt-ss (SS-1) + guard ngạc nhiên (SS-7). */
+interface SsPayload {
+  /** Kill-switch ml-ss-shadow + chế độ (shadow mặc định — không đốt Bayes). */
+  enabled: boolean;
+  mode: "shadow" | "live";
+  /** Số ngày ICT phân biệt đã ghi SS_AB_LOG / mốc verdict 14 ngày. */
+  days: number;
+  totalDays: number;
+  lastAt: string | null;
+  /** Log-score trung bình ngày (trung bình 2 horizon) — mới vs cũ. */
+  newMeanLogScore: number | null;
+  oldMeanLogScore: number | null;
+  /** Lợi thế luỹ kế của driver mới (dương = đang thắng). */
+  cumulativeAdv: number | null;
+  /** Guard ngạc nhiên SS-7 — kill-switch + lần gần nhất. */
+  surpriseEnabled: boolean;
+  lastSurpriseAt: string | null;
+  lastSurpriseFlagged: number | null;
+  lastSurpriseChecked: number | null;
+  lastSurpriseTier: string | null;
+  /** Lịch engine (doc/hiển thị). */
+  schedule: string;
+}
+
+const SS_SCHEDULE = "engine :3003 — T2–T6 16:50 ICT sau settle, 1 lần/ngày";
+
+/** Đọc AppSetting + AuditLog SS_* (3 query nhẹ, fail-soft null như W3). */
+async function ssPayload(): Promise<SsPayload | null> {
+  try {
+    const [shadowSetting, surpriseSetting, abRows, surpriseRow] = await Promise.all([
+      getSsShadowSetting(),
+      getSsSurpriseSetting(),
+      db.auditLog.findMany({
+        where: { action: SS_SHADOW_AUDIT_ACTION },
+        orderBy: { createdAt: "desc" },
+        take: 60,
+        select: { createdAt: true, after: true },
+      }),
+      db.auditLog.findFirst({
+        where: { action: SS_SURPRISE_AUDIT_ACTION },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, after: true },
+      }),
+    ]);
+    const days = new Set(abRows.map((r) => ictDate(r.createdAt))).size;
+    let newMean: number | null = null;
+    let oldMean: number | null = null;
+    let cumAdv: number | null = null;
+    let lastAt: string | null = null;
+    if (abRows.length > 0) {
+      lastAt = abRows[0].createdAt.toISOString();
+      let sumNew = 0;
+      let sumOld = 0;
+      let sumAdv = 0;
+      let cnt = 0;
+      for (const r of abRows) {
+        try {
+          const p = JSON.parse(r.after) as {
+            new?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } } };
+            old?: { logScore?: { h1?: { mean?: unknown }; h5?: { mean?: unknown } } };
+            advDaily?: unknown;
+          };
+          const n1 = p.new?.logScore?.h1?.mean;
+          const n5 = p.new?.logScore?.h5?.mean;
+          const o1 = p.old?.logScore?.h1?.mean;
+          const o5 = p.old?.logScore?.h5?.mean;
+          if (
+            typeof n1 === "number" && typeof n5 === "number" &&
+            typeof o1 === "number" && typeof o5 === "number"
+          ) {
+            sumNew += (n1 + n5) / 2;
+            sumOld += (o1 + o5) / 2;
+            cnt++;
+          }
+          if (typeof p.advDaily === "number" && Number.isFinite(p.advDaily)) sumAdv += p.advDaily;
+        } catch {
+          // after hỏng → bỏ dòng (trung thực)
+        }
+      }
+      if (cnt > 0) {
+        newMean = sumNew / cnt;
+        oldMean = sumOld / cnt;
+        cumAdv = sumAdv / abRows.length;
+      }
+    }
+    let lastSurpriseAt: string | null = null;
+    let lastSurpriseFlagged: number | null = null;
+    let lastSurpriseChecked: number | null = null;
+    let lastSurpriseTier: string | null = null;
+    if (surpriseRow) {
+      lastSurpriseAt = surpriseRow.createdAt.toISOString();
+      try {
+        const p = JSON.parse(surpriseRow.after) as {
+          flaggedCount?: unknown;
+          tier?: unknown;
+          checked?: { length?: number } | { symbol?: string }[] | null;
+        };
+        if (typeof p.flaggedCount === "number") lastSurpriseFlagged = p.flaggedCount;
+        if (typeof p.tier === "string") lastSurpriseTier = p.tier;
+        if (Array.isArray(p.checked)) lastSurpriseChecked = p.checked.length;
+      } catch {
+        // after hỏng → null trung thực
+      }
+    }
+    return {
+      enabled: shadowSetting.enabled,
+      mode: shadowSetting.mode,
+      days,
+      totalDays: SS_AB_DAYS,
+      lastAt,
+      newMeanLogScore: newMean,
+      oldMeanLogScore: oldMean,
+      cumulativeAdv: cumAdv,
+      surpriseEnabled: surpriseSetting.enabled,
+      lastSurpriseAt,
+      lastSurpriseFlagged,
+      lastSurpriseChecked,
+      lastSurpriseTier,
+      schedule: SS_SCHEDULE,
+    };
+  } catch {
+    return null; // fail-soft — FE ẩn khối, KHÔNG bịa trạng thái
+  }
+}
+
 /** Field `autoRetrain` — cơ chế W3: PSI ≥ 0,25 → engine :3003 đôn đốc
  *  POST /api/ml/psi-retrain (5 guard — xem lib psi-retrain.ts). FE hiển thị
  *  trạng thái bật/tắt + lần trigger gần nhất ngay dưới khối drift. */
@@ -429,7 +566,7 @@ export async function GET() {
       .then((dlRow) => holdoutForServing(dlRow?.version ?? null))
       .catch(() => null);
 
-    const [dlRow, rlRow, bandit, pendingSettles, drift, holdout, gate, gru, rag, intraday, newsGate, l2, autoRetrain] = await Promise.all([
+    const [dlRow, rlRow, bandit, pendingSettles, drift, holdout, gate, gru, rag, intraday, newsGate, l2, autoRetrain, ss] = await Promise.all([
       dlRowPromise,
       db.mlModel.findFirst({
         where: { kind: "rl-q", status: "serving" },
@@ -450,6 +587,8 @@ export async function GET() {
       l2Stats().catch(() => null),
       // W3 (#164) — trạng thái auto-retrain theo PSI (fail-soft null)
       autoRetrainPayload(),
+      // Task 176 — trạng thái tầng SS (fail-soft null)
+      ssPayload(),
     ]);
 
     const dlMetrics = dlRow
@@ -553,6 +692,8 @@ export async function GET() {
       // W3 (#164) — additive: trạng thái auto-retrain theo PSI (FE mới đọc,
       // FE cũ bỏ qua — hiển thị cùng khối drift).
       autoRetrain,
+      // Task 176 — STATE_SPACE_BLUEPRINT Phase 1: additive — FE cũ bỏ qua.
+      ss,
       // B2/B3 (#81) — additive: cổng bằng chứng + GRU (FE mới đọc, FE cũ bỏ qua)
       gate,
       gru,

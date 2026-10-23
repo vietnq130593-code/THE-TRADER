@@ -29,6 +29,15 @@ import { getConsensusSetting } from "@/lib/consensus";
 import { pctChange, rsi } from "@/lib/indicators";
 import { classifyRegime } from "@/lib/quant/regime";
 import { holtForecastPct } from "@/lib/quant/forecast";
+// Task 176 — STATE_SPACE_BLUEPRINT Phase 1: driver holt-ss (A15b) bóng/live.
+import {
+  getSsShadowSetting,
+  sdInflated,
+  ssEvidenceDecision,
+  zWeight,
+  type SsEvidenceDecision,
+  type SsShadowSetting,
+} from "@/lib/ml/ss/shadow";
 import { aggregateSentiment } from "@/lib/quant/sentiment";
 import { historicalBaseRates, zscore } from "@/lib/quant/statistics";
 import { loadSegmentBaskets, loadTopSeries, latestFeatureSnapshot, type SegmentBasket } from "@/lib/ml/features";
@@ -189,21 +198,30 @@ export async function buildEvidenceBundle(
   }
 
   // 3d. Holt basket forecast + regime trên rổ top-10 HOSE equal-weight
+  // STATE_SPACE_BLUEPRINT (Task 176 · SS-1 quy tắc 6): A15 heuristic giữ nguyên
+  // khi A/B bóng holt-ss chưa thắng log-score 14 ngày; mode "live" (sau
+  // SS_AB_VERDICT thắng) hoán đổi evidence sang A15b ml-forecast.holt-ss +
+  // TẮT driver cũ (không dual-live — 2 driver cùng closes sống song song trong
+  // Bayes = đếm kép thông tin trend). Kill-switch off ⇒ nguyên văn đường cũ.
   const basketCloses = buildBasketIndex(hoseBasket.map((s) => s.closes), PRIOR_SESSIONS);
-  const basketForecast = holtForecastPct(basketCloses, { horizon: 5 });
-  if (basketForecast && Math.abs(basketForecast.expectedPct) >= 0.1) {
-    const strength = Math.min(1, Math.abs(basketForecast.expectedPct) / 1.5);
-    const lr = Math.min(1.9, 1 + 0.9 * strength);
-    marketEvidence.push({
-      source: "ml-forecast.holt-basket",
-      agentName: "ML Forecast",
-      gen1: "A15",
-      level: "market",
-      direction: basketForecast.expectedPct > 0 ? "UP" : "DOWN",
-      likelihoodRatio: lr,
-      weight: 0.65,
-      note: `Holt rổ HOSE 5 phiên: ${(basketForecast.expectedPct >= 0 ? "+" : "") + basketForecast.expectedPct.toFixed(2)}% (CI80 ${basketForecast.lowPct.toFixed(2)}%…${basketForecast.highPct.toFixed(2)}%)`,
-    });
+  const ssSetting = await getSsShadowSetting();
+  const ssSwapped = await pushHoltSsEvidence(marketEvidence, ssSetting, basketCloses);
+  if (!ssSwapped) {
+    const basketForecast = holtForecastPct(basketCloses, { horizon: 5 });
+    if (basketForecast && Math.abs(basketForecast.expectedPct) >= 0.1) {
+      const strength = Math.min(1, Math.abs(basketForecast.expectedPct) / 1.5);
+      const lr = Math.min(1.9, 1 + 0.9 * strength);
+      marketEvidence.push({
+        source: "ml-forecast.holt-basket",
+        agentName: "ML Forecast",
+        gen1: "A15",
+        level: "market",
+        direction: basketForecast.expectedPct > 0 ? "UP" : "DOWN",
+        likelihoodRatio: lr,
+        weight: 0.65,
+        note: `Holt rổ HOSE 5 phiên: ${(basketForecast.expectedPct >= 0 ? "+" : "") + basketForecast.expectedPct.toFixed(2)}% (CI80 ${basketForecast.lowPct.toFixed(2)}%…${basketForecast.highPct.toFixed(2)}%)`,
+      });
+    }
   }
   const regime = classifyRegime(basketCloses);
   if (regime.regime === "BULL_TREND" || regime.regime === "BEAR_TREND") {
@@ -863,8 +881,10 @@ function pushRsiSegment(ev: BayesEvidence[], basket: SegmentBasket, label: strin
   }
 }
 
-/** Basket index equal-weight: mỗi mã chuẩn hoá = 1 tại phiên đầu rồi lấy TB. */
-function buildBasketIndex(closesBySymbol: number[][], sessions: number): number[] {
+/** Basket index equal-weight: mỗi mã chuẩn hoá = 1 tại phiên đầu rồi lấy TB.
+ * Export từ Task 176 — src/lib/ml/ss/shadow.ts tái dùng CÙNG phép dựng rổ
+ * cho A/B bóng (một nguồn sự thật, tránh 2 đường dựng rổ lệch nhau). */
+export function buildBasketIndex(closesBySymbol: number[][], sessions: number): number[] {
   const usable = closesBySymbol.filter((c) => c.length >= 60);
   if (usable.length === 0) return [];
   const n = Math.min(sessions, ...usable.map((c) => c.length));
@@ -883,6 +903,66 @@ function buildBasketIndex(closesBySymbol: number[][], sessions: number): number[
     index.push(count > 0 ? sum / count : 1);
   }
   return index;
+}
+
+/**
+ * Task 176 (SS-1 quy tắc 6) — đẩy evidence A15b ml-forecast.holt-ss khi và
+ * chỉ khi A/B bóng đã THẮNG log-score 14 ngày (mode "live" + kill-switch bật).
+ * Trả true khi ĐÃ đẩy (caller tắt driver cũ — không dual-live). Shadow/off
+ * ⇒ false + nguyên văn đường A15 heuristic cũ (checklist Phụ lục B: hash cũ
+ * ≡ hành vi cũ khi tắt kill-switch). sd phình (SS-2) ⇒ false — model tự nhận
+ * "tôi không biết", evidence im lặng trung thực thay vì đốt số liệu rác.
+ */
+async function pushHoltSsEvidence(
+  marketEvidence: BayesEvidence[],
+  setting: SsShadowSetting,
+  basketCloses: number[]
+): Promise<boolean> {
+  if (!setting.enabled || setting.mode !== "live" || basketCloses.length < 60) return false;
+  const fit = holtSsFit(basketCloses);
+  if (!fit) return false;
+  const fc = holtSsForecast(fit, basketCloses, 5);
+  if (!fc) return false;
+  const hIdx = 4; // h=5
+  // Guard sd cuộn SS-2 (mirror lib shadow.ts — cùng công thức, tính tại đây
+  // vì evidence chạy mỗi chu kỳ không đợi settle)
+  const rets: number[] = [];
+  for (let i = 0; i + 5 < basketCloses.length; i++) {
+    if (basketCloses[i] > 0) {
+      rets.push(((basketCloses[i + 5] - basketCloses[i]) / basketCloses[i]) * 100);
+    }
+  }
+  const rMean = rets.reduce((s, x) => s + x, 0) / Math.max(1, rets.length);
+  const rVar =
+    rets.length > 1
+      ? rets.reduce((s, x) => s + (x - rMean) * (x - rMean), 0) / (rets.length - 1)
+      : 0;
+  const rollingSd = Math.sqrt(Math.max(rVar, 0));
+  const sd5 = fc.sdPct[hIdx];
+  const z5 = fc.z[hIdx];
+  const decision: SsEvidenceDecision = ssEvidenceDecision(
+    setting,
+    {
+      meanPct: fc.meanPct[hIdx],
+      sdPct: sd5,
+      pUp: fc.pUp,
+      z: z5,
+      weight: sdInflated(sd5, rollingSd) ? 0 : zWeight(z5),
+    },
+    { rollingSdPctH5: rollingSd }
+  );
+  if (!decision.push || decision.source == null || decision.gen1 == null) return false;
+  marketEvidence.push({
+    source: decision.source,
+    agentName: "ML Forecast",
+    gen1: decision.gen1,
+    level: "market",
+    direction: decision.direction ?? "UP",
+    likelihoodRatio: decision.likelihoodRatio ?? 1,
+    weight: decision.weight ?? 0.65,
+    note: `Holt-SS rổ HOSE 5 phiên (MLE): ${fc.meanPct[hIdx] >= 0 ? "+" : ""}${fc.meanPct[hIdx].toFixed(2)}% ± sd ${sd5.toFixed(2)}% · pUp ${(fc.pUp != null ? fc.pUp * 100 : 0).toFixed(1)}% · trọng số z ${(decision.weight ?? 0).toFixed(2)} (σ²ε ${fit.sigma2Eps.toExponential(2)} · logLik ${fit.logLik.toFixed(1)})`,
+  });
+  return true;
 }
 
 /** Phiếu LLM: chu kỳ truyền → dùng luôn; không → đọc tin broadcast 24h. */

@@ -192,6 +192,21 @@ const MACRO_VN_DISABLED = process.env.MACRO_VN_DISABLED === "1";
 //  Pha B adapter live chờ egress, hiện mô phỏng deterministic persist sẵn có).
 const FLOW_SYNC_AT = process.env.FLOW_SYNC_AT ?? "16:05";
 const FLOW_SYNC_DISABLED = process.env.FLOW_SYNC_DISABLED === "1";
+/** Task 176 (STATE_SPACE_BLUEPRINT Phase 1 — v1.1 pass review Task 172):
+ *  POST /api/ml/ss-daily T2–T6 16:50 ICT hằng ngày (SAU settle 16:15 · k1
+ *  16:30 · council-eval 16:45 — EOD hôm nay ĐÃ sync; 1 lần/ngày theo settle
+ *  tránh multiplicity — F6-v1.1) làm 2 việc: (a) A/B BÓNG driver mới
+ *  ml-forecast.holt-ss (A15b — MLE local linear trend + predictive variance)
+ *  vs driver cũ holt heuristic, chấm log-score SS-11 trên holdout PIT, ghi
+ *  audit SS_AB_LOG, KHÔNG đốt vào Bayes (F5: shadow, không dual-live);
+ *  (b) guard ngạc nhiên SS-7 CUSUM e²−1 trên log-giá 10 mã rổ (audit
+ *  SS_SURPRISE read-only Phase 1). Kill-switch từng tầng: AppSetting
+ *  ml-ss-shadow / ml-ss-surprise (route tự đọc — engine chỉ đôn đốc).
+ *  Guard ngày chỉ trong bộ nhớ (pattern psiRetrain — app engine-state chưa
+ *  whitelist; restart sau 16:50 chạy bù 1 lần → thêm 1 dòng audit cùng ngày
+ *  ICT, metric days (distinct-date) không đổi — vô hại, ghi rõ trung thực). */
+const ML_SS_DAILY_DISABLED = process.env.ML_SS_DAILY_DISABLED === "1";
+const ML_SS_DAILY_AT = process.env.ML_SS_DAILY_AT ?? "16:50";
 
 /** "HH:MM" ICT → phút kể từ nửa đêm ICT (UTC+7). */
 function parseHhMm(s: string): number | null {
@@ -211,6 +226,8 @@ const COUNCIL_EVAL_MINUTES = parseHhMm(COUNCIL_EVAL_AT) ?? parseHhMm("16:45")!;
 // #129 (F-02A + F-03a) — fail-safe parseHhMm như các slot hằng ngày khác
 const MACRO_VN_MINUTES = parseHhMm(MACRO_VN_AT) ?? parseHhMm("06:35")!;
 const FLOW_SYNC_MINUTES = parseHhMm(FLOW_SYNC_AT) ?? parseHhMm("16:05")!;
+// Task 176 — fail-safe parseHhMm như các slot hằng ngày khác
+const ML_SS_DAILY_MINUTES = parseHhMm(ML_SS_DAILY_AT) ?? parseHhMm("16:50")!;
 
 /** "SUN:HH:MM" (tên ngày 3 chữ) hoặc "0:HH:MM" (0=CN..6=T7) → { dow, minutes } — lịch hằng tuần. */
 const DOW_NAMES: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
@@ -300,6 +317,13 @@ const stats = {
   lastPsiRetrainOutcome: null as string | null,
   lastPsiRetrainError: null as string | null,
   psiRetrainRuns: 0,
+  // Task 176 — tầng State Space: A/B bóng holt-ss + guard ngạc nhiên CUSUM
+  // (guard ngày trong bộ nhớ như psiRetrain — xem comment ML_SS_DAILY_AT)
+  lastSsDailyAt: null as string | null,
+  lastSsDailyDate: null as string | null,
+  lastSsDailyOutcome: null as string | null,
+  lastSsDailyError: null as string | null,
+  ssDailyRuns: 0,
   // K1 (#87 — §5.4): lịch settle-equity sandbox 16:30 ICT (P0-5 sống sót restart)
   lastK1EquityAt: null as string | null,
   lastK1EquityDate: null as string | null,
@@ -1428,6 +1452,60 @@ function psiRetrainDue(): boolean {
   );
 }
 
+/* ── Task 176 (STATE_SPACE_BLUEPRINT Phase 1) — vận hành SS hằng ngày ── */
+
+/** In-flight guard + timeout POST riêng (fit 10 mã × MLE multi-start nhẹ,
+ *  nhưng để trần 120s phòng DB chậm giờ settle). */
+let ssDailyInFlight = false;
+const SS_DAILY_POST_TIMEOUT_MS = 120_000;
+
+/** Task 176 — due: t2–t6 · ≥ 16:50 ICT (sau settle 16:15 · k1 16:30 ·
+ *  council-eval 16:45 — tránh tranh lock) · EOD hôm nay ĐÃ sync · chưa chạy
+ *  ngày này (guard trong bộ nhớ — xem comment ML_SS_DAILY_AT trung thực). */
+function ssDailyDue(): boolean {
+  if (ML_SS_DAILY_DISABLED) return false;
+  if (ssDailyInFlight) return false;
+  const ict = ictNow();
+  if (ict.dow === 0 || ict.dow === 6) return false; // CN=0 · T7=6
+  return (
+    ict.minutes >= ML_SS_DAILY_MINUTES &&
+    stats.lastEodSyncDate === ict.date &&
+    stats.lastSsDailyDate !== ict.date
+  );
+}
+
+/** POST /api/ml/ss-daily — route tự kill-switch từng tầng (ml-ss-shadow /
+ *  ml-ss-surprise) + fail-soft; engine chỉ đôn đốc (pattern psiRetrain). */
+async function ssDailyAndBroadcast(): Promise<void> {
+  ssDailyInFlight = true;
+  try {
+    const data = await postJson("/api/ml/ss-daily", undefined, {
+      timeoutMs: SS_DAILY_POST_TIMEOUT_MS,
+    });
+    stats.lastSsDailyAt = new Date().toISOString();
+    stats.ssDailyRuns++;
+    stats.lastSsDailyError = null;
+    const ict = ictNow();
+    stats.lastSsDailyDate = ict.date;
+    const shadow = (data as { shadow?: { outcome?: unknown; reason?: unknown; daysElapsed?: unknown } }).shadow;
+    const surprise = (data as { surprise?: { outcome?: unknown; flagged?: unknown; checked?: unknown; tier?: unknown; reason?: unknown } }).surprise;
+    stats.lastSsDailyOutcome = `shadow:${String(shadow?.outcome ?? "?")} · surprise:${String(surprise?.outcome ?? "?")}`;
+    // Log 1 dòng/ngày (không rác như nhịp 15' của psi — SS chỉ chạy 1 lần).
+    const shadowOut = String(shadow?.outcome ?? "?");
+    const surpriseOut = String(surprise?.outcome ?? "?");
+    log(
+      "ss-daily",
+      `State Space hằng ngày: shadow ${shadowOut}${shadowOut === "ran" && typeof shadow?.daysElapsed === "number" ? ` (ngày ${String(shadow.daysElapsed)}/14)` : ""}${shadow?.reason ? ` — ${String(shadow.reason)}` : ""} · surprise ${surpriseOut}${surpriseOut === "ran" ? ` (${String(surprise?.flagged ?? "?")}/${String(surprise?.checked ?? "?")} mã sốc, tier ${String(surprise?.tier ?? "?")})` : ""}${surprise?.reason ? ` — ${String(surprise.reason)}` : ""}`
+    );
+    io.emit("ml-ss-daily", data);
+  } catch (err) {
+    stats.lastSsDailyError = err instanceof Error ? err.message : String(err);
+    log("ss-daily", `LỖI: ${stats.lastSsDailyError}`);
+  } finally {
+    ssDailyInFlight = false;
+  }
+}
+
 /** B12 — đã qua 06:15 ICT hôm nay và chưa sync ngày này → sync.
  * F-441-01: lần gần nhất LỖI thì phải đủ backoff nhân đôi (30p → cap 4h)
  * mới được thử lại — chống retry mỗi phút suốt ngày (đấm Yahoo 429). */
@@ -1510,7 +1588,7 @@ http.on("error", (err) => {
 function logBootSchedule(): void {
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · ml-psi-retrain ${ML_PSI_RETRAIN_AT} ICT t2–t6${ML_PSI_RETRAIN_DISABLED ? " (TẮT)" : ` (check ${ML_PSI_RETRAIN_CHECK_MINUTES}phút)`} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · ml-psi-retrain ${ML_PSI_RETRAIN_AT} ICT t2–t6${ML_PSI_RETRAIN_DISABLED ? " (TẮT)" : ` (check ${ML_PSI_RETRAIN_CHECK_MINUTES}phút)`} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · ss-daily ${ML_SS_DAILY_AT} ICT t2–t6${ML_SS_DAILY_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
@@ -1572,6 +1650,9 @@ const dueCheckTimer = setInterval(() => {
       stats.lastPsiRetrainCheckAt = new Date().toISOString();
       void psiRetrainAndBroadcast();
     }
+    // Task 176 (STATE_SPACE_BLUEPRINT Phase 1) — vận hành SS hằng ngày sau
+    // council-eval 16:45 (cùng try/catch chung, lỗi 1 lịch không giết khối).
+    if (ssDailyDue()) void ssDailyAndBroadcast();
     // K1 (#87 — AUTONOMY_BLUEPRINT v1.1 §5.4): settle sandbox 16:30 ICT (sau
     // settle bandit 16:15 — cùng try/catch chung, lỗi 1 lịch không giết khối)
     if (k1EquityDue()) void k1EquityAndBroadcast();
