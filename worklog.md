@@ -5886,3 +5886,20 @@ Work Log:
 Stage Summary:
 - TRẢ LỜI cho owner: (1) bức tranh rộng KHÔNG đến từ theo-dõi-hết-mà-từ 8 chỉ số segment VNINDEX/VN30/VNMID/VNSML/VNALL/HNX/HNX30/UPCOM — sàn tự tính từ TOÀN BỘ mã niêm yết, hệ thống đọc đúng tầng này + composite Bayes trọng số ADTV; (2) rổ top-ADTV là quyết định GIÁ THÀNH-CHẤT LƯỢNG: tín hiệu phải thực thi được trên mã có thanh khoản, ML cần chuỗi sâu, chu kỳ ≤180s; (3) NHƯỢNG BỘ TRUNG THỰC: breadth hiện chỉ trên 30 mã HOSE — A/D ratio toàn thị trường ~400 mã là khoảng trống THẬT, đề xuất "universe chiều rộng" (quote-only, không deep backfill) nâng breadth lên toàn sàn với chi phí nhỏ; (4) trái phiếu VN đang chờ nguồn (finfo blocked — probe Task 181 xác nhận), US yields đã có 3 mã
 - Không sửa code — Q&A review-only + 2 script đo tạm đã dọn
+---
+Task ID: 187
+Agent: Z.ai Code (orchestrator — Q&A thiết kế "nạp toàn sàn + bám mã trọng tâm")
+Task: Owner phản hồi Task 186: muốn theo dõi toàn sàn để nhiều lựa chọn hơn, lo DUY NHẤT dung lượng Supabase free tier (LLM sandbox miễn phí); đề xuất "nạp toàn sàn nhưng bám chặt các mã trọng tâm tiềm năng nhất" — hỏi ý kiến em.
+
+Work Log:
+- Truy kiến trúc DB cho đúng: prisma/schema.prisma (postgres, schema trader) + src/lib/db.ts shim (env supervisor `file:…custom.db` bị override → shim đọc URL postgres thật từ .env) → app + engine đang sống trên Supabase cloud; mini-services/pg-service (PGlite :5432) chỉ là fallback dev từ phiên #91, không phải kho hiện tại
+- Viết script đo tạm scripts/p187-dbsize.ts → đo TRỰC TIẾP Supabase cloud qua SUPABASE_DB_URL_SESSION (chỉ SELECT, đúng mục đích "tooling" của biến): pg_database_size **205,45MB/500MB** · Bar 226.154 EOD = 107,21MB → **≈497 B/bar** (gồm index) · IntradayBar 19.516 bar 5-phút trên 68 mã = 6,86MB (368B/bar) · KnowledgeChunk 2.777 = 25,59MB (TOAST embedding ≈9,7KB/chunk) · NewsItem 1.720 = 1,65MB · ops (AgentMessage/Run/MlModel/AuditLog…) ≈ 12MB · ước ~50MB baseline hệ thống Supabase → data thật ≈ 155MB
+- Đối chiếu ràng buộc có sẵn: MARKET_EXPANSION §3.4 rổ 2 tầng top-ADTV · B4 MAX_SYMBOLS_PER_SYNC=150 · dchart 300ms/request · B14 watcher re-probe Chủ nhật 04:00 (tự nạp mã mới — đã sống) · chu kỳ agent ≤180s + 23-24 agents · Task 186: KHÔNG có endpoint danh-sách-toàn-sàn đã verify
+- Tính ngân sách 3 phương án "toàn sàn" ~650 mã cổ phiếu/ETF có nghĩa (bỏ CW): (a) deep backfill 12 năm ≈ 1,9GB ✗ · (b) forward-only giữ mãi ≈ +81MB/năm → chết chậm ~3 năm ✗ · (c) **bar ngày + cửa sổ cuộn 260 phiên ≈ 84MB steady** ✓ (đủ breadth MA20/50/200 + screen)
+- Dọn script đo tạm sau đo (kỷ luật Task 186); dev.log cuối sạch (tick ~800ms, 0 lỗi)
+
+Stage Summary:
+- TRẢ LỜI owner: tán thành ~90% — "nạp toàn sàn + bám mã trọng tâm" là pattern phễu (broad universe + focus list) chuẩn quant; chìa khóa GÁN ĐÚNG GRANULARITY: toàn sàn chỉ tiêu bar NGÀY + cửa sổ cuộn 13 tháng (~84MB cố định), mọi thứ đắt (bar 5-phút ~16MB/30 mã, tin RAG, phiếu LLM, deep 12 năm) chỉ đổ vào mã trọng tâm ~20-30 mã với luật thăng/hạ cấp có hysteresis
+- Kho dự phóng steady ≈ 300-330MB/500MB; 4 điều kiện sống: seed danh sách ~650 ứng viên 1 lần (probe-trước-khi-tạo B3 — không endpoint tự động) · kỷ luật prune (bar T0 >260 phiên, tin/chunk >90 ngày) · bỏ CW · un-pause Supabase nếu ngừng >7 ngày
+- Synergy: T0 lấp gap breadth 30 mã HOSE (đã thú nhận Task 186) + trả nợ SS-6 common factor Phase 3 STATE_SPACE (~6/11) cần cross-section rộng
+- Không sửa code — chờ owner duyệt để dựng UNIVERSE_TIERING_BLUEPRINT.md + Phase 1 (seed+probe → breadth toàn sàn → screen trọng tâm; chưa đụng intraday/LLM)
