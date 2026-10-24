@@ -5840,3 +5840,21 @@ Stage Summary:
 - PHÁN ĐỒ ĐỘNG: AI Engineer applied-AI mid→senior với năng lực tự vận hành production xuất sắc — điểm mạnh: toán ML tự viết đúng, kỷ luật vận hành (worklog/fixbug/VÁ-tracking/budget-lock/idempotency/kill-switch), đa provider có đo đạc; điểm cần lưu ý: component khổng lồ (7.576 dòng invoice-summary.tsx), phát triển có dấu vết AI-agent-assisted mạnh (z-ai sdk trong code) — kỹ năng thể hiện ở ORCHESTRATION + ARCHITECTURE + JUDGMENT chứ không phải gõ từng dòng
 - Báo cáo CV-style đã viết trong reply cho owner (không tạo file trong repo THE TRADER)
 - PAT đã dán trong chat → khuyến nghị owner rotate; KHÔNG ghi PAT vào bất kỳ file nào
+---
+Task ID: 184
+Agent: Z.ai Code (orchestrator — tái đánh giá repo CRM dưới vai trò KÈM: AI Engineer + Full Stack Engineer)
+Task: Owner yêu cầu "Tiến hành đánh giá lại giúp anh dưới vai trò kỹ sư AI kiêm kỹ sư Full Stack" — mở rộng phân tích Task 183 sang tầng full-stack (frontend/API/DB/security/ops)
+
+Work Log:
+- Clone /tmp/recruit/crm-analysis còn nguyên (không cần re-clone)
+- FRONTEND đo: 387 'use client' files · 0 server action (thuần API-first) · 22 zustand store theo domain · 14 hooks · 36 shadcn/ui components · TanStack Query + realtime manager invalidate cache ~300ms cross-tab · PWA thật (register-sw + manifest + install button + at3-offline-store) · docs mobile UX review v3/v4 + at3-mobile-ux-score · nút yếu: component khổng lồ (invoice-summary 7.576 dòng)
+- BACKEND đo: 225 route · guard per-route hasServerPermission + getStaffAuthContext (không middleware.ts — chọn explicit per-route; audit PERM-34 từng phát hiện ~70 route MUTATING thiếu gate → PERM-V2 mở 37→58 quyền/10 nhóm, migration seed zero-regression 19/21 tick sẵn, ai_read_hr mặc định TẮT vì nhạy cảm) · cron-jobs.ts 1.360 dòng serverless cadence hourly/daily/weekly/monthly + claim FOR UPDATE SKIP LOCKED
+- DB đo: 67 bảng · 104 migration · 52 ENABLE ROW LEVEL SECURITY · 33 migration POLICY (RLS thật ở tầng DB, không chỉ tầng app) · views customers-list-view
+- AUTH: cookie httpOnly 10-năm sliding (sliding re-issue qua /api/auth/me) + sameSite=none CHỦ ĐÍCH để chạy iframe preview cross-site — comment ghi rõ trade-off Safari ITP (server-set cookie không bị cắt 7 ngày) — hiểu sâu cookie semantics
+- OPS: start.js giải orphaned next-server EADDRINUSE bằng process-group leader (setsid) + SIGTERM cả nhóm trước khi PM2 restart — systems knowledge thật · CI GitHub Actions lint+tsc+unit có kill-switch + lộ trình bật branch protection document sẵn · e2e ngoài CI có lý do (sandbox 4GB không chạy browser+dev-compile cùng lúc) · browserslist iOS/Safari 15.4+ (thợ dùng iPhone cũ)
+- AI bổ sung: UI chip gate TRUNG THẬC "AI đang học (mô phỏng)" khi chưa đủ dữ liệu thật (e2e 07 verify đúng 2 trạng thái) · tool-perms.ts map quyền từng AI tool (AI cũng bị phân quyền — ai_read_hr nhạy cảm) · biểu đồ forecast SVG TỰ VIẾT thay recharts khi cần
+
+Stage Summary:
+- Đánh giá kép chốt: mid→senior CẢ HAI vai — full-stack ngang tầm phần AI: RLS 2 tầng + permission catalog 58 quyền có audit-từ-tìm-lỗ-hổng-đến-vá + realtime invalidation + PWA offline + cron serverless claim-lock + orphan-process workaround PM2 — mỗi quyết địnhinfra đều có comment giải thích "vì sao" kèm bài học số task
+- Điểm trừ full-stack: 0 server action (không hẳn trừ — chọn nhất quán API-first) · không middleware.ts trung tâm (rủi ro route mới quên guard — họ tự audit PERM-34 vá) · component UI khổng lồ cần refactor · không thấy rate-limit tổng quát / CSRF token (dựa sameSite + same-origin)
+- Báo cáo CV-style kép đã viết trong reply; không tạo file mới trong repo THE TRADER; PAT không ghi vào file nào
