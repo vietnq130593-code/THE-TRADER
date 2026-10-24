@@ -130,8 +130,9 @@ async function buildMacroInner(): Promise<string> {
     return `${label} ${last.toLocaleString("vi-VN", { maximumFractionDigits: 2 })} điểm · ${fmtSignedPct(chgPctOf(r.closes, 20))}/20 phiên · ${fmtSignedPct(chgPctOf(r.closes, 90))}/90 phiên · vị trí dải 90 phiên ~${Math.round(Math.max(0, Math.min(100, pos)))}%`;
   };
   // Độ rộng thị trường: quote mới nhất từng mã HOSE-STOCK
+  // (F-1892-01 fixbug #189: quotes some — BROAD HOSE không quote khỏi nạp)
   const hoseQuotes = await db.instrument.findMany({
-    where: { isActive: true, market: "HOSE", type: "STOCK" },
+    where: { isActive: true, market: "HOSE", type: "STOCK", quotes: { some: {} } },
     select: { quotes: { orderBy: { tradedAt: "desc" }, take: 1, select: { changePct: true } } },
   });
   const chgVals = hoseQuotes

@@ -211,7 +211,15 @@ export async function scanCorporateEvents(opts?: {
     where: {
       isActive: true,
       market: { in: ["HOSE", "HNX", "UPCOM"] },
-      ...(opts?.instrumentIds ? { id: { in: opts.instrumentIds } } : {}),
+      // F-1893-01 (fixbug #189): mặc định chỉ quét CORE — đúng lời hứa
+      // UNIVERSE_TIERING_BLUEPRINT §5#5 ("A9/corporate scan không quét 1.000
+      // mã mỗi 15:45"). Trước fix, đường này quét cả 1.451 BROAD bằng query
+      // riêng từng mã ≈ +224s WAN → CORE eod-sync 4,7phút vượt timeout engine
+      // 280s → vòng retry cả ngày + gate eod-broad/flow-sync không bao giờ mở.
+      // BROAD không cần scan Phase 1: bar dchart đã adjust sẵn tại nguồn.
+      ...(opts?.instrumentIds
+        ? { id: { in: opts.instrumentIds } }
+        : { universeTier: "CORE" as const }),
     },
     select: { id: true, symbol: true, market: true, type: true },
     orderBy: { symbol: "asc" },

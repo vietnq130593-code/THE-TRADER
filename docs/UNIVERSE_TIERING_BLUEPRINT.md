@@ -20,13 +20,13 @@
 
 | Tầng | Phạm vi | Dữ liệu tiêu thụ | Ngân sách (đo Task 187) |
 |---|---|---|---|
-| **T0 — Toàn sàn** | ~1.000-1.100 mã VN có giao dịch thật (HOSE 406 STOCK+21 ETF · HNX 299 STOCK · UPCOM 814 STOCK → lọc hoạt động §3) | 1 bar EOD/ngày · **cửa sổ cuộn 420 ngày (~260 phiên)** · KHÔNG Quote realtime · KHÔNG tin/RAG/LLM | ≈497B/bar × ~260 × ~1.000 mã ≈ **~125-140MB cố định** |
+| **T0 — Toàn sàn** | **1.451 mã BROAD đo thật 24-10** (HOSE 374 STOCK + 15 ETF · HNX 289 STOCK · UPCOM 788 STOCK sau lọc hoạt động §3 — finfo listing 1.540 ứng viên) | 1 bar EOD/ngày · **cửa sổ cuộn 420 ngày (~260 phiên)** · KHÔNG Quote realtime · KHÔNG tin/RAG/LLM | 410.210 bar = **≈187MB đo thật** (497B/bar × ~260 phiên × 1.451 mã) |
 | **T1 — Rổ bằng chứng** | 68 mã CORE hiện tại (top-ADTV §3.4 MARKET_EXPANSION) | Deep backfill 12 năm + Quote neo EOD + breadth segment + phiếu Bayes | 107MB đã trả — giữ nguyên |
 | **T2 — Mã trọng tâm** | ~20-30 mã từ screen §4 (hysteresis) | (Phase 2) bar 5-phút · tin gắn mã + RAG · phiếu LLM trong chu kỳ 23 agents | ~16MB/30 mã (16-bit bar 5-phút) — Phase 1 CHƯA đụng |
 
 **Nguyên tắc bất di bất dịch:** bức tranh rộng = T0 breadth (A/D · %MA) + 8 chỉ số segment sàn; tín hiệu thực thi = T1/T2 nơi thanh khoản. T0 KHÔNG đụng chu kỳ agent (≤180s) — mọi phép tính T0 chạy sau EOD hoặc on-demand có cache.
 
-**Số đo nền (Task 187 — query live Supabase):** kho 205,45MB · Bar 226.154 EOD=107,21MB (497B/bar) · IntradayBar 368B/bar · KnowledgeChunk 9,7KB/chunk · baseline hệ thống ~50MB. **Dự phóng steady sau Phase 1: ~330-350MB/500MB.**
+**Số đo nền (Task 187 — query live Supabase):** kho 205,45MB trước Phase 1 · Bar 226.154 EOD=107,21MB (497B/bar) · IntradayBar 368B/bar · KnowledgeChunk 9,7KB/chunk · baseline hệ thống ~50MB. **Đo thật sau Phase 1 (24-10): 322,54MB/500MB** — đúng dải hứa 300-330MB của Task 187.
 
 ## §2. Phát hiện hạ tầng quan trọng (đổi kết luận Task 186)
 
@@ -60,7 +60,7 @@ Hàm thuần từ Bar (deterministic — không state phụ thêm, chạy lại 
 |---|---|---|
 | 1 | `syncEodFromDchart` (eod-sync.ts) | mặc định `universeTier: CORE` — mọi caller cũ giữ hành vi 100% |
 | 2 | `deepBackfillEod` | filter CORE — **ngăn thảm hoạ 1,9GB** nếu operator chạy `force=deep` sau khi có 1.000 BROAD |
-| 3 | MỚI `syncBroadEod()` | chọn BROAD theo **CURSOR XOAY VÒNG** trên danh sách symbol-asc (350 mã/lượt, cursor tiến qua AppSetting `eod-broad.cursor`) — mọi mã tới lượt cứ mỗi ceil(N/350) ≈ 3 ngày; lookback 12 ngày tự vá khoảng hở. *Bản v1.0 dùng filter "chưa tươi >3 ngày" — lượt đo thật 15:12Z 24-10 lộ lỗ hổng bỏ đói: mã đình chỉ chiếm slot đầu queue vĩnh viễn → v1.1 đổi sang cursor theo vị trí (không thể bỏ đói)* |
+| 3 | MỚI `syncBroadEod()` | chọn BROAD theo **CURSOR XOAY VÒNG** trên danh sách symbol-asc (350 mã/lượt, cursor tiến qua AppSetting `eod-broad.cursor`) — mọi mã tới lượt cứ mỗi ceil(N/350) = **5 ngày với N=1.451 đo thật**; lookback 12 ngày tự vá khoảng hở. *Bản v1.0 dùng filter "chưa tươi >3 ngày" — lượt đo thật 15:12Z 24-10 lộ lỗ hổng bỏ đói: mã đình chỉ chiếm slot đầu queue vĩnh viễn → v1.1 đổi sang cursor theo vị trí (không thể bỏ đói)* |
 | 4 | `loadSegmentBaskets` (ml/features.ts) | filter CORE — rổ bằng chứng top-ADTV §3.4 đứng yên tuyệt đối |
 | 5 | `runPostIngestChecks` (ingest-pipeline.ts) | filter CORE mặc định — A9/corporate scan không quét 1.000 mã mỗi 15:45 |
 | 6 | `fundamentals.ts` ingest | filter CORE (chỉ T1 xứng đáng nạp cơ bản) |
@@ -76,7 +76,7 @@ Tin/chunk RAG > 90 ngày: **hoãn** — kho hiện 27MB, không phải nút th�
 
 ## §7. Breadth toàn sàn — API + UI (Phase 1 hiển thị, chưa bỏ phiếu Bayes)
 
-- `src/lib/breadth-market.ts` — 1 query bar toàn STOCK VN CORE+BROAD từ cutoff 420 ngày (≈ 280K dòng, ~3-5s WAN — on-demand + cache TTL 10 phút, KHÔNG trong chu kỳ agent): A/D (tăng/giảm/giữ so close hôm trước) · %trên MA20/50/200 · tổng mã tính · theo từng sàn + gộp.
+- `src/lib/breadth-market.ts` — 1 query bar toàn STOCK VN CORE+BROAD từ cutoff 420 ngày (≈ 280K dòng — đo thật 24-10 fixbug #189: breadth **10,5s** · focus **7,9s** cold-cache từ sandbox WAN, cache TTL 10 phút phía sau; on-demand, KHÔNG trong chu kỳ agent): A/D (tăng/giảm/giữ so close hôm trước) · %trên MA20/50/200 · tổng mã tính · theo từng sàn + gộp.
 - `GET /api/market/breadth` · `GET /api/market/focus` (screen §4, top ~40 dòng trả về).
 - UI: card **"Toàn sàn — bức tranh rộng (T0)"** trong workspace Thị trường (ngay sau MarketSummary): chip thống kê + bảng theo sàn + bảng mã trọng tâm (cuộn `max-h-96` custom scrollbar) + chú thích nguồn/cửa sổ.
 - **Chưa** đưa breadth toàn sàn vào bằng chứng Bayes (ổn định synthesis — T5.2 deterministic; để Phase 2 kèm bài toán trọng số).
@@ -101,7 +101,7 @@ Tin/chunk RAG > 90 ngày: **hoãn** — kho hiện 27MB, không phải nút th�
 | Rủi ro | Mức | Giảm nhẹ |
 |---|---|---|
 | Phình vượt 500MB (UPCOM nhiều mã hơn dự phóng) | 🟡 vừa | lọc hoạt động §3.3 + prune §6 + đo T1.9; núm chỉnh ngưỡng UPCOM |
-| dchart chặn tải (1.540 probe + sync tăng ~10× request/ngày) | 🟡 vừa | throttle 300ms giữ nguyên · sync BROAD chia 250×3 ngày · chạy 16:00 ngoài giờ phiên |
+| dchart chặn tải (1.540 probe + sync tăng ~10× request/ngày) | 🟡 vừa | throttle 300ms giữ nguyên · sync BROAD chia 350 mã/lượt × 5 ngày xoay vòng · chạy 16:00 ngoài giờ phiên |
 | Chu kỳ agent chậm do DB to ra | 🟢 thấp | mọi đường phân tích lọc CORE (§5.4-5.5); breadth on-demand cache 10' |
 | finfo listing đổi schema | 🟢 thấp | validate trường + bỏ qua dòng lỗi (probe dchart vẫn là cửa sự thật khi tạo) |
 | **Rollback** | — | tắt = dừng scheduler EOD_BROAD + xoá BROAD: `deleteMany Instrument where universeTier=BROAD` (cascade Bar) — CORE không dính 1 byte |

@@ -13,7 +13,9 @@ import { latestFeatureSnapshot } from "@/lib/ml/features";
 export async function buildLiquidityBlock(): Promise<string> {
   const [instruments, flows, adtvTop] = await Promise.all([
     db.instrument.findMany({
-      where: { isActive: true },
+      // F-1892-01 (fixbug #189): lọc tồn tại Quote ở DB — BROAD không quote
+      // (§5.7) khỏi nạp 1.451 hàng chết; hành vi như cũ (downstream lọc null).
+      where: { isActive: true, quotes: { some: {} } },
       select: {
         id: true,
         symbol: true,

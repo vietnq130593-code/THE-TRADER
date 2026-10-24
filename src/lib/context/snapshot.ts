@@ -37,7 +37,10 @@ export async function buildMarketBlock(): Promise<MarketSnapshot> {
   });
   const [instruments, positions, alerts] = await Promise.all([
     db.instrument.findMany({
-      where: { isActive: true },
+      // F-1892-01 (fixbug #189): BROAD (1.451 mã, không có Quote — §5.7) làm
+      // query này nạp gấp ~15× hàng chết mỗi chu kỳ. Lọc tồn tại Quote ngay
+      // ở DB — hành vi giữ nguyên 100% (allQuoted phía dưới vốn yêu cầu quote).
+      where: { isActive: true, quotes: { some: {} } },
       select: {
         id: true,
         symbol: true,

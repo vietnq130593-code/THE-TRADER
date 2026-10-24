@@ -40,6 +40,22 @@ interface EngineState {
   // — engine hydrate lúc boot (restart không chạy lại sweep cùng Chủ nhật).
   lastMlSweepSunday?: string | null;
   lastMlSweepAt?: string | null;
+  // UNIVERSE_TIERING §5.3 (F-1891-01): lịch sync T0 toàn sàn — engine persist
+  // từ Task 188 nhưng whitelist route KHÔNG nhận → restart giữa chừng chạy lại
+  // 350 mã sync thừa (route idempotent nhưng tốn dchart + 190s WAN).
+  lastEodBroadSyncDate?: string | null;
+  lastEodBroadSyncAt?: string | null;
+  // K1 (#87) — ngày settle-equity sandbox (P0-5, cùng lỗ hổng F-1891-01)
+  lastK1EquityDate?: string | null;
+  lastK1EquityAt?: string | null;
+  // #106/#107 — COUNCIL: ngày đánh giá quyết định (P0-5)
+  lastCouncilEvalDate?: string | null;
+  lastCouncilEvalAt?: string | null;
+  // #129 (F-02A + F-03a) — vĩ mô VN + khối ngoại (P0-5)
+  lastMacroVnDate?: string | null;
+  lastMacroVnAt?: string | null;
+  lastFlowSyncDate?: string | null;
+  lastFlowSyncAt?: string | null;
   updatedAt?: string;
 }
 
@@ -88,6 +104,19 @@ export async function POST(request: Request) {
       // C1 (#99 — F3) — lịch sweep AutoML L1 CN 04:15 ICT (P0-5, additive)
       "lastMlSweepSunday",
       "lastMlSweepAt",
+      // F-1891-01 (fixbug #189): engine persistEngineState gửi các field dưới đây
+      // từ các nhiệm vụ trước nhưng whitelist bỏ sót → bị drop LẶNG LẼ (không 422,
+      // không log) — hydrate lúc boot luôn thấy undefined → chạy lại job cùng ngày.
+      "lastEodBroadSyncDate",
+      "lastEodBroadSyncAt",
+      "lastK1EquityDate",
+      "lastK1EquityAt",
+      "lastCouncilEvalDate",
+      "lastCouncilEvalAt",
+      "lastMacroVnDate",
+      "lastMacroVnAt",
+      "lastFlowSyncDate",
+      "lastFlowSyncAt",
     ];
     const clean: EngineState = { updatedAt: new Date().toISOString() };
     // F-1091-08 (fixbug api #109): key-whitelist TRƯỚC đây không kiểm KIỂU GIÁ

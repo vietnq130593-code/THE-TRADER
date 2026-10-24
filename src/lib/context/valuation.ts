@@ -22,7 +22,9 @@ export async function buildValuationBlock(): Promise<string> {
   // B5 §3.4 — khoá rổ về HOSE-STOCK (continuity #34; universe đa sàn/index
   // volume ~2,1 tỷ không được tràn vào top-10 định giá)
   const instruments = await db.instrument.findMany({
-    where: { isActive: true, market: "HOSE", type: "STOCK" },
+    // F-1892-01 (fixbug #189): lọc tồn tại Quote ở DB — BROAD HOSE (359 mã
+    // không quote) khỏi nạp hàng chết; hành vi như cũ (quoteRows lọc null).
+    where: { isActive: true, market: "HOSE", type: "STOCK", quotes: { some: {} } },
     select: {
       id: true,
       symbol: true,

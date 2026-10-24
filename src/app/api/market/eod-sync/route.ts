@@ -21,9 +21,13 @@ export const maxDuration = 300;
  *                              ngày mà tưởng đã backfill sâu). Giữ PIT theo
  *                              F-611B-04 (firstSeenAt cũ được tôn trọng).
  *   { tier?: "broad" }       — UNIVERSE_TIERING §5.3: sync T0 toàn sàn
- *                              (BROAD, mặc định lookback 12 ngày, tự tiến
- *                              "chưa tươi >3 ngày", take 250/lượt, prune cửa
- *                              sổ cuộn 420 ngày). Engine gọi 16:00 ICT.
+ *                              (BROAD, mặc định lookback 12 ngày; CURSOR XOAY
+ *                              VÒNG v1.1 lấy 350 mã/lượt theo vị trí trên
+ *                              danh sách symbol-asc — mã đình chỉ không thể
+ *                              bỏ đói ai; xoay hết ~1.451 mã trong 5 lượt
+ *                              (1 lượt/ngày, engine 16:00 ICT; lookback 12
+ *                              ngày tự vá); prune cửa sổ cuộn 420 ngày cuối
+ *                              lượt).
  *                              Không chạy postIngestChecks (A9/corporate scan
  *                              là việc của CORE — §5.5) và không neo Quote
  *                              (BROAD không realtime — §5.7).

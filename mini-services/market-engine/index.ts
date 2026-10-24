@@ -526,7 +526,7 @@ async function hydrateEngineState(): Promise<void> {
     if (typeof s.lastIntlFailAt === "number") lastIntlFailAt = s.lastIntlFailAt;
     log(
       "state",
-      `phục hồi state từ DB (P0-5): eod=${stats.lastEodSyncDate ?? "—"} · intl=${stats.lastIntlSyncDate ?? "—"} · reprobe=${stats.lastReprobeSunday ?? "—"} · settle=${stats.lastSettleDate ?? "—"} · ml-train=${stats.lastMlTrainSunday ?? "—"} · ml-sweep=${stats.lastMlSweepSunday ?? "—"} · intlFailStreak=${intlFailStreak}`
+      `phục hồi state từ DB (P0-5): eod=${stats.lastEodSyncDate ?? "—"} · eod-broad=${stats.lastEodBroadSyncDate ?? "—"} · intl=${stats.lastIntlSyncDate ?? "—"} · reprobe=${stats.lastReprobeSunday ?? "—"} · settle=${stats.lastSettleDate ?? "—"} · k1=${stats.lastK1EquityDate ?? "—"} · council=${stats.lastCouncilEvalDate ?? "—"} · macro-vn=${stats.lastMacroVnDate ?? "—"} · flow=${stats.lastFlowSyncDate ?? "—"} · ml-train=${stats.lastMlTrainSunday ?? "—"} · ml-sweep=${stats.lastMlSweepSunday ?? "—"} · intlFailStreak=${intlFailStreak}`
     );
   } catch (err) {
     // App chưa sẵn sàng lúc boot engine — giữ state rỗng, sự kiện sync đầu
