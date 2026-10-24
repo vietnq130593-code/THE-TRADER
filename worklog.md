@@ -5820,3 +5820,23 @@ Stage Summary:
 - KHUYẾN NGHỊ ROTATE (kỷ luật Task 171): key đã dán trong chat → owner nên rotate tại build.nvidia.com khi tiện; .env.local đổi key không cần restart dev (SHIM đọc đĩa + Reload env tự kích)
 - Quan sát mới (không hành động): catalogue NIM thêm 2 model embed mới nemotron-3.5-embed-1b/8b — khi nào cân nhắc nâng cấp lõi embed thì benchmark lại (đổi dim/model phải re-embed toàn kho)
 - Không sửa dòng code sản phẩm nào; duy nhất .env.local (gitignored) + worklog
+---
+Task ID: 183
+Agent: Z.ai Code (orchestrator — đóng vai kỹ sư AI tuyển dụng, phân tích repo CRM của ứng viên)
+Task: Owner yêu cầu vào vai kỹ sư AI lâu năm đang tuyển dụng: phân tích kiến trúc + công nghệ repo CRM trên GitHub nguyenquocviety2c để xác định kỹ năng ứng viên, viết báo cáo ngắn kiểu CV (owner cấp PAT mới thay PAT mất trong reset #5)
+
+Work Log:
+- PAT mới HỢP LỆ (GET /user → login nguyenquocviety2c-code, tạo 2026-04-26) — account đúng là "nguyenquocviety2c-code" (không có hậu tố = 404)
+- /user/repos thấy 8 repo (CRM 167MB · TMO · AGI · THE-TRADER public · 100day · CRM-1 · tuvienvinhduc · Landing-Page) → chọn CRM (mới nhất 23/10, 167MB)
+- Clone CRM depth 50 → /tmp/recruit/crm-analysis (ngoài repo, không bẩn workspace)
+- SỐ ĐO ĐỘC LẬP: 681 commit API-đếm (24/8→23/10 = 2 tháng) · 373.004 dòng TS/TSX · 225 API routes · 104 migration Supabase · worklog 19.025 dòng / 787 task · fixbug.md 44KB · 28 unit/integration test files + 13 e2e specs + CI GitHub Actions (lint+tsc+unit, kill-switch documented)
+- AI CORE đếm phi-test: ai-engine 21.987 dòng (ann-engine BP1-BP4 + He/Xavier [VÁ-L1 vá std-vs-variance] + dropout inverted + Float64-base64 · rl-engine Q-Learning/SARSA/ε-greedy/Boltzmann/DQN replay+target 864 state × 20 action · NAS 10 file: supernet/hypernetwork/surrogate/evolution/orchestrator 2.718 dòng triple-lock budget) + ai tools/rag 19.733 dòng (registry + 5 packs + RAG indexer pgvector 2048d NIM content-hash dedupe) + at3 3.801 dòng = ~45,5K dòng AI lõi
+- LLM providers.ts: 6 provider ĐO THẬT từng cái (GROQ whisper-large-v3 ASR production · NIM text+embed · ZAI sandbox-only · ZEN opencode 1000-token cap · OpenRouter :free · Mistral pool _2/_3/_4) + isRetryable phân loại 429/5xx vs 400/404
+- AT3 pipeline verify: recording → claim FOR UPDATE SKIP LOCKED → ffprobe → ffmpeg silencedetect → chunk 25s → ASR → LLM#1 diarization THỢ/KHÁCH → LLM#2 rubric A35/B25/C20 → server KHÔNG TIN số học LLM (clamp + tính lại)
+- Face recognition check-in (face-api) · rules engine cron hourly · campaign voucher cá nhân hoá
+- Repo có sẵn docs/CV-DIEM-NHAN-AI-ENGINEER.md (136 dòng, tuyên bố 8.200 dòng engine — LỖI THỜI: đo lại 21.987+19.733+3.801 ≈ 45,5K; em dùng số đo độc lập của mình)
+
+Stage Summary:
+- PHÁN ĐỒ ĐỘNG: AI Engineer applied-AI mid→senior với năng lực tự vận hành production xuất sắc — điểm mạnh: toán ML tự viết đúng, kỷ luật vận hành (worklog/fixbug/VÁ-tracking/budget-lock/idempotency/kill-switch), đa provider có đo đạc; điểm cần lưu ý: component khổng lồ (7.576 dòng invoice-summary.tsx), phát triển có dấu vết AI-agent-assisted mạnh (z-ai sdk trong code) — kỹ năng thể hiện ở ORCHESTRATION + ARCHITECTURE + JUDGMENT chứ không phải gõ từng dòng
+- Báo cáo CV-style đã viết trong reply cho owner (không tạo file trong repo THE TRADER)
+- PAT đã dán trong chat → khuyến nghị owner rotate; KHÔNG ghi PAT vào bất kỳ file nào
