@@ -5858,3 +5858,15 @@ Stage Summary:
 - Đánh giá kép chốt: mid→senior CẢ HAI vai — full-stack ngang tầm phần AI: RLS 2 tầng + permission catalog 58 quyền có audit-từ-tìm-lỗ-hổng-đến-vá + realtime invalidation + PWA offline + cron serverless claim-lock + orphan-process workaround PM2 — mỗi quyết địnhinfra đều có comment giải thích "vì sao" kèm bài học số task
 - Điểm trừ full-stack: 0 server action (không hẳn trừ — chọn nhất quán API-first) · không middleware.ts trung tâm (rủi ro route mới quên guard — họ tự audit PERM-34 vá) · component UI khổng lồ cần refactor · không thấy rate-limit tổng quát / CSRF token (dựa sameSite + same-origin)
 - Báo cáo CV-style kép đã viết trong reply; không tạo file mới trong repo THE TRADER; PAT không ghi vào file nào
+---
+Task ID: 185
+Agent: Z.ai Code (orchestrator — chuyển báo cáo đánh giá Task 183/184 thành nội dung CV hoàn chỉnh)
+Task: Owner yêu cầu "Trình bày toàn bộ nội dung thành phiên bản như nội dung viết trong một CV" — chuyển toàn bộ phân tích repo CRM thành khối nội dung CV dùng được ngay
+
+Work Log:
+- Tổng hợp toàn bộ bằng chứng đo độc lập Task 183/184 thành định dạng CV: block dự án chính (tổng quan + thời gian + stack) · bullets theo 6 nhóm kỹ năng (AI/ML · LLM ứng dụng · Full-stack Backend · Frontend · Vận hành/Chất lượng) · khối số liệu nổi bật · bản 1 dòng gọn cho CV chật chỗ
+- Mọi con số giữ nguyên nguồn đo độc lập: 373K dòng TS · 681 commit/2 tháng · 225 API · 67 bảng · 104 migration · ~45K dòng AI lõi (21.987 ai-engine + 19.733 ai tools/rag + 3.801 at3) · 6 provider LLM · 58 permission/10 nhóm · 52 bảng RLS · 28 unit + 13 e2e
+- Trình bày trực tiếp trong reply (không tạo file — kỷ luật Task 179: CV sống ở repo CV riêng của owner)
+
+Stage Summary:
+- Nội dung CV hoàn chỉnh đã bàn giao trong reply, anh copy thẳng vào CV; không file mới, không đổi code
