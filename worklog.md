@@ -5781,3 +5781,21 @@ Stage Summary:
 - MẤT THẬT SỰ (đã báo owner): NIM key (.env.local — L2 fail-soft về BM25 thuần, chu kỳ không chết) · .env.passphrase (owner có trong password manager — chạy `bun run env:restore` bất cứ lúc nào để lấy lại .env chuẩn) · opencode CLI (LLM tự fallback z-ai glm-4.6 — agents vẫn chạy)
 - Kết luận cho câu hỏi owner: TRƯỚC recovery KHÔNG phải bản mới nhất (reset lùi ~23h) · SAU recovery: sandbox = origin/main 933834d TUYỆT ĐỐI + DB Supabase tươi đến 24/10 + engine code Task 178 + app verified browser — commit này push ngay (kỷ luật rollback tự vệ)
 - Bài học ghi nhận: DB "bền vững qua reset" đúng như thiết kế Supabase-first (schema.prisma chú thích) — pg-service chỉ là fallback khi MẤT egress; lần này egress có lại nên quay cloud là đúng đường · connection_limit phải ≤ pool_size-5 (để chừa cho burst script/tool chẩn đoán)
+---
+Task ID: 181
+Agent: Z.ai Code (orchestrator — Q&A rà soát nợ kỹ thuật blueprint)
+Task: Owner hỏi: "Chúng ta có nợ kỹ thuật, có blueprint nào gần đây mà chưa triển khai hết không hay tất cả đều đã triển khai hết?"
+
+Work Log:
+- Rà toàn bộ 26 file docs/ (blueprint + review + assessment) đối chiếu worklog Task 129→180 và git log
+- STATE_SPACE_BLUEPRINT (22/10 — mới nhất): Phase 1 ✅ (Task 176) · Phase 2 ✅ (Task 178) · Phase 3 CHƯA (SS-4/SS-6/SS-10/SS-12 — đúng kế hoạch chờ Pha 1-2 ổn định ≥2 tuần ~6/11)
+- AUDIT_137 (18/10): 40/40 đã xử lý qua Task 138+139; DEFER còn: B7 dl-mtl head · D5/D6 LOW · B14 chờ ≥60 phiếu voice (0/30)
+- RAG_UPGRADE_ASSESSMENT §10.4: LLM trích thực thể chờ credit NIM · cổng §6.5 so L1/L2 chờ ≥30 ngày (~17/11)
+- AI_ENGINEER_REVIEW_BRAIN (17/10): 18/18 F-00→F-17 triển khai (Task 129); 3 phần chờ egress F-03b/F-05/F-02 Pha B — PROBE MỚI hôm nay: google.com 302 OK · finfo.vn/gso/tctk KHÔNG resolve DNS · sbv.gov.vn 403 → VẪN BỊ CHẶN (tình trạng không đổi dù egress Supabase thông)
+- Nợ vận hành từ reset #5 (Task 180): NIM key mất → L2 fail-soft (2715 chunk cũ đủ vector, 29 pending sẽ BM25-only khi index) · bug để dành Fixbug riêng: knowledgeChunk.createMany Unique(refTable,refId) race (Task 178 phát hiện, dev.log hiện 0 lỗi 1000 dòng cuối)
+- SS A/B bóng: mode shadow, verdict 14 ngày ~5/11 · ML_AUTOML #99 ĐÃ TRIỂN KHAI XONG (walk-forward debt #2 đóng bởi Task 139 B4) · REVIEW_SELL_MECHANISM F-151-1/2 đã vá Task 152, F-151-3 là quan sát chờ dữ liệu
+- Verify hiện trạng: app :3000 + engine :3003 sống (ticks 94, lastTickAt mới) · dev.log sạch lỗi
+
+Stage Summary:
+- KẾT LUẬN: KHÔNG phải mọi blueprint đã hết — 1 nợ chính theo kế hoạch: STATE_SPACE Phase 3 (4 mục SS-4/SS-6/SS-10/SS-12, điều kiện kích ~6/11 trùng lúc bóng A/B 14 ngày ra verdict ~5/11); ngoài ra các nợ treo đều CÓ GIẤY TỜ: 4 mục DEFER AUDIT_137 (LOW/chờ dữ liệu) · 2 mục §10.4 RAG (chờ credit + 30 ngày) · 3 tính năng chờ egress vẫn bị DNS chặn (probe mới xác nhận) · NIM key là nợ vận hành cấp bách nhất hiện tại
+- Không sửa code, không đổi DB — review-only + 1 probe egress (read-only)
