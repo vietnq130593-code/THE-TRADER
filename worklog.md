@@ -5759,3 +5759,25 @@ Stage Summary:
 - Kiến trúc diagram không mất nguồn: docs/diagrams/the-trader-architecture-vi.html còn nguyên (21 KB, tái sinh PNG được)
 - App THE TRADER không hề ảnh hưởng (0 dòng app code đổi): lint PASS · dev.log sạch · browser verify desktop + mobile 0 lỗi, workspace switching hoạt động, footer đúng luật sticky/natural-push
 - Commit + push GitHub ngay sau verify (kỷ luật rollback tự vệ từ Task 176+)
+
+---
+Task ID: 180
+Agent: main-orchestrator (Z.ai Code)
+Task: Chủ sở hữu hỏi "kiểm tra phiên bản hiện tại trong sandbox có phải bản mới nhất không" → PHÁT HIỆN SANDBOX RESET (rollback #5) 04:28–04:34 UTC 24/10 → recovery toàn bộ về origin/main 933834d + DB Supabase cloud
+
+Work Log:
+- Phát hiện qua 3 dấu hiệu: (1) git fetch → local HEAD cbcbd4f (UUID snapshot lineage, commit amend 23/10 06:21 — giữa chừng Task 176) LỆCH origin/main 933834d 8 commit (thiếu cả Task 176/178/179); (2) disk có GIAO_TRINH_PYTHON.docx + 72 verify png + scripts/gtp + docs/CV_THE_TRADER.md (cleanup 179 bị hoàn tác) + thiếu phase2/tvp/seasonal/calendar (Task 178) + worklog disk kết thúc ở Task 175b; (3) dev.log biến mất + app :3000 chết + .env bị thay bằng bản SQLite cổ (file:custom.db)
+- Chấn đoán thiệt hại: process mới toàn bộ (mtime 04:34): pg-service :5432 + engine :3003 chạy code cũ nhưng app chết; db/pglite TRỐNG RỖNG (0 bảng — tạo mới lúc reset); .env.local (NIM key) + .env.passphrase MẤT; node_modules sống sót
+- NGỌC VÀNG: probe egress sandbox MỚI → DNS pooler Supabase resolve IP THẬT (15.164.x AWS ap-northeast-2) + TCP :5432 THÔNG + HTTPS supabase.co 401 (sống) → kết nối Supabase bằng URL từ git history 9c2dfab (password URL-encode @→%40) → BẤT NGỜ: DB cloud KHÔNG đóng băng 11/10 mà SỐNG ĐẾN SÁNG NAY: 43 bảng · Bar 226.154 nến mới nhất 23/10 15:00 (đúng phiên cuối) · AgentRun/AuditLog ghi đến 24/10 05:13–05:19 (app tiền-reset vẫn đang ghi cloud!) · MlModel 122 bản (mới 23/10) · 24 agents · 1792 audits · 2173 runs → DB THẬT của app là Supabase, pg-service local chỉ là fallback cổ (pglite rỗng chứng minh không dùng nữa)
+- Code recovery: git reset --hard origin/main 933834d (working tree sạch 0 đổi — không mất gì local; Tasks 176-179 an toàn trên GitHub từ các push trước) → verify artifact: ss/ đủ 10 file (phase2/tvp/seasonal/calendar về) · GIAO_TRINH + verify png + gtp biến mất (cleanup 179 tái áp dụng) · worklog đủ đến Task 179
+- .env recovery: git show 9c2dfab:.env làm nền → DATABASE_URL thay bằng Supabase pooler (schema=trader) — env:restore KHÔNG chạy được vì .env.passphrase mất (chỉ owner giữ trong password manager — đã báo); bun run db:push → "The database is already in sync with the Prisma schema" (XÁC NHẬN DB sống với code hiện hành đến tận sáng nay)
+- Khởi động: app setsid -f double-fork (pattern #167/#176) → gặp EMAXCONNSESSION (pooler session-mode pool_size 15 vs connection_limit=16 + instance cũ chưa nhả) → hạ connection_limit 16→10 + restart → 0 lỗi qua nhiều chu kỳ tick; engine :3003 kill instance code-cũ + setsid -f restart code Task 178 → boot banner ĐẦY ĐỦ lịch mới (ss-daily 16:50 ICT t2–t6 có mặt) + [state] phục hồi từ DB P0-5 (eod=23/10 · settle=23/10) + news +17 tin live + macro F-02A quét 14 tin
+- LLM: opencode CLI bị reset xoá khỏi PATH → auto-chain fallback đúng thiết kế → provider "zai" model glm-4.6 (curl /api/llm/models xác nhận canTest=true)
+- Browser verify (agent-browser): / render đầy đủ — title + banner "Thứ Bảy 24/10/2026" + tin Tuổi Trẻ live + chip footer "AI: $6.45 · 4.1M tokens" (lịch sử chi phí lũy kế từ DB nguyên vẹn) · workspace Đội Agent "24 agents · 5 nhóm" + Model glm-4.6 · mobile 390px scrollWidth=clientWidth=390 (0 tràn ngang) · 0 console error / 0 page error
+
+Stage Summary:
+- RESET #5 diễn ra 04:28–04:34 UTC 24/10 (~3h trước tin nhắn owner): git về snapshot cbcbd4f (23/10 06:21 — lệch ~23h), disk bị hoàn tác Task 176/178/179, process khởi động lại (engine + pg code cũ, app chết), pglite bị xóa trắng, .env về bản SQLite cổ, .env.local + .env.passphrase mất
+- KHO DỮ LIỆU KHÔNG MẤT: Supabase cloud là DB sống (đến 24/10 05:13) — mất đúng 1 khoảng trống 05:19→07:44 UTC hôm nay (Thứ Bảy — không lịch nào chạy, thiệt hại = 0) · 226K nến + 24 agents + 122 MlModel + 1792 audit + portfolio/signals đủ · EOD 23/10 đã sync sẵn từ 15:45 ICT hôm qua
+- MẤT THẬT SỰ (đã báo owner): NIM key (.env.local — L2 fail-soft về BM25 thuần, chu kỳ không chết) · .env.passphrase (owner có trong password manager — chạy `bun run env:restore` bất cứ lúc nào để lấy lại .env chuẩn) · opencode CLI (LLM tự fallback z-ai glm-4.6 — agents vẫn chạy)
+- Kết luận cho câu hỏi owner: TRƯỚC recovery KHÔNG phải bản mới nhất (reset lùi ~23h) · SAU recovery: sandbox = origin/main 933834d TUYỆT ĐỐI + DB Supabase tươi đến 24/10 + engine code Task 178 + app verified browser — commit này push ngay (kỷ luật rollback tự vệ)
+- Bài học ghi nhận: DB "bền vững qua reset" đúng như thiết kế Supabase-first (schema.prisma chú thích) — pg-service chỉ là fallback khi MẤT egress; lần này egress có lại nên quay cloud là đúng đường · connection_limit phải ≤ pool_size-5 (để chừa cho burst script/tool chẩn đoán)
