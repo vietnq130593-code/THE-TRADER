@@ -5870,3 +5870,19 @@ Work Log:
 
 Stage Summary:
 - Nội dung CV hoàn chỉnh đã bàn giao trong reply, anh copy thẳng vào CV; không file mới, không đổi code
+---
+Task ID: 186
+Agent: Z.ai Code (orchestrator — Q&A thiết kế universe theo dõi thị trường)
+Task: Owner hỏi: module Thị trường TP.HCM 35 mã · HN 20 · UPCOM 13 · trái phiếu + ngoại hối — vì sao không theo dõi HẾT để nắm bức tranh thị trường rộng hơn?
+
+Work Log:
+- Đo DB độc lập: 104 instrument = HOSE 30 STOCK + 5 ETF + 5 INDEX · HNX 20 STOCK + 2 INDEX · UPCOM 13 STOCK + 1 INDEX · US 10 + HK 4 · INDEX intl 3 · CMDTY 6 · FX 5 · BOND 3 (US10Y/30Y/5Y) — 104/104 có bar thật (226.154 EOD + 19.516 intraday)
+- Truy thiết kế: MARKET_EXPANSION_BLUEPRINT v1.1 (07/10, owner duyệt 5 câu §0) — nguyên tắc "15/15 ô vận hành" = hạ tầng + trung thực trạng thái, KHÔNG tô xanh; ô bond HNX/UPCOM #14/#15 "chờ nguồn" finfo blocked (probe lại Task 181: DNS vẫn chặn); 6 ô = 0 sản phẩm niêm yết thật
+- Truy cơ chế chọn mã: prisma/expand-universe.ts commit 1a2a192 — danh sách ứng viên THỦ CÔNG + probe dchart từng mã trước khi tạo (BAS/BIT/FUEMAFVN30... trống → bỏ); KHÔNG có endpoint danh-sách-toàn-sàn đã xác minh
+- Truy kiến trúc phân tích §3.4: rổ bằng chứng 2 TẦNG — phân tích theo segment top-ADTV (HOSE top-10 · HNX top-5 · UPCOM top-3 · ETF ≤10 · INDEX 4 mã) + composite trọng số ADTV đo được; breadth/evidence.ts tính trên HOSE-STOCK quoted 30 mã (KHÔNG phải toàn ~400 mã HOSE niêm yết)
+- Ràng buộc định lượng: ngân sách chu kỳ ≤180s · 23-24 agents LLM/token · Supabase free 500MB (deep backfill 1400 mã ≈ 4-5M bar ≈ multi-GB) · MAX_SYMBOLS_PER_SYNC=150 · dchart throttle · watcher re-probe Chủ nhật B14 đã sống cho mở rộng dần
+- Dọn 2 script đo tạm (p181-check-universe/p181b-db-size)
+
+Stage Summary:
+- TRẢ LỜI cho owner: (1) bức tranh rộng KHÔNG đến từ theo-dõi-hết-mà-từ 8 chỉ số segment VNINDEX/VN30/VNMID/VNSML/VNALL/HNX/HNX30/UPCOM — sàn tự tính từ TOÀN BỘ mã niêm yết, hệ thống đọc đúng tầng này + composite Bayes trọng số ADTV; (2) rổ top-ADTV là quyết định GIÁ THÀNH-CHẤT LƯỢNG: tín hiệu phải thực thi được trên mã có thanh khoản, ML cần chuỗi sâu, chu kỳ ≤180s; (3) NHƯỢNG BỘ TRUNG THỰC: breadth hiện chỉ trên 30 mã HOSE — A/D ratio toàn thị trường ~400 mã là khoảng trống THẬT, đề xuất "universe chiều rộng" (quote-only, không deep backfill) nâng breadth lên toàn sàn với chi phí nhỏ; (4) trái phiếu VN đang chờ nguồn (finfo blocked — probe Task 181 xác nhận), US yields đã có 3 mã
+- Không sửa code — Q&A review-only + 2 script đo tạm đã dọn
