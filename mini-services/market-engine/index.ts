@@ -139,6 +139,11 @@ const AGENT_CYCLE_MINUTES = (() => {
 /** Giờ ICT bắt đầu đồng bộ EOD hằng ngày (15:45 — sau giờ chốt 15:00). */
 const EOD_SYNC_AT = process.env.EOD_SYNC_AT ?? "15:45";
 const EOD_SYNC_DISABLED = process.env.EOD_SYNC_DISABLED === "1";
+/** UNIVERSE_TIERING §5.3 — giờ ICT sync T0 toàn sàn (tier BROAD) hằng ngày
+ *  16:00: SAU CORE 15:45 (không tranh chấp dchart), TRƯỚC bandit settle 16:15
+ *  (settle chỉ cần bar CORE — không chặn nhau; sync BROAD ~90-120s/250 mã). */
+const EOD_BROAD_SYNC_AT = process.env.EOD_BROAD_SYNC_AT ?? "16:00";
+const EOD_BROAD_SYNC_DISABLED = process.env.EOD_BROAD_SYNC_DISABLED === "1";
 /** B12 — giờ ICT sync EOD quốc tế Yahoo hằng ngày (06:15 — sau đóng cửa Mỹ). */
 const INTL_SYNC_AT = process.env.INTL_SYNC_AT ?? "06:15";
 const INTL_SYNC_DISABLED = process.env.INTL_SYNC_DISABLED === "1";
@@ -218,6 +223,9 @@ function parseHhMm(s: string): number | null {
   return h * 60 + min;
 }
 const EOD_SYNC_MINUTES = parseHhMm(EOD_SYNC_AT) ?? parseHhMm("15:45")!;
+// UNIVERSE_TIERING §5.3 — fail-safe parse như EOD_SYNC (bài học #42: null
+// → TypeError mỗi phút giết event loop).
+const EOD_BROAD_SYNC_MINUTES = parseHhMm(EOD_BROAD_SYNC_AT) ?? parseHhMm("16:00")!;
 const INTL_SYNC_MINUTES = parseHhMm(INTL_SYNC_AT) ?? parseHhMm("06:15")!;
 const SETTLE_MINUTES = parseHhMm(SETTLE_AT) ?? parseHhMm("16:15")!;
 const K1_EQUITY_MINUTES = parseHhMm(K1_EQUITY_AT) ?? parseHhMm("16:30")!;
@@ -286,6 +294,11 @@ const stats = {
   lastEodSyncDate: null as string | null,
   lastEodSyncError: null as string | null,
   eodSyncRuns: 0,
+  // UNIVERSE_TIERING §5.3 — sync T0 toàn sàn (P0-5: ngày đã sync sống sót restart)
+  lastEodBroadSyncAt: null as string | null,
+  lastEodBroadSyncDate: null as string | null,
+  lastEodBroadSyncError: null as string | null,
+  eodBroadRuns: 0,
   lastIntlSyncAt: null as string | null,
   lastIntlSyncDate: null as string | null,
   lastIntlSyncError: null as string | null,
@@ -432,6 +445,9 @@ interface EngineState {
   lastEodSyncAt?: string | null;
   lastIntlSyncAt?: string | null;
   lastReprobeAt?: string | null;
+  // UNIVERSE_TIERING §5.3 — sync T0 (P0-5: ngày đã sync sống sót restart)
+  lastEodBroadSyncDate?: string | null;
+  lastEodBroadSyncAt?: string | null;
   // A1/A4 (#79) — ngày đã settle/retrain + mốc chạy gần nhất (P0-5)
   lastSettleDate?: string | null;
   lastSettleAt?: string | null;
@@ -474,6 +490,10 @@ async function hydrateEngineState(): Promise<void> {
     if (typeof s.intlSyncDate === "string") stats.lastIntlSyncDate = s.intlSyncDate;
     if (typeof s.reprobeSunday === "string") stats.lastReprobeSunday = s.reprobeSunday;
     if (typeof s.lastEodSyncAt === "string") stats.lastEodSyncAt = s.lastEodSyncAt;
+    // UNIVERSE_TIERING §5.3 — phục hồi lịch T0 (restart giữa chừng không double-sync
+    //  cùng ngày — route idempotent nhưng tránh cả lần gọi thừa)
+    if (typeof s.lastEodBroadSyncDate === "string") stats.lastEodBroadSyncDate = s.lastEodBroadSyncDate;
+    if (typeof s.lastEodBroadSyncAt === "string") stats.lastEodBroadSyncAt = s.lastEodBroadSyncAt;
     if (typeof s.lastIntlSyncAt === "string") stats.lastIntlSyncAt = s.lastIntlSyncAt;
     if (typeof s.lastReprobeAt === "string") stats.lastReprobeAt = s.lastReprobeAt;
     // A1/A4 (#79) — phục hồi lịch settle/retrain (restart giữa chừng không
@@ -529,6 +549,8 @@ async function persistEngineState(): Promise<void> {
         intlFailStreak,
         lastIntlFailAt,
         lastEodSyncAt: stats.lastEodSyncAt,
+        lastEodBroadSyncDate: stats.lastEodBroadSyncDate,
+        lastEodBroadSyncAt: stats.lastEodBroadSyncAt,
         lastIntlSyncAt: stats.lastIntlSyncAt,
         lastReprobeAt: stats.lastReprobeAt,
         lastSettleDate: stats.lastSettleDate,
@@ -657,6 +679,37 @@ async function syncEodAndBroadcast(): Promise<void> {
   } finally {
     eodSyncInFlight = false;
     // P0-5 — state đã-sync-ngày sống sót restart
+    void persistEngineState();
+  }
+}
+
+/** UNIVERSE_TIERING §5.3 — sync T0 toàn sàn (tier BROAD): 16:00 ICT hằng ngày.
+ * Guard in-flight như eod-sync; timeout 280s < maxDuration route 300s.
+ * Broadcast "eod-broad" — UI/ops theo dõi queue dư + prune cửa sổ cuộn. */
+let eodBroadInFlight = false;
+const EOD_BROAD_POST_TIMEOUT_MS = 280_000;
+async function syncEodBroadAndBroadcast(): Promise<void> {
+  eodBroadInFlight = true;
+  try {
+    const data = await postJson(
+      "/api/market/eod-sync",
+      { tier: "broad", days: 12 },
+      { timeoutMs: EOD_BROAD_POST_TIMEOUT_MS }
+    );
+    stats.lastEodBroadSyncAt = new Date().toISOString();
+    stats.eodBroadRuns++;
+    stats.lastEodBroadSyncError = null;
+    stats.lastEodBroadSyncDate = ictNow().date;
+    io.emit("eod-broad", data);
+    log(
+      "eod-broad",
+      `sync T0 toàn sàn xong: ${data.symbolsOk ? (data.symbolsOk as unknown[]).length : "?"} mã · ${data.barsUpserted ?? 0} bar · prune ${data.prunedBars ?? 0} bar cũ · queue dư ${data.staleRemaining ?? "?"} mã`
+    );
+  } catch (err) {
+    stats.lastEodBroadSyncError = err instanceof Error ? err.message : String(err);
+    log("eod-broad", `LỖI: ${stats.lastEodBroadSyncError}`);
+  } finally {
+    eodBroadInFlight = false;
     void persistEngineState();
   }
 }
@@ -1267,6 +1320,20 @@ function eodSyncDue(): boolean {
   return ict.minutes >= EOD_SYNC_MINUTES && stats.lastEodSyncDate !== ict.date;
 }
 
+/** UNIVERSE_TIERING §5.3 — T0: đã qua 16:00 ICT hôm nay, chưa sync ngày này,
+ *  và CORE đã sync (dchart cùng nguồn — CORE fail thì BROAD để mai tự vá,
+ *  tránh tự đấm nguồn khi nguồn đang chết). */
+function eodBroadDue(): boolean {
+  if (EOD_BROAD_SYNC_DISABLED) return false;
+  if (eodBroadInFlight) return false;
+  const ict = ictNow();
+  return (
+    ict.minutes >= EOD_BROAD_SYNC_MINUTES &&
+    stats.lastEodBroadSyncDate !== ict.date &&
+    stats.lastEodSyncDate === ict.date
+  );
+}
+
 /** #106 — COUNCIL đánh giá sổ quyết định D-LEDGER 16:45 ICT t2–t6 (sau k1
  *  16:30 — tránh tranh lock). Route idempotent (upsert signalId). */
 let councilEvalInFlight = false;
@@ -1594,7 +1661,7 @@ http.on("error", (err) => {
 function logBootSchedule(): void {
   log(
     "boot",
-    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · ml-psi-retrain ${ML_PSI_RETRAIN_AT} ICT t2–t6${ML_PSI_RETRAIN_DISABLED ? " (TẮT)" : ` (check ${ML_PSI_RETRAIN_CHECK_MINUTES}phút)`} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · ss-daily ${ML_SS_DAILY_AT} ICT t2–t6${ML_SS_DAILY_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
+    `lịch: tick ${(TICK_MS / 1000).toFixed(0)}s · news ${(NEWS_MS / 60_000).toFixed(0)}phút · eod-sync ${EOD_SYNC_AT} ICT${EOD_SYNC_DISABLED ? " (TẮT)" : ""} · eod-broad (T0 toàn sàn) ${EOD_BROAD_SYNC_AT} ICT${EOD_BROAD_SYNC_DISABLED ? " (TẮT)" : ""} · intl-sync ${INTL_SYNC_AT} ICT${INTL_SYNC_DISABLED ? " (TẮT)" : ""} · reprobe ${REPROBE_AT} ICT${REPROBE_DISABLED ? " (TẮT)" : ""} · settle ${SETTLE_AT} ICT${SETTLE_DISABLED ? " (TẮT)" : ""} · ml-train ${ML_TRAIN_AT} ICT${ML_TRAIN_DISABLED ? " (TẮT)" : ""} · ml-sweep ${ML_SWEEP_AT} ICT${ML_SWEEP_DISABLED ? " (TẮT)" : ""} · ml-psi-retrain ${ML_PSI_RETRAIN_AT} ICT t2–t6${ML_PSI_RETRAIN_DISABLED ? " (TẮT)" : ` (check ${ML_PSI_RETRAIN_CHECK_MINUTES}phút)`} · k1-equity ${K1_EQUITY_AT} ICT${K1_EQUITY_DISABLED ? " (TẮT)" : ""} · council-eval ${COUNCIL_EVAL_AT} ICT${COUNCIL_EVAL_DISABLED ? " (TẮT)" : ""} · ss-daily ${ML_SS_DAILY_AT} ICT t2–t6${ML_SS_DAILY_DISABLED ? " (TẮT)" : ""} · macro-vn ${MACRO_VN_AT} ICT${MACRO_VN_DISABLED ? " (TẮT)" : ""} · flow-sync ${FLOW_SYNC_AT} ICT${FLOW_SYNC_DISABLED ? " (TẮT)" : ""} · agent-cycle ${
       AGENT_CYCLE_MINUTES > 0 ? `${AGENT_CYCLE_MINUTES.toFixed(0)}phút` : "TẮT"
     } (hậu phương K2) · k2 due-check 60s (AppSetting "k-run") · k3 task due-check 60s (nhiệm vụ định kỳ AgentTask)`
   );
@@ -1639,6 +1706,7 @@ engineTimers.push(setInterval(ingestNewsAndBroadcast, NEWS_MS));
 const dueCheckTimer = setInterval(() => {
   try {
     if (eodSyncDue()) void syncEodAndBroadcast();
+    if (eodBroadDue()) void syncEodBroadAndBroadcast();
     if (intlSyncDue()) void syncIntlAndBroadcast();
     if (reprobeDue()) void reprobeAndBroadcast();
     // A1/A4 (#79) — lịch settle 16:15 ICT hằng ngày + retrain CN 04:00 ICT

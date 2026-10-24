@@ -542,7 +542,9 @@ export async function ingestFundamentals(
         orderBy: { symbol: "asc" },
       })
     : await db.instrument.findMany({
-        where: { isActive: true, market: { in: VN_MARKETS }, type: "STOCK" },
+        // UNIVERSE_TIERING §5.6 — cơ bản chỉ nạp cho CORE (T1); BROAD đợi
+        // Phase 2 và có nguồn riêng (api-finfo đã verify resolve — §2).
+        where: { isActive: true, market: { in: VN_MARKETS }, type: "STOCK", universeTier: "CORE" },
         select: { id: true, symbol: true },
         orderBy: { symbol: "asc" },
         take: MAX_SYMBOLS_PER_INGEST,

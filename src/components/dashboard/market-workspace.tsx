@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { MarketSummary } from "@/components/dashboard/market-summary";
+import { MarketBreadthCard } from "@/components/dashboard/market-breadth-card";
 import { QuotesTable } from "@/components/dashboard/quotes-table";
 import { PriceChart } from "@/components/dashboard/price-chart";
 import { NewsCard } from "@/components/dashboard/news-card";
@@ -34,6 +35,11 @@ export function MarketWorkspace() {
 
       {/* 1. Stat cards tổng quan thị trường */}
       <MarketSummary />
+
+      {/* 1b. UNIVERSE_TIERING §7 — bức tranh toàn sàn T0 (breadth A/D + %MA
+       * trên ~1.000 mã CORE+BROAD) + bảng mã trọng tâm đề xuất (screen §4).
+       * Trả nợ Task 186: breadth cũ chỉ ~30 mã HOSE quoted CORE. */}
+      <MarketBreadthCard />
 
       {/* 2. Header section nhỏ */}
       <div className="flex items-baseline gap-2">

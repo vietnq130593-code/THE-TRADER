@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toPlain } from "@/lib/serialize";
-import { syncEodFromDchart, deepBackfillEod } from "@/lib/eod-sync";
+import { syncEodFromDchart, deepBackfillEod, syncBroadEod } from "@/lib/eod-sync";
 import { runPostIngestChecks } from "@/lib/ingest-pipeline";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +20,13 @@ export const maxDuration = 300;
  *                              operator gọi theo registry được sync thường 10
  *                              ngày mà tưởng đã backfill sâu). Giữ PIT theo
  *                              F-611B-04 (firstSeenAt cũ được tôn trọng).
+ *   { tier?: "broad" }       — UNIVERSE_TIERING §5.3: sync T0 toàn sàn
+ *                              (BROAD, mặc định lookback 12 ngày, tự tiến
+ *                              "chưa tươi >3 ngày", take 250/lượt, prune cửa
+ *                              sổ cuộn 420 ngày). Engine gọi 16:00 ICT.
+ *                              Không chạy postIngestChecks (A9/corporate scan
+ *                              là việc của CORE — §5.5) và không neo Quote
+ *                              (BROAD không realtime — §5.7).
  *
  * P1-6 (phiên #60 — pipeline nạp một cửa): SAU upsert, route chạy CHUỖN HẬU
  * KIỂM CHUNG (runPostIngestChecks): A9-check thuần outlier/gap/split (cùng
@@ -48,12 +55,29 @@ export async function POST(req: NextRequest) {
   }
   inFlight = true;
   try {
-    const body = (await req.json().catch(() => ({}))) as { days?: unknown; force?: unknown };
+    const body = (await req.json().catch(() => ({}))) as {
+      days?: unknown;
+      force?: unknown;
+      tier?: unknown;
+    };
     const force = body.force === "deep" ? "deep" : undefined;
+    const tierBroad = body.tier === "broad";
     const days =
       typeof body.days === "number" && Number.isFinite(body.days)
-        ? Math.max(2, Math.min(365, Math.floor(body.days)))
-        : 10;
+        ? Math.max(2, Math.min(tierBroad ? 90 : 365, Math.floor(body.days)))
+        : tierBroad
+          ? 12
+          : 10;
+
+    // UNIVERSE_TIERING §5.3 — tier=broad: sync T0 tự tiến + prune cửa sổ;
+    // KHÔNG chạy runPostIngestChecks (A9/corporate là việc của CORE — §5.5)
+    // và KHÔNG neo Quote (BROAD không realtime — §5.7).
+    if (tierBroad) {
+      const outcome = await syncBroadEod({ lookbackDays: days });
+      return NextResponse.json(toPlain({ ...outcome, tier: "broad", days }), {
+        status: outcome.ok ? 200 : 502,
+      });
+    }
 
     const outcome = force === "deep"
       ? await deepBackfillEod({ fromYear: 2013 })

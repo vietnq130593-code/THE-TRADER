@@ -470,6 +470,283 @@ export interface EodSyncOutcome {
   error?: string;
 }
 
+/* ═════════════════════════════════════════════════════════════════════
+ * UNIVERSE_TIERING_BLUEPRINT §5.3 + §6 — T0 TOÀN SÀN (tier BROAD)
+ *
+ * syncBroadEod: đồng bộ bar-ngày T0 hằng ngày 16:00 ICT (engine), KHÔNG
+ * Quote realtime (§5.7 — BROAD không bao giờ vào tick-engine/market-summary).
+ *
+ * Cơ chế CURSOR XOAY VÒNG (v1.1 — vá sau đo lượt thật 15:12Z 24-10): chọn
+ * 350 mã/lượt theo vị trí cursor trên danh sách symbol-asc (wrap-around),
+ * cursor tiến lên sau mỗi lượt (AppSetting "eod-broad.cursor") → ~1.000 mã
+ * quay hết trong 3 ngày, lookback 12 ngày tự vá mọi khoảng hở. Bản đầu dùng
+ * filter "chưa tươi >3 ngày" — đo thật lộ lỗ hổng BỎ ĐÓI: mã đình chỉ (không
+ * bao giờ có bar mới) đứng đầu queue symbol-asc mãi mãi, chiếm take-slot,
+ * mã hoạt động phía sau không bao giờ tới lượt. Cursor theo VỊ TRÍ không thể
+ * bỏ đói ai — mã đình chỉ chỉ tốn đúng 1 slot khi tới phiên của nó.
+ *
+ * pruneBroadBars (cuối mỗi lượt): xoá bar BROAD cũ hơn cửa sổ 420 ngày —
+ * điều kiện sống của ngân sách free tier (~125-140MB cố định thay vì
+ * +81MB/năm). KHÔNG BAO GIỜ đụng bar CORE (lọc universeTier BROAD).
+ * ═════════════════════════════════════════════════════════════════════ */
+
+/** §5.3 — số mã BROAD mỗi lượt sync: 350 × ~0,3s ≈ 105s + ghi ≈ 130s < 280s
+ * timeout engine; ~1.000 mã → xoay hết trong 3 ngày, lookback 12 ngày che
+ * dư dả (đã đo lượt thật 15:12Z 24-10: 2 mã 18 bar 2,5s). */
+const BROAD_MAX_SYMBOLS_PER_SYNC = 350;
+/** §6 — cửa sổ cuộn T0: 420 ngày lịch ≈ 260 phiên GD (đúng cutoff breadth). */
+export const BROAD_WINDOW_DAYS = 420;
+/** §5.3 — cursor xoay vòng lưu AppSetting "eod-broad.cursor".
+ *
+ * Vì SAU thay từ filter "stale>3 ngày" sang CURSOR: filter freshness khiến mã
+ * đình chỉ (không bao giờ có bar mới) LUÔN nằm đầu queue symbol-asc → nếu
+ * nhiều hơn take, mã hoạt động phía sau BỊ BỎ ĐÓI vĩnh viễn (đo lượt thật:
+ * ATA đình chỉ chiếm 1 slot mỗi ngày). Cursor xoay theo VỊ TRÍ: mọi mã được
+ * tới lượt cứ mỗi ceil(N/take) ngày bất kể đình chỉ — không thể bỏ đói. */
+const BROAD_CURSOR_KEY = "eod-broad.cursor";
+
+export interface BroadEodOutcome extends EodSyncOutcome {
+  tier: "BROAD";
+  /** §6 — số bar T0 bị xoá khỏi cửa sổ cuộn (đếm được, ghi meta nguồn). */
+  prunedBars: number;
+  /** Số mã BROAD còn lại chưa quay tới (queue phía sau cursor). */
+  staleRemaining: number | null;
+  /** Vị trí cursor xoay vòng sau lượt (meta debug ops). */
+  cursorNext: number | null;
+}
+
+/** §6 — xoá bar BROAD ngoài cửa sổ cuộn. Trả về số dòng đã xoá. */
+export async function pruneBroadBars(): Promise<number> {
+  const cutoff = new Date(Date.now() - BROAD_WINDOW_DAYS * 86_400_000);
+  const broadIds = (
+    await db.instrument.findMany({
+      where: { universeTier: "BROAD" },
+      select: { id: true },
+    })
+  ).map((i) => i.id);
+  if (broadIds.length === 0) return 0;
+  const res = await db.bar.deleteMany({
+    where: { instrumentId: { in: broadIds }, date: { lt: cutoff } },
+  });
+  return res.count;
+}
+
+async function readBroadCursor(): Promise<number> {
+  try {
+    const row = await db.appSetting.findUnique({ where: { key: BROAD_CURSOR_KEY } });
+    const n = row ? Number.parseInt(JSON.parse(row.value), 10) : Number.NaN;
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function writeBroadCursor(next: number): Promise<void> {
+  await db.appSetting.upsert({
+    where: { key: BROAD_CURSOR_KEY },
+    create: { key: BROAD_CURSOR_KEY, value: JSON.stringify(next) },
+    update: { value: JSON.stringify(next) },
+  });
+}
+
+export async function syncBroadEod(opts?: {
+  lookbackDays?: number;
+}): Promise<BroadEodOutcome> {
+  const startedAt = Date.now();
+  // lookback 12 ngày mặc định: che chu kỳ quay ~3 ngày/mã + T7/CN/lễ dư dả
+  const lookbackDays = Math.max(2, Math.min(90, opts?.lookbackDays ?? 12));
+  const toSec = Math.floor(Date.now() / 1000) + 86_400;
+  const fromSec = toSec - lookbackDays * 86_400;
+
+  // §5.3 — chọn theo CURSOR XOAY VÒNG trên danh sách symbol-asc: slice từ
+  // vị trí cursor, wrap-around đầu danh sách (mã đình chỉ không chặn ai).
+  const allBroad = await db.instrument.findMany({
+    where: {
+      isActive: true,
+      market: { in: ["HOSE", "HNX", "UPCOM"] },
+      universeTier: "BROAD",
+    },
+    select: { id: true, symbol: true, market: true, type: true },
+    orderBy: { symbol: "asc" },
+  });
+  const cursor = allBroad.length > 0 ? (await readBroadCursor()) % allBroad.length : 0;
+  const rotated = [...allBroad.slice(cursor), ...allBroad.slice(0, cursor)];
+  const instruments = rotated.slice(0, BROAD_MAX_SYMBOLS_PER_SYNC);
+  const cursorNext =
+    allBroad.length > 0 ? (cursor + instruments.length) % allBroad.length : 0;
+  if (allBroad.length > 0) {
+    await writeBroadCursor(cursorNext).catch((err) => {
+      console.error("[eod-broad] ghi cursor lỗi (lượt sau vẫn chạy từ cursor cũ):", err);
+    });
+  }
+
+  const symbolsOk: string[] = [];
+  const symbolsEmpty: string[] = [];
+  const symbolsFailed: { symbol: string; error: string }[] = [];
+  let barsUpserted = 0;
+  let barsSkipped = 0;
+  let lastTradeDate: string | null = null;
+  const valueMismatches: EodSyncOutcome["valueMismatches"] = [];
+  const syncAt = new Date();
+
+  // Perf (đo thật lượt 15:2xZ 24-10): per-bar upsert TUẦN TỰ 2.800 lệnh ×
+  // ~100ms WAN ≈ 280s → vượt timeout engine 280s. Đúng pattern tick route
+  // (Perf #64 — "chunk 10 giữ pool WAN an toàn, Supabase chấp nhận"):
+  // PHA 1 fetch tuần tự (throttle 300ms giữ lịch sự với nguồn) gom kết quả,
+  // PHA 2 flush upsert + revalidate SONG SONG theo chunk 10.
+  interface FetchedInst {
+    inst: { id: string; symbol: string; market: string; type: string };
+    bars: NonNullable<ReturnType<typeof toRealBars>["bars"]>;
+  }
+  const fetched: FetchedInst[] = [];
+
+  for (const inst of instruments) {
+    try {
+      const res = await fetchDchartHistory({
+        symbol: inst.symbol,
+        fromUnixSec: fromSec,
+        toUnixSec: toSec,
+      });
+      if (res.empty) {
+        symbolsEmpty.push(inst.symbol);
+        continue;
+      }
+      const unit = resolveUnitSpec(inst.market, inst.type);
+      const { bars, skipped } = toRealBars(inst.symbol, res.bars, unit);
+      barsSkipped += skipped;
+      if (bars.length === 0) {
+        symbolsEmpty.push(inst.symbol);
+        continue;
+      }
+      fetched.push({ inst, bars });
+      barsUpserted += bars.length;
+      const d = bars[bars.length - 1].date.toISOString().slice(0, 10);
+      if (d > (lastTradeDate ?? "")) lastTradeDate = d;
+    } catch (err) {
+      symbolsFailed.push({
+        symbol: inst.symbol,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // PHA 2 — flush song song chunk 10 (đúng Perf #64: pool WAN an toàn).
+  for (let i = 0; i < fetched.length; i += 10) {
+    const chunk = fetched.slice(i, i + 10);
+    await Promise.all(
+      chunk.map(async ({ inst, bars }) => {
+        try {
+          for (const b of bars) {
+            await db.bar.upsert({
+              where: { instrumentId_date: { instrumentId: inst.id, date: b.date } },
+              create: {
+                instrumentId: inst.id,
+                date: b.date,
+                open: b.open,
+                high: b.high,
+                low: b.low,
+                close: b.close,
+                volume: b.volume,
+                value: b.value,
+                firstSeenAt: syncAt,
+                lastSyncedAt: syncAt,
+              },
+              update: {
+                open: b.open,
+                high: b.high,
+                low: b.low,
+                close: b.close,
+                volume: b.volume,
+                value: b.value,
+                lastSyncedAt: syncAt,
+              },
+            });
+          }
+          // §5.7 — KHÔNG anchorQuoteToRealEod: BROAD không có Quote, không realtime
+          symbolsOk.push(inst.symbol);
+        } catch (err) {
+          symbolsFailed.push({
+            symbol: inst.symbol,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })
+    );
+  }
+
+  // re-validate value = volume×close — cũng chunk 10 (1 query/mã)
+  for (let i = 0; i < fetched.length; i += 10) {
+    const chunk = fetched.slice(i, i + 10);
+    const results = await Promise.all(
+      chunk.map(({ inst, bars }) =>
+        revalidateValues(inst.id, inst.symbol, bars[0]!.date).catch(() => [])
+      )
+    );
+    for (const bad of results) {
+      if (bad.length > 0) valueMismatches.push(...bad.slice(0, 5));
+    }
+  }
+
+  // §6 — prune cửa sổ cuộn SAU lượt sync (bar freshest an toàn mới được xoá cũ)
+  const prunedBars = await pruneBroadBars().catch((err) => {
+    console.error("[eod-broad] prune lỗi (lượt sau tự vá):", err);
+    return -1;
+  });
+
+  // Queue dư: số mã BROAD chưa quay tới trong lượt này (phía sau cursor)
+  const staleRemaining: number | null = allBroad.length - instruments.length;
+
+  const outcome: BroadEodOutcome = {
+    // Mã đình chỉ trả rỗng là BÌNH THƯỜNG (không lỗi nguồn): ok chỉ sai khi
+    // thất bại thật (network/schema) chiếm đa số — không crying-wolf.
+    ok:
+      instruments.length === 0 ||
+      symbolsFailed.length < instruments.length ||
+      symbolsOk.length > 0,
+    tier: "BROAD",
+    symbolsOk,
+    symbolsEmpty,
+    symbolsFailed,
+    barsUpserted,
+    barsSkipped,
+    lastTradeDate,
+    durationMs: Date.now() - startedAt,
+    valueMismatches,
+    prunedBars,
+    staleRemaining,
+    cursorNext,
+    // crossCheck bỏ qua trung thực: BROAD không có Quote finfo để đối chiếu
+    error:
+      symbolsFailed.length >= Math.max(1, instruments.length) && instruments.length > 0
+        ? "toàn bộ mã BROAD lượt này thất bại"
+        : undefined,
+  };
+
+  await markSource("eod-broad", {
+    mode: "real",
+    success: outcome.ok,
+    meta: {
+      source: "dchart-api.vndirect.com.vn",
+      provider: "VNDIRECT (public EOD — T0 toàn sàn)",
+      symbolsOk: symbolsOk.length,
+      symbolsEmpty: symbolsEmpty.length,
+      symbolsFailed: symbolsFailed.length,
+      barsUpserted,
+      lastTradeDate,
+      lookbackDays,
+      prunedBars,
+      staleRemaining,
+      cursorNext,
+      universeBroad: allBroad.length,
+      windowDays: BROAD_WINDOW_DAYS,
+      note:
+        "T0 bar-ngày cửa sổ cuộn 420 ngày · cursor xoay vòng AppSetting eod-broad.cursor (mã đình chỉ không chặn lượt ai) · không Quote/realtime, không vào rổ bằng chứng CORE",
+    },
+  });
+
+  return outcome;
+}
+
 /* ── P1-3 (blueprint v1.3 §5): đối chiếu chéo nguồn sau EOD-sync ──
  *
  * So CLOSE finfo realtime CUỐI PHIÊN (ảnh Quote TRƯỚC khi anchor đè) vs bar
@@ -597,7 +874,9 @@ export async function syncEodFromDchart(opts?: {
   const fromSec = toSec - lookbackDays * 86_400;
 
   const instruments = await db.instrument.findMany({
-    where: { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] } },
+    // UNIVERSE_TIERING §5.1 — mặc định CORE: caller cũ (engine 15:45, route
+    // days) giữ hành vi 100%; BROAD đi đường riêng syncBroadEod (§5.3).
+    where: { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] }, universeTier: "CORE" },
     select: { id: true, symbol: true, market: true, type: true },
     orderBy: { symbol: "asc" },
     take: MAX_SYMBOLS_PER_SYNC,
@@ -763,7 +1042,10 @@ export async function deepBackfillEod(opts?: { fromYear?: number }): Promise<Eod
   const syncAt = new Date();
 
   const instruments = await db.instrument.findMany({
-    where: { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] } },
+    // UNIVERSE_TIERING §5.2 — deep 12 năm CHỈ dành cho CORE: sau khi T0 có
+    // ~1.000 BROAD, force=deep không lọc tier sẽ backfill 1,9GB vào free
+    // tier 500MB (§9 rủi ro đo sẵn Task 187). BROAD đi seed cửa sổ cuộn.
+    where: { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] }, universeTier: "CORE" },
     select: { id: true, symbol: true, market: true, type: true },
     orderBy: { symbol: "asc" },
     take: MAX_SYMBOLS_PER_SYNC,

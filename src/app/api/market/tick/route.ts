@@ -491,6 +491,10 @@ async function runTick(): Promise<NextResponse> {
         isActive: true,
         type: { not: "INDEX" },
         market: { in: ["HOSE", "HNX", "UPCOM"] },
+        // UNIVERSE_TIERING §5.7 — BROAD không có Quote → không bao giờ vào
+        // tick-engine/market-summary/bảng giá (filter tường minh, không dựa
+        // "thiếu Quote" ngầm)
+        universeTier: "CORE",
       },
       select: {
         id: true,

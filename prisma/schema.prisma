@@ -41,6 +41,16 @@ enum InstrumentType {
   CMDTY // Hàng hoá tương lai (GC=F vàng, BZ=F Brent, HG=F đồng...)
 }
 
+// UNIVERSE_TIERING_BLUEPRINT §1 — tầng vũ trụ: CORE = rổ bằng chứng sâu
+// (deep 12 năm + Quote + segment Bayes §3.4 MARKET_EXPANSION); BROAD = T0
+// toàn sàn bar-ngày cửa sổ cuộn 420 ngày, KHÔNG Quote/tin/LLM. Mọi đường
+// phân tích lọc CORE để hành vi cũ đứng yên tuyệt đối; breadth toàn sàn
+// (§7) là đường DUY NHẤT đọc gộp CORE+BROAD.
+enum UniverseTier {
+  CORE
+  BROAD
+}
+
 enum AgentRole {
   MARKET_ANALYST // phân tích kỹ thuật & macro
   NEWS_SENTIMENT // tin tức & cảm xúc thị trường
@@ -193,6 +203,9 @@ model Instrument {
   outstandingShares BigInt? // số cổ phiếu lưu hành
   isActive Boolean @default(true)
   deletedAt DateTime?
+  // UNIVERSE_TIERING_BLUEPRINT §1 — mặc định CORE: 104 instrument hiện có
+  // giữ nguyên tầng; script expand-universe-t0 tạo mã mới với BROAD.
+  universeTier UniverseTier @default(CORE)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

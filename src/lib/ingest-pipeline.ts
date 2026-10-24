@@ -228,9 +228,11 @@ export async function runPostIngestChecks(p: {
   let instruments: { id: string; symbol: string; market: string; type: string }[] = [];
   try {
     instruments = await db.instrument.findMany({
+      // UNIVERSE_TIERING §5.5 — A9/corporate scan chỉ quét CORE: BROAD không
+      // nuôi tín hiệu/ML Phase 1, quét 1.000 mã mỗi 15:45 chỉ tốn ngân sách.
       where: p.instrumentIds
         ? { id: { in: p.instrumentIds } }
-        : { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] } },
+        : { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] }, universeTier: "CORE" },
       select: { id: true, symbol: true, market: true, type: true },
     });
   } catch (err) {

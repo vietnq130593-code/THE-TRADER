@@ -883,7 +883,9 @@ const INDEX_BASKET_SYMBOLS = ["VNINDEX", "VN30", "HNX", "UPCOM"];
  */
 export async function loadSegmentBaskets(barsPerSymbol = 260): Promise<SegmentBasket[]> {
   const instruments = await db.instrument.findMany({
-    where: { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] } },
+    // UNIVERSE_TIERING §5.4 — rổ bằng chứng §3.4 MARKET_EXPANSION đứng yên
+    // tuyệt đối trên CORE; breadth toàn sàn (§7) là đường riêng đọc CORE+BROAD.
+    where: { isActive: true, market: { in: ["HOSE", "HNX", "UPCOM"] }, universeTier: "CORE" },
     select: {
       id: true,
       symbol: true,
@@ -1401,7 +1403,7 @@ export async function weeklyPitBaskets(topN: number): Promise<PitBaskets> {
                  ORDER BY b.date ROWS BETWEEN 45 PRECEDING AND 1 PRECEDING)) AS adtv45
         FROM "Bar" b
         JOIN "Instrument" i ON i.id = b."instrumentId"
-        WHERE i."isActive" = true AND i.market = 'HOSE' AND i.type = 'STOCK' AND b.close > 0 AND b.volume > 0
+        WHERE i."isActive" = true AND i.market = 'HOSE' AND i.type = 'STOCK' AND i."universeTier" = 'CORE' AND b.close > 0 AND b.volume > 0
       ),
       ranked AS (
         SELECT "instrumentId", date_trunc('week', d) AS wk, d, adtv45,

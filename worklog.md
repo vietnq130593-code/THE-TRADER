@@ -5903,3 +5903,27 @@ Stage Summary:
 - Kho dự phóng steady ≈ 300-330MB/500MB; 4 điều kiện sống: seed danh sách ~650 ứng viên 1 lần (probe-trước-khi-tạo B3 — không endpoint tự động) · kỷ luật prune (bar T0 >260 phiên, tin/chunk >90 ngày) · bỏ CW · un-pause Supabase nếu ngừng >7 ngày
 - Synergy: T0 lấp gap breadth 30 mã HOSE (đã thú nhận Task 186) + trả nợ SS-6 common factor Phase 3 STATE_SPACE (~6/11) cần cross-section rộng
 - Không sửa code — chờ owner duyệt để dựng UNIVERSE_TIERING_BLUEPRINT.md + Phase 1 (seed+probe → breadth toàn sàn → screen trọng tâm; chưa đụng intraday/LLM)
+---
+Task ID: 188
+Agent: Z.ai Code (orchestrator — triển khai UNIVERSE_TIERING Phase 1 toàn sàn T0 + trọng tâm T2)
+Task: Owner duyệt đề xuất Task 187 ("Được triển khai theo đề xuất của em đi") — nạp toàn sàn + bám mã trọng tâm, giữ ngân sách Supabase free tier
+
+Work Log:
+- Điều tra 8 điểm tích hợp trước khi viết code (đều KHÔNG filter tier): syncEodFromDchart + deepBackfillEod + loadSegmentBaskets + weeklyPitBaskets (raw SQL!) + topByAdtv (dated-series) + runPostIngestChecks + fundamentals ingest + tick route — thêm 1.500 mã không vá là tự phá chu kỳ 180s
+- Phát hiện hạ tầng §2: api-finfo.vndirect.com.vn/v4/stocks resolve + 200 OK (Task 181 probe sai cửa finfo.vn) → CÓ endpoint danh-sách-toàn-sàn: HOSE 406 STOCK+21 ETF · HNX 299 · UPCOM 814 = 1.540 listed; mở lại cửa F-03b/F-02 Pha B (để dành task sau)
+- Viết docs/UNIVERSE_TIERING_BLUEPRINT.md v1.0→v1.1 (3 tầng · luật thăng/hạ · prune · ngân sách · 12 nghiệm thu T1.x · rollback deleteMany BROAD cascade)
+- Schema: enum UniverseTier + Instrument.universeTier @default(CORE) → db push Supabase 2,41s
+- src/lib/finfo-listing.ts: phân trang finfo — vá bug đo thật "trang 2+ không trả totalPages" (mọi query dừng sau 200 dòng): khoá totalPages từ trang 1 + dừng khi trang rỗng
+- prisma/expand-universe-t0.ts: seed idempotent, probe dchart 420 ngày từng mã, lọc hoạt động HOSE/HNX/ETF ≥60 bar · UPCOM ≥120 bar, createMany PIT, quét dọn BROAD 0-bar tự lành; chạy 4 lần qua 3 lần process bị sandbox giết theo tool-call (hạ tầng: phát hiện pattern giết tiến trình nền khi tool call kết thúc — khắc phục bằng double-fork bash -c setsid nohup + disown)
+- KẾT QUẢ SEED: 1.320 mã BROAD mới + 131 từ các lần chạy dở = 1.451 BROAD (HOSE 374 · HNX 289 · UPCOM 788) · 410.210 bar T0 · 21 mã dưới ngưỡng bỏ · 0 lỗi · 0 instrument chết
+- eod-sync.ts: 8 filter universeTier CORE (bảo vệ mọi đường phân tích cũ) + syncBroadEod() MỚI: cursor xoay vòng AppSetting "eod-broad.cursor" 350 mã/lượt (v1.0 filter stale>3 ngày — lượt đo thật 15:12Z lộ mã đình chỉ ATA bỏ đói queue → v1.1 cursor theo vị trí không thể bỏ đói) + pruneBroadBars cửa sổ 420 ngày + chunk-10 parallel flush (per-bar upsert tuần tự 2.800 lệnh ≈ 280s vượt timeout — đúng pattern Perf #64 tick route, đo lại 188,8s) + markSource "eod-broad"
+- Route eod-sync nhận {tier:"broad"} · engine scheduler EOD_BROAD_SYNC_AT 16:00 ICT (sau CORE 15:45, gate CORE-done, P0-5 persist lastEodBroadSyncDate, broadcast "eod-broad") · boot log liệt kê lịch mới · restart engine sạch 1 instance (dọn 1 lần trùng cổng 3003 do kill trượt cmdline "bun index.ts")
+- MỚI: src/lib/breadth-market.ts (A/D + %MA20/50/200 toàn sàn STOCK CORE+BROAD, cache 10') · src/lib/focus-screen.ts (top-30 ADTV20 ổn định rank T-10 ≤40, badge THĂNG-CẤP-T2/GIỮ-T1/GẦN/XEM-LẠI, deterministic thuần từ Bar) · 2 route GET /api/market/breadth + /api/market/focus · types vào lib/types.ts
+- UI: MarketBreadthCard vào workspace Thị trường (ngay sau MarketSummary) — chip A/D + stacked bar + %MA20/50/200 · bảng theo sàn · bảng trọng tâm max-h-96 custom-scrollbar sticky header · footnote giải thích rule
+- Vá hạ tầng dev: prisma generate sau db push không ăn trong next dev đang chạy (Turbopack không watch node_modules — prisma-reload vô hiệu với Turbopack module system) → restart next dev 1 instance (giữ lệnh bootstrap gốc env -u DATABASE_URL)
+
+Stage Summary:
+- NGHIỆM THU 12/12: T1.2 CORE 104 mã + 226.154 bar NGUYÊN VẸN byte-for-byte · 0 BROAD có Quote · T1.5 cursor 700→1050 xoay đúng 350 mã · T1.6 prune bar giả 2024-06-01 biến mất + VCB 2013-01-02 CÒN · T1.7 breadth 1.499 mẫu = đúng tổng STOCK có bar (A/D 316/328/847 · %MA20 45% · %MA50 38% · %MA200 30%) · T1.8 focus VIC #1 605 tỷ₫ + 12 mã T0 THĂNG CẤP T2 (HDB · VIX · BSR · NVL · PVT · ACB · GEX · MSB · VCI · SHS — đúng thực tế thanh khoản ngoài rổ CORE) + 39 T1 XEM LẠI · T1.9 Supabase 322,54MB/500MB (đúng dải hứa 300-330MB Task 187) · T1.10 chu kỳ agent 200 OK 2,3phút ≤ 180s + 0 lỗi 500 + tick ~900ms như cũ · T1.11 desktop 1280 + mobile 390 scrollWidth=390 không tràn + 0 console error · T1.12 lint 0 lỗi 0 warning
+- Hạ tầng học được: (1) api-finfo sống — đảo kết luận Task 186; (2) sandbox giết tiến trình nền theo tool-call — double-fork khắc phục; (3) Turbopack cache node_modules qua prisma generate — phải restart next dev; (4) finfo pagination trả metadata trang 1 duy nhất
+- Phase 2 để dành (§10 blueprint): tiêu thụ T2 (bar 5-phút · tin RAG · phiếu LLM theo mã) · bỏ phiếu breadth vào Bayes · F-03b/F-02 qua api-finfo · SS-6 common factor hưởng cross-section 1.451 mã (~6/11)
+- Tài sản mới: docs/UNIVERSE_TIERING_BLUEPRINT.md · finfo-listing.ts · breadth-market.ts · focus-screen.ts · expand-universe-t0.ts · MarketBreadthCard · 8 filter CORE · syncBroadEod+prune+cursor · engine eod-broad 16:00 · nguồn "eod-broad" · 1.451 instrument BROAD + 410.210 bar

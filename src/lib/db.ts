@@ -71,3 +71,7 @@ export const db =
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
 
 // #106 — chạm file để Turbopack nạp lại Prisma client sau generate (enum Market/InstrumentType mở rộng)
+// Task 188 — chạm lần nữa sau db push UniverseTier (enum + Instrument.universeTier):
+// prisma-reload xoá require-cache nhưng Turbopack vẫn giữ binding db cũ trong
+// module đã nạp; edit file này ép re-evaluate chuỗi dependents.
+export const DB_CLIENT_REV = "universe-tier-r1";

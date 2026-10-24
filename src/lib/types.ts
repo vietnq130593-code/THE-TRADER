@@ -46,6 +46,62 @@ export interface QuotesResponse {
   meta?: { mode: string; asOf: string };
 }
 
+/* ═══ UNIVERSE_TIERING_BLUEPRINT §7 — T0 toàn sàn (breadth + focus) ═══ */
+
+export interface BreadthRow {
+  market: string;
+  advancing: number;
+  declining: number;
+  unchanged: number;
+  nonTrading: number;
+  aboveMa20: number;
+  aboveMa50: number;
+  aboveMa200: number;
+  counted: number;
+}
+
+export interface BreadthResponse {
+  asOf: string;
+  byMarket: BreadthRow[];
+  total: BreadthRow;
+  universe: { core: number; broad: number; broadNoBar: number };
+  computedAt: string;
+}
+
+export type FocusAction =
+  | "THĂNG-CẤP-T2"
+  | "GIỮ-T1"
+  | "GẦN-TRỌNG-TÂM"
+  | "THEO-DÕI-T0"
+  | "XEM-LẠI";
+
+export interface FocusRow {
+  symbol: string;
+  name: string;
+  market: string;
+  tier: "CORE" | "BROAD";
+  adtv20Vnd: number;
+  rankNow: number;
+  rankStable: number | null;
+  momentum20Pct: number | null;
+  aboveMa50: boolean | null;
+  action: FocusAction;
+}
+
+export interface FocusResponse {
+  asOf: string;
+  focus: FocusRow[];
+  near: FocusRow[];
+  stats: {
+    universeStocks: number;
+    broadInFocus: number;
+    coreInFocus: number;
+    coreDemoted: number;
+  };
+  rule: { topN: number; stabilityMaxRank: number; lagSessions: number; demotionRank: number };
+  computedAt: string;
+}
+
 export interface BarPoint {
   date: string; // yyyy-MM-dd
   open: number;

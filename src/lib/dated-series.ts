@@ -222,7 +222,7 @@ export async function topByAdtv(
   }
 
   const instruments = await db.instrument.findMany({
-    where: { isActive: true, market, type },
+    where: { isActive: true, market, type, universeTier: "CORE" }, // UNIVERSE_TIERING §5 — xếp hạng chỉ trên CORE, BROAD không đụng rổ
     select: { id: true, symbol: true, market: true, type: true, sector: true },
   });
   if (instruments.length === 0) return [];

@@ -33,6 +33,8 @@ export interface SourceDef {
 
 export const SOURCE_DEFS: SourceDef[] = [
   { key: "eod-history", label: "Lịch sử giá EOD thật (VNDIRECT)", defaultMode: "fallback" },
+  // UNIVERSE_TIERING §5.3 — T0 toàn sàn bar-ngày cửa sổ cuộn (engine 16:00 ICT)
+  { key: "eod-broad", label: "EOD toàn sàn T0 (VNDIRECT dchart)", defaultMode: "fallback" },
   { key: "market-quotes", label: "Bảng giá VN30", defaultMode: "simulated" },
   { key: "news", label: "Tin tức thị trường", defaultMode: "fallback" },
   { key: "foreign-flows", label: "Dòng khối ngoại", defaultMode: "simulated" },
