@@ -5799,3 +5799,24 @@ Work Log:
 Stage Summary:
 - KẾT LUẬN: KHÔNG phải mọi blueprint đã hết — 1 nợ chính theo kế hoạch: STATE_SPACE Phase 3 (4 mục SS-4/SS-6/SS-10/SS-12, điều kiện kích ~6/11 trùng lúc bóng A/B 14 ngày ra verdict ~5/11); ngoài ra các nợ treo đều CÓ GIẤY TỜ: 4 mục DEFER AUDIT_137 (LOW/chờ dữ liệu) · 2 mục §10.4 RAG (chờ credit + 30 ngày) · 3 tính năng chờ egress vẫn bị DNS chặn (probe mới xác nhận) · NIM key là nợ vận hành cấp bách nhất hiện tại
 - Không sửa code, không đổi DB — review-only + 1 probe egress (read-only)
+---
+Task ID: 182
+Agent: Z.ai Code (orchestrator — lắp NIM key mới + xả nợ L2 từ reset #5)
+Task: Owner cấp NIM key mới (nvapi-cld_QRS… — thay key mất trong reset #5, Task 180) → lắp theo kỷ luật Task 158/177: đo live trước → .env.local gitignored → xả nợ pending L2 → verify đường app + UI
+
+Work Log:
+- Kiểm cơ chế sau reset #5 còn nguyên: .gitignore pattern .env.* chặn .env.local ✓ · nim-embed.ts SHIM đọc đĩa khi process env thiếu (cachedKey undefined→null) ✓
+- VIẾT .env.local (chmod 600, 90 bytes) → git check-ignore xác nhận bị chặn · git status ngoài worklog = sạch
+- ĐO LIVE TRỰC TIẾP (kỷ luật #158): GET /v1/models HTTP 200 0,17s — 85 model, 9 model embed (xuất hiện thêm dòng mới nemotron-3.5-embed-1b/8b — ghi nhận, KHÔNG đổi model hệ thống) · POST /v1/embeddings nemotron-3-embed-1b HTTP 200 0,9s — 2 vector dim 2048 norm=1,000 đúng chuẩn · 21 token
+- next dev TỰ "Reload env: .env.local" trong dev.log khi file được tạo → module cache reset (đúng khám phá Task 177, không cần restart app)
+- XẢ NỢ L2 2 BƯỚC: (1) probe POST /api/ml/l2 action=index limit=3 → 3/3 embedded · 0 fail · nimMs 892 (đường app NIM→chunk→vector→DB khép kín); (2) POST index limit=120 → 26/26 embedded · 0 fail · nimMs 2.808 · 3.455 token · 27 entities · 97 cạnh cooccur mới
+- STATS SAU: 2.744 chunk (trước 2.715) · vectorCoverage 2.744/2.744 = 100% · bm25Only 0 · pending 0 (trước 29) · retrievals30d 37 · usageRate 92%
+- dev.log sạch: 0 prisma error toàn file (bug race Unique(refTable,refId) Task 178 để dành KHÔNG tái xuất trong lần index này) · tick/market flow liên tục
+- BROWSER VERIFY (agent-browser): workspace Tổng hợp → tab Dữ liệu → thẻ "Tri thức dài hạn (L2)" hiển thị số SỐNG mới khớp API từng con số: 2.744 chunk · vector 100% · đồ thị 80 thực thể · 46 cạnh đo được + 579 đồng xuất hiện · "kho đã index đủ" · cổng §6.5 ghi rõ · 0 console error · 0 page error · mobile 390px scrollWidth=clientWidth=390 (0 tràn ngang)
+
+Stage Summary:
+- NIM KEY MỚI HOẠT ĐỘNG ĐẦY ĐỦ END-TO-END: lỗ hổng duy nhất sau reset #5 (Task 180) đã bịt — L2 trở lại hybrid BM25+vector+NIM 100% phủ, chu kỳ k2 kế tiếp (mỗi 240') truy hồi có vector + self-heal index bình thường
+- Nợ kỹ thuật Task 181 mục "cấp bách nhất" ĐÃ ĐÓNG: hệ thống không còn nợ vận hành nào chờ owner
+- KHUYẾN NGHỊ ROTATE (kỷ luật Task 171): key đã dán trong chat → owner nên rotate tại build.nvidia.com khi tiện; .env.local đổi key không cần restart dev (SHIM đọc đĩa + Reload env tự kích)
+- Quan sát mới (không hành động): catalogue NIM thêm 2 model embed mới nemotron-3.5-embed-1b/8b — khi nào cân nhắc nâng cấp lõi embed thì benchmark lại (đổi dim/model phải re-embed toàn kho)
+- Không sửa dòng code sản phẩm nào; duy nhất .env.local (gitignored) + worklog
